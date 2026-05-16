@@ -1,0 +1,153 @@
+{
+    "Version": "0.3.0",
+    "Sections": [
+        {
+            "Name": "General",
+            "Description": "Iliac Puddle No More core settings",
+            "IsAdvanced": false,
+            "Keys": [
+                {
+                    "Min": 5.0,
+                    "Max": 250.0,
+                    "Value": 200.0,
+                    "Name": "WaterDepth",
+                    "Description": "Maximum ocean depth in meters. Ocean climate reaches near this; coastal climates scale lower.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Value": true,
+                    "Name": "SpawnWaterSurfaces",
+                    "Description": "Render visible water surfaces",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.ToggleKey"
+                },
+                {
+                    "Value": true,
+                    "Name": "SpawnUnderwaterEnemies",
+                    "Description": "Enemies in the bay",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.ToggleKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "EnemyFrequency",
+                    "Description": "Enemy frequency rate",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "PassiveFishFrequency",
+                    "Description": "Fish frequency rate",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Value": false,
+                    "Name": "FishParadise",
+                    "Description": "Dramatically increases passive fish density",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.ToggleKey"
+                },
+                {
+                    "Value": true,
+                    "Name": "SpawnUnderwaterDecorations",
+                    "Description": "Decorate the seafloor with aquatic flora, rocks, and debris",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.ToggleKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "DecorationFrequency",
+                    "Description": "Decoration rate",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "SeafloorLootRate",
+                    "Description": "Isolated loot rate",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "TreasureClusterRate",
+                    "Description": "Wreckage treasure rate",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Value": false,
+                    "Name": "TreasureCove",
+                    "Description": "Turns the bay into a treasure hunter's playground",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.ToggleKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "WaterSurfaceTopTransparency",
+                    "Description": "Water surface transparency from above. 0 is opaque, 1 is 70% transparent.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.3,
+                    "Name": "WaterSurfaceBottomTransparency",
+                    "Description": "Water surface transparency from below. 0 is opaque, 1 is 70% transparent.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "WaterSurfaceDistanceFalloff",
+                    "Description": "How quickly water surface transparency fades to opaque with distance. 0 is gradual, 1 is swift.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "UnderwaterFogStrength",
+                    "Description": "Underwater fog strength",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
+                    "Value": 0.5,
+                    "Name": "UnderwaterFogDistance",
+                    "Description": "Underwater fog view distance",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Value": true,
+                    "Name": "ArgonianInfiniteBreath",
+                    "Description": "Argonians never drown — anywhere in the world",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.ToggleKey"
+                }
+            ]
+        }
+    ]
+}

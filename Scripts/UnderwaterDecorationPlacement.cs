@@ -1,0 +1,211 @@
+// Project:         Iliac Puddle No More
+// License:         MIT
+
+using System.Collections.Generic;
+using DaggerfallWorkshop;
+using UnityEngine;
+
+namespace DeepWaters
+{
+    /// <summary>
+    /// Generates seafloor decoration positions. Routes seafloor Y queries
+    /// through the per-tile <see cref="DeepWaterFloorMesh"/> so decorations
+    /// land on the EXACT rendered surface — the mesh's linear interpolation
+    /// between vertices differs from the raw bathymetry function over a
+    /// vertex cell, and using the function value made decorations float a
+    /// noticeable amount above visible undulations.
+    /// </summary>
+    internal static class UnderwaterDecorationPlacement
+    {
+        private const int SampleStride = 3;
+        private const float MinimumDecorationSpacing = 5f;
+        private const float MinimumSeafloorDepth = 8f;
+        private const float SeafloorClearance = 0.25f;
+        // Slope filter: probe seafloor Y a few meters in each cardinal
+        // direction around the candidate and reject if the surface tilts
+        // steeper than the threshold. Keeps billboards from spawning
+        // partway up the shelf wall or in a trench wall.
+        private const float SlopeProbeDistance = 4f;
+        private const float MaxDecorationSlopeDegrees = 35f;
+
+        public static List<UnderwaterDecorationPlacementInfo> BuildPositions(
+            DaggerfallTerrain dfTerrain,
+            TerrainData terrainData,
+            int passes)
+        {
+            var positions = new List<UnderwaterDecorationPlacementInfo>();
+            var spacingGrid = new Dictionary<int, List<Vector2>>();
+
+            // Resolve the per-tile floor mesh once so every candidate uses
+            // the same interpolation source. Falls back to the bathymetry
+            // function (via TryGetWaterColumn) if the mesh isn't ready.
+            DeepWaterFloorMesh floorMesh = dfTerrain.GetComponentInChildren<DeepWaterFloorMesh>();
+
+            for (int i = 0; i < passes; i++)
+                GenerateBillboardPositions(dfTerrain, terrainData, floorMesh, positions, spacingGrid);
+
+            return positions;
+        }
+
+        private static void GenerateBillboardPositions(
+            DaggerfallTerrain dfTerrain,
+            TerrainData terrainData,
+            DeepWaterFloorMesh floorMesh,
+            List<UnderwaterDecorationPlacementInfo> positions,
+            Dictionary<int, List<Vector2>> spacingGrid)
+        {
+            var sampler = DaggerfallUnity.Instance.TerrainSampler;
+            float oceanLocalY = (sampler.OceanElevation / sampler.MaxTerrainHeight) * terrainData.size.y;
+            float[,] heights = dfTerrain.MapData.heightmapSamples;
+            int hDim0 = heights.GetLength(0);
+            int hDim1 = heights.GetLength(1);
+            float oceanThresholdNormalised = sampler.OceanElevation / sampler.MaxTerrainHeight;
+            Vector3 origin = dfTerrain.transform.position;
+
+            for (int gy = 0; gy < hDim0 - 1; gy += SampleStride)
+            for (int gx = 0; gx < hDim1 - 1; gx += SampleStride)
+            {
+                int sy = gy + Random.Range(0, SampleStride);
+                int sx = gx + Random.Range(0, SampleStride);
+                if (sy >= hDim0 || sx >= hDim1) continue;
+
+                // Skip cells that are clearly land in the vanilla heightmap.
+                if (heights[sy, sx] > oceanThresholdNormalised + 1e-5f) continue;
+
+                float localX = ((float)sx / (hDim1 - 1)) * terrainData.size.x;
+                float localZ = ((float)sy / (hDim0 - 1)) * terrainData.size.z;
+                float worldX = origin.x + localX;
+                float worldZ = origin.z + localZ;
+
+                DeepWaterColumn column;
+                if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column)) continue;
+                if (column.Depth < MinimumSeafloorDepth) continue;
+
+                float seafloorLocalY;
+                if (!TryResolveSeafloorY(floorMesh, column, worldX, worldZ, out seafloorLocalY))
+                    continue;
+
+                if (!IsGentleEnoughForDecoration(floorMesh, worldX, worldZ, oceanLocalY)) continue;
+
+                seafloorLocalY += SeafloorClearance;
+                if (seafloorLocalY >= oceanLocalY) continue;
+
+                Vector3 localPos = new Vector3(localX, seafloorLocalY, localZ);
+
+                if (!CanPlaceDecoration(localPos, spacingGrid)) continue;
+
+                positions.Add(new UnderwaterDecorationPlacementInfo(
+                    UnderwaterDecorationCatalog.PickRecord(),
+                    localPos));
+            }
+        }
+
+        private static bool TryResolveSeafloorY(
+            DeepWaterFloorMesh floorMesh,
+            DeepWaterColumn column,
+            float worldX,
+            float worldZ,
+            out float seafloorLocalY)
+        {
+            // Prefer the mesh's interpolated surface so decorations stay
+            // visually flush with the rendered seafloor.
+            if (floorMesh != null && floorMesh.TrySampleMeshLocalY(worldX, worldZ, out seafloorLocalY))
+                return true;
+
+            seafloorLocalY = column.SeafloorLocalY;
+            return true;
+        }
+
+        private static bool IsGentleEnoughForDecoration(
+            DeepWaterFloorMesh floorMesh,
+            float worldX,
+            float worldZ,
+            float oceanLocalY)
+        {
+            float leftY, rightY, backY, forwardY;
+            if (!TryProbeSeafloorY(floorMesh, worldX - SlopeProbeDistance, worldZ, oceanLocalY, out leftY) ||
+                !TryProbeSeafloorY(floorMesh, worldX + SlopeProbeDistance, worldZ, oceanLocalY, out rightY) ||
+                !TryProbeSeafloorY(floorMesh, worldX, worldZ - SlopeProbeDistance, oceanLocalY, out backY) ||
+                !TryProbeSeafloorY(floorMesh, worldX, worldZ + SlopeProbeDistance, oceanLocalY, out forwardY))
+            {
+                return false;
+            }
+
+            float dhdx = (rightY - leftY) / (SlopeProbeDistance * 2f);
+            float dhdz = (forwardY - backY) / (SlopeProbeDistance * 2f);
+            float slopeDegrees = Mathf.Atan(Mathf.Sqrt(dhdx * dhdx + dhdz * dhdz)) * Mathf.Rad2Deg;
+            return slopeDegrees <= MaxDecorationSlopeDegrees;
+        }
+
+        private static bool TryProbeSeafloorY(
+            DeepWaterFloorMesh floorMesh,
+            float worldX,
+            float worldZ,
+            float oceanLocalY,
+            out float seafloorLocalY)
+        {
+            // First try the mesh interp — that's the rendered surface.
+            if (floorMesh != null && floorMesh.TrySampleMeshLocalY(worldX, worldZ, out seafloorLocalY))
+            {
+                // Reject points where the mesh is at or above the ocean
+                // surface, since those represent the shore/shelf rim where
+                // the column has no real water above to host a decoration.
+                return seafloorLocalY < oceanLocalY - MinimumSeafloorDepth;
+            }
+
+            DeepWaterColumn column;
+            if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
+            {
+                seafloorLocalY = 0f;
+                return false;
+            }
+
+            if (column.Depth < MinimumSeafloorDepth)
+            {
+                seafloorLocalY = 0f;
+                return false;
+            }
+
+            seafloorLocalY = column.SeafloorLocalY;
+            return true;
+        }
+
+        private static bool CanPlaceDecoration(Vector3 localPos, Dictionary<int, List<Vector2>> spacingGrid)
+        {
+            int cellX = Mathf.FloorToInt(localPos.x / MinimumDecorationSpacing);
+            int cellZ = Mathf.FloorToInt(localPos.z / MinimumDecorationSpacing);
+            float minDistanceSqr = MinimumDecorationSpacing * MinimumDecorationSpacing;
+            Vector2 candidate = new Vector2(localPos.x, localPos.z);
+
+            for (int dz = -1; dz <= 1; dz++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                List<Vector2> cellPositions;
+                if (!spacingGrid.TryGetValue(GetSpacingCellKey(cellX + dx, cellZ + dz), out cellPositions))
+                    continue;
+
+                for (int i = 0; i < cellPositions.Count; i++)
+                {
+                    if ((cellPositions[i] - candidate).sqrMagnitude < minDistanceSqr)
+                        return false;
+                }
+            }
+
+            int key = GetSpacingCellKey(cellX, cellZ);
+            List<Vector2> positions;
+            if (!spacingGrid.TryGetValue(key, out positions))
+            {
+                positions = new List<Vector2>();
+                spacingGrid.Add(key, positions);
+            }
+
+            positions.Add(candidate);
+            return true;
+        }
+
+        private static int GetSpacingCellKey(int x, int z)
+        {
+            return (x * 73856093) ^ (z * 19349663);
+        }
+    }
+}
