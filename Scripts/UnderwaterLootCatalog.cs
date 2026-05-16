@@ -1,0 +1,72 @@
+// Project:         Iliac Puddle No More
+// License:         MIT
+
+using System.Collections.Generic;
+using DaggerfallWorkshop;
+using DaggerfallWorkshop.Game;
+using DaggerfallWorkshop.Game.Entity;
+using DaggerfallWorkshop.Game.Items;
+using DaggerfallWorkshop.Utility;
+using UnityEngine;
+
+namespace DeepWaters
+{
+    internal static class UnderwaterLootCatalog
+    {
+        public const int RubbleArchive = 105;
+
+        // Archive 216 records 42-48 are used by passive fish item icons in this
+        // mod, so treasure containers deliberately avoid those records.
+        private static readonly int[] TreasurePileRecords = { 0, 1, 3, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39, 40 };
+        private static readonly int[] RubbleRecords = { 0, 5, 6, 7, 8, 9, 10 };
+
+        public static int PickTreasurePileRecord()
+        {
+            return TreasurePileRecords[Random.Range(0, TreasurePileRecords.Length)];
+        }
+
+        public static int PickRubbleRecord()
+        {
+            return RubbleRecords[Random.Range(0, RubbleRecords.Length)];
+        }
+
+        public static int PickRubbleRecordExcept(HashSet<int> excludedRecords)
+        {
+            if (excludedRecords == null || excludedRecords.Count >= RubbleRecords.Length)
+                return PickRubbleRecord();
+
+            int record;
+            do
+            {
+                record = PickRubbleRecord();
+            }
+            while (excludedRecords.Contains(record));
+
+            return record;
+        }
+
+        public static void FillRandomItem(DaggerfallLoot loot)
+        {
+            if (loot == null)
+                return;
+
+            var pe = GameManager.Instance.PlayerEntity;
+            int level = pe != null ? pe.Level : 1;
+            var gender = pe != null ? pe.Gender : Genders.Male;
+            var race = pe != null ? pe.Race : Races.Breton;
+
+            DaggerfallUnityItem item = null;
+            float roll = Random.value;
+            if (roll < 0.25f)       item = ItemBuilder.CreateRandomReligiousItem();
+            else if (roll < 0.45f)  item = ItemBuilder.CreateRandomPotion();
+            else if (roll < 0.60f)  item = ItemBuilder.CreateRandomJewellery();
+            else if (roll < 0.75f)  item = ItemBuilder.CreateRandomGem();
+            else if (roll < 0.85f)  item = ItemBuilder.CreateRandomClothing(gender, race);
+            else if (roll < 0.95f)  item = ItemBuilder.CreateRandomWeapon(level);
+            else                    item = ItemBuilder.CreateRandomArmor(level, gender, race);
+
+            if (item != null)
+                loot.Items.AddItem(item);
+        }
+    }
+}
