@@ -1,3 +1,2 @@
 *.meta
-Resources/DistanceBake.bytes
-Diagnostics/WodExactWaterMasks.bytes
+*.bytes
