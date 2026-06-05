@@ -37,7 +37,11 @@ namespace DeepWaters
             if (column.Depth < MinimumColumnDepth)
                 return false;
 
-            float minY = column.SeafloorWorldY + SeafloorClearance;
+            float seafloorWorldY;
+            if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, worldX, worldZ, out seafloorWorldY))
+                return false;
+
+            float minY = seafloorWorldY + SeafloorClearance;
             float maxY = column.OceanWorldY - SurfaceClearance;
             if (maxY <= minY)
                 return false;
@@ -84,7 +88,11 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetWaterColumn(worldPos.x, worldPos.z, out column))
                 return;
 
-            float minY = column.SeafloorWorldY + SeafloorClearance;
+            float seafloorWorldY;
+            if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, worldPos.x, worldPos.z, out seafloorWorldY))
+                return;
+
+            float minY = seafloorWorldY + SeafloorClearance;
             float maxY = column.OceanWorldY - SurfaceClearance;
             worldPos.y = Mathf.Clamp(schoolCenter.y + Random.Range(-1.0f, 1.0f), minY, maxY);
         }

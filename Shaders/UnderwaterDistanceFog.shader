@@ -88,6 +88,30 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                 return max(1.0, _VisionDistance * lerp(1.0, 0.55, depthDarkening));
             }
 
+            fixed3 ApplyDistanceLimit(fixed3 lit, float dist, float depthDarkening)
+            {
+                float fogStrength = saturate(_FogStrength);
+                float effectiveVision = EffectiveVisionDistance(depthDarkening);
+
+                // Beer-Lambert color loss looks natural up close, but it does
+                // not fully hide sky/transparent/no-depth pixels. Add a soft
+                // visibility curtain that reaches full strength only at high
+                // fog settings.
+                float fadeStart = effectiveVision * lerp(1.40, 0.55, fogStrength);
+                float fadeEnd = effectiveVision * lerp(3.20, 1.05, fogStrength);
+                float curtain = smoothstep(
+                    fadeStart,
+                    max(fadeStart + 0.10, fadeEnd),
+                    dist) * smoothstep(0.15, 1.0, fogStrength);
+
+                fixed3 ambientWater = lerp(
+                    _ScatterColor.rgb,
+                    _DeepWaterColor.rgb,
+                    saturate(depthDarkening * 0.85 + fogStrength * 0.18));
+
+                return lerp(lit, ambientWater, curtain);
+            }
+
             fixed3 ApplyWaterVolume(fixed3 sceneColor, float dist, float depthDarkening)
             {
                 float effectiveVision = EffectiveVisionDistance(depthDarkening);
@@ -109,7 +133,7 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                 // scene remains readable rather than going to silhouette-mode.
                 lit *= lerp(1.0, 0.55, depthDarkening);
 
-                return lit;
+                return ApplyDistanceLimit(lit, dist, depthDarkening);
             }
 
             fixed4 frag(v2f_img i) : SV_Target
@@ -140,8 +164,9 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                 if (noDepth)
                 {
                     // Sky / no-depth pixels: use a far value so the volume
-                    // pushes them to ambient water color.
-                    viewDistance = effectiveVision * 1.15;
+                    // pushes them to ambient water color. At max fog this is
+                    // deliberately past the visibility curtain.
+                    viewDistance = effectiveVision * lerp(2.25, 1.40, saturate(_FogStrength));
                 }
                 else
                 {

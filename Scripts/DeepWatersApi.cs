@@ -70,14 +70,20 @@ namespace DeepWaters
             if (tile == null || !tile.IsOceanConnected || !tile.HasDistanceField)
                 return false;
 
-            float distanceToCoast = tile.GetDistanceToCoastMeters(worldX, worldZ);
+            float distanceToCoast = tile.GetDistanceToEdgeMeters(worldX, worldZ);
+            float noiseX, noiseZ;
+            tile.GetNoiseWorldCoords(worldX, worldZ, out noiseX, out noiseZ);
             SeafloorGeographyInfo geography = DeepBathymetry.Classify(
-                worldX, worldZ, tile.ClimateIndex, distanceToCoast);
+                noiseX, noiseZ, tile.GetBlendedClimateBaseDepth(worldX, worldZ), distanceToCoast);
+
+            float seafloorWorldY;
+            if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, worldX, worldZ, out seafloorWorldY))
+                return false;
 
             info.IsOcean = true;
-            info.WorldY = column.SeafloorWorldY;
+            info.WorldY = seafloorWorldY;
             info.OceanWorldY = column.OceanWorldY;
-            info.DepthMeters = column.Depth;
+            info.DepthMeters = column.OceanWorldY - seafloorWorldY;
             info.Kind = geography.Kind;
             info.Magnitude = geography.Magnitude;
             info.SlopeDegrees = ComputeSlopeDegrees(worldX, worldZ);
@@ -121,8 +127,17 @@ namespace DeepWaters
                 return 90f;
             }
 
-            float dhdx = (right.SeafloorWorldY - left.SeafloorWorldY) / (SlopeProbeDistance * 2f);
-            float dhdz = (forward.SeafloorWorldY - back.SeafloorWorldY) / (SlopeProbeDistance * 2f);
+            float leftY, rightY, backY, forwardY;
+            if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(left, worldX - SlopeProbeDistance, worldZ, out leftY) ||
+                !DeepWaterWorld.TryGetRenderedSeafloorWorldY(right, worldX + SlopeProbeDistance, worldZ, out rightY) ||
+                !DeepWaterWorld.TryGetRenderedSeafloorWorldY(back, worldX, worldZ - SlopeProbeDistance, out backY) ||
+                !DeepWaterWorld.TryGetRenderedSeafloorWorldY(forward, worldX, worldZ + SlopeProbeDistance, out forwardY))
+            {
+                return 90f;
+            }
+
+            float dhdx = (rightY - leftY) / (SlopeProbeDistance * 2f);
+            float dhdz = (forwardY - backY) / (SlopeProbeDistance * 2f);
             return Mathf.Atan(Mathf.Sqrt(dhdx * dhdx + dhdz * dhdz)) * Mathf.Rad2Deg;
         }
     }

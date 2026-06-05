@@ -48,6 +48,12 @@ namespace DeepWaters
         private const float LooseLootDebrisMinRadius = 1.5f;
         private const float LooseLootDebrisMaxRadius = 5.0f;
         private const int LooseLootDebrisSpotAttempts = 4;
+        private const float SpawnVisibilityMultiplier = 1.25f;
+        private const float ClusterVisibilityMargin = 24f;
+        private const float SpawnRangeVisibilityMultiplier = 0.50f;
+        private const float MinDynamicSpawnRange = 30f;
+        private const float DespawnVisibilityMultiplier = 2.35f;
+        private const float DespawnVisibilityMargin = 90f;
 
         // Height and placement checks.
         private const float SurfaceLootOriginClearance = 8f;
@@ -157,18 +163,22 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
                 return;
 
-            trackedObjects.PruneByDistance(playerPos, DespawnDistance);
+            float spawnMinDistance;
+            float spawnMaxDistance;
+            GetLootSpawnDistanceRange(out spawnMinDistance, out spawnMaxDistance);
+
+            trackedObjects.PruneByDistance(playerPos, GetLootDespawnDistance());
 
             bool spawnedCluster = false;
             int spawnedStrays = 0;
 
             if (ShouldSpawnTreasureCluster())
-                spawnedCluster = TrySpawnTreasureCluster();
+                spawnedCluster = TrySpawnTreasureCluster(spawnMinDistance, spawnMaxDistance);
 
             int strayTarget = RollStrayLootCount(spawnedCluster);
             for (int i = 0; i < strayTarget; i++)
             {
-                if (TrySpawnStrayLoot())
+                if (TrySpawnStrayLoot(spawnMinDistance, spawnMaxDistance))
                     spawnedStrays++;
             }
 
@@ -205,12 +215,12 @@ namespace DeepWaters
             return Mathf.Clamp(count, 0, max);
         }
 
-        private static bool TrySpawnStrayLoot()
+        private static bool TrySpawnStrayLoot(float minSpawnDistance, float maxSpawnDistance)
         {
             Vector3 worldPos;
             Transform parent;
             long spawnCellKey;
-            if (!UnderwaterLootPlacement.PickSpawnSpot(out worldPos, out parent, out spawnCellKey))
+            if (!UnderwaterLootPlacement.PickSpawnSpot(minSpawnDistance, maxSpawnDistance, out worldPos, out parent, out spawnCellKey))
                 return false;
 
             DaggerfallLoot loot = UnderwaterLootObjectFactory.SpawnLootContainer(worldPos, parent, trackedObjects);
@@ -267,14 +277,17 @@ namespace DeepWaters
             return false;
         }
 
-        private static bool TrySpawnTreasureCluster()
+        private static bool TrySpawnTreasureCluster(float minSpawnDistance, float maxSpawnDistance)
         {
-            return UnderwaterTreasureClusterSpawner.TrySpawn(trackedObjects);
+            return UnderwaterTreasureClusterSpawner.TrySpawn(trackedObjects, minSpawnDistance, maxSpawnDistance);
         }
 
         private static bool CanRunLootPulse()
         {
             if (DeepWaters.Instance == null)
+                return false;
+
+            if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
                 return false;
 
             if (DeepWaters.Instance.SeafloorLootRate <= 0f && DeepWaters.Instance.TreasureClusterRate <= 0f)
@@ -297,11 +310,15 @@ namespace DeepWaters
             if (hasNearbyWaterGateCache && Time.time < nextNearbyWaterGateCheckTime)
                 return lastNearbyWaterGateResult;
 
+            float minSpawnDistance;
+            float maxSpawnDistance;
+            GetLootSpawnDistanceRange(out minSpawnDistance, out maxSpawnDistance);
+
             float depth;
             bool result = DeepWaterWorld.HasNearbyWaterColumn(
                 playerPos,
-                UnderwaterLootPlacement.MinSpawnDistance,
-                UnderwaterLootPlacement.MaxSpawnDistance,
+                minSpawnDistance,
+                maxSpawnDistance,
                 NearbyWaterProbeDirections,
                 SurfaceLootOriginClearance,
                 out depth);
@@ -317,6 +334,24 @@ namespace DeepWaters
             return DeepWaterWorld.IsPlayerInOrAboveDeepWater(SurfaceLootOriginClearance)
                 ? 1f
                 : ShoreLootPulseMultiplier;
+        }
+
+        private static void GetLootSpawnDistanceRange(out float minDistance, out float maxDistance)
+        {
+            float visionDistance = DeepWaterWorld.UnderwaterVisionDistance;
+            minDistance = Mathf.Max(
+                UnderwaterLootPlacement.MinSpawnDistance,
+                visionDistance * SpawnVisibilityMultiplier + ClusterVisibilityMargin);
+
+            float dynamicRange = Mathf.Max(MinDynamicSpawnRange, visionDistance * SpawnRangeVisibilityMultiplier);
+            maxDistance = Mathf.Max(UnderwaterLootPlacement.MaxSpawnDistance, minDistance + dynamicRange);
+        }
+
+        private static float GetLootDespawnDistance()
+        {
+            return Mathf.Max(
+                DespawnDistance,
+                DeepWaterWorld.UnderwaterVisionDistance * DespawnVisibilityMultiplier + DespawnVisibilityMargin);
         }
 
     }

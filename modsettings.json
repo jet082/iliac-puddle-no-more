@@ -141,6 +141,22 @@
                     "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
                 },
                 {
+                    "Min": 0.25,
+                    "Max": 30.0,
+                    "Value": 1.0,
+                    "Name": "SwimSpeedMultiplier",
+                    "Description": "Multiplier for outdoor swimming movement speed",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Value": false,
+                    "Name": "EnableSwimStroke",
+                    "Description": "Press Run while swimming to make a short fatigue-costing swim stroke",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.ToggleKey"
+                },
+                {
                     "Value": true,
                     "Name": "ArgonianInfiniteBreath",
                     "Description": "Argonians never drown — anywhere in the world",

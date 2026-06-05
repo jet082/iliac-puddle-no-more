@@ -33,7 +33,7 @@ namespace DeepWaters
         void LateUpdate()
         {
             if (DeepWaters.Instance == null || !DeepWaters.Instance.ArgonianInfiniteBreath) return;
-            if (GameManager.Instance == null) return;
+            if (GameManager.Instance == null || !GameManager.Instance.IsPlayingGame()) return;
 
             var entity = GameManager.Instance.PlayerEntity;
             if (entity != null && entity.Race == Races.Argonian)

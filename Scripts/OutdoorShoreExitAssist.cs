@@ -13,6 +13,8 @@ namespace DeepWaters
         private const float ProbeHeightAboveOcean = 13f;
         private const float ProbeDistance = 18f;
         private const float MinimumForwardInput = 0.02f;
+        private const float MinimumLandingNormalY = 0.45f;
+        private const float ShoreLandingWaterMargin = 0.25f;
 
         public static bool TryMoveToShore(PlayerEnterExit pex, float oceanY)
         {
@@ -38,7 +40,7 @@ namespace DeepWaters
             if (!Physics.Raycast(probe, Vector3.down, out hit, ProbeDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
                 return false;
 
-            if (!IsValidLandingHit(hit))
+            if (!IsValidLandingHit(hit, oceanY))
                 return false;
 
             float landingY = hit.point.y;
@@ -51,9 +53,27 @@ namespace DeepWaters
             return false;
         }
 
-        private static bool IsValidLandingHit(RaycastHit hit)
+        internal static bool IsValidShoreStandingHit(RaycastHit hit, float oceanY)
         {
-            return IsShoreGround(hit.collider);
+            return IsValidLandingHit(hit, oceanY);
+        }
+
+        private static bool IsValidLandingHit(RaycastHit hit, float oceanY)
+        {
+            if (!IsShoreGround(hit.collider))
+                return false;
+
+            if (hit.normal.y < MinimumLandingNormalY)
+                return false;
+
+            DeepWaterColumn column;
+            if (DeepWaterWorld.TryGetWaterColumn(hit.point.x, hit.point.z, out column) &&
+                hit.point.y <= column.OceanWorldY + ShoreLandingWaterMargin)
+            {
+                return false;
+            }
+
+            return hit.point.y >= oceanY - 1f;
         }
 
         internal static bool IsShoreGround(Collider collider)
@@ -63,6 +83,12 @@ namespace DeepWaters
 
             if (collider.GetComponent<PassiveFishBehaviour>() != null)
                 return false;
+
+            if (collider.GetComponentInParent<DeepWaterFloorMesh>() != null ||
+                collider.GetComponentInParent<DeepWatersWaterSurface>() != null)
+            {
+                return false;
+            }
 
             if (collider.GetComponentInParent<DaggerfallEnemy>() != null)
                 return false;

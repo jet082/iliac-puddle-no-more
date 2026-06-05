@@ -81,7 +81,7 @@ namespace DeepWaters
         private static void AnchorCurrentShipLocation()
         {
             GameManager gameManager = GameManager.Instance;
-            if (gameManager == null || gameManager.StreamingWorld == null)
+            if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.StreamingWorld == null)
                 return;
 
             AnchorShipLocation(gameManager.StreamingWorld.CurrentPlayerLocationObject);
@@ -89,6 +89,10 @@ namespace DeepWaters
 
         private static void AnchorShipLocation(DaggerfallLocation location)
         {
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null || !gameManager.IsPlayingGame())
+                return;
+
             if (!IsOwnedShipLocation(location))
                 return;
 

@@ -1,6 +1,7 @@
 // Project:         Iliac Puddle No More
 // License:         MIT
 
+using System.Collections.Generic;
 using DaggerfallConnect.Arena2;
 using DaggerfallConnect.Utility;
 using DaggerfallWorkshop;
@@ -37,6 +38,8 @@ namespace DeepWaters
         private const float FallbackEncounterMinSpawnDistance = 35f;
         private const float FallbackEncounterMaxSpawnDistance = 55f;
         private const float FallbackEncounterViewSafetyDistance = 55f;
+        private static readonly Dictionary<Transform, DeepWaterFloorMesh> floorMeshCache =
+            new Dictionary<Transform, DeepWaterFloorMesh>();
 
         public static float TileWorldSize
         {
@@ -58,11 +61,16 @@ namespace DeepWaters
             get { return DeepWaters.Instance != null ? DeepWaters.Instance.EncounterSpawnViewSafetyDistance : FallbackEncounterViewSafetyDistance; }
         }
 
+        public static float UnderwaterVisionDistance
+        {
+            get { return DeepWaters.Instance != null ? DeepWaters.Instance.UnderwaterVisionDistance : 70f; }
+        }
+
         public static bool TryGetPlayerPosition(out Vector3 position)
         {
             position = Vector3.zero;
             var gameManager = GameManager.Instance;
-            if (gameManager == null || gameManager.PlayerObject == null)
+            if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.PlayerObject == null)
                 return false;
 
             position = gameManager.PlayerObject.transform.position;
@@ -73,6 +81,7 @@ namespace DeepWaters
         {
             var gameManager = GameManager.Instance;
             return gameManager != null &&
+                   gameManager.IsPlayingGame() &&
                    gameManager.PlayerObject != null &&
                    gameManager.PlayerEnterExit != null &&
                    !gameManager.PlayerEnterExit.IsPlayerInside;
@@ -81,7 +90,7 @@ namespace DeepWaters
         public static bool IsPlayerInExteriorWaterContext()
         {
             var gameManager = GameManager.Instance;
-            if (gameManager == null || gameManager.PlayerObject == null)
+            if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.PlayerObject == null)
                 return false;
 
             if (gameManager.PlayerEnterExit != null && !gameManager.PlayerEnterExit.IsPlayerInside)
@@ -94,7 +103,7 @@ namespace DeepWaters
         public static bool IsPlayerInOrAboveDeepWater(float minimumDepth)
         {
             var gameManager = GameManager.Instance;
-            if (gameManager == null || gameManager.PlayerObject == null || gameManager.MainCamera == null)
+            if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.PlayerObject == null || gameManager.MainCamera == null)
                 return false;
 
             float oceanSurfaceY;
@@ -169,7 +178,7 @@ namespace DeepWaters
             oceanY = 0f;
 
             var gameManager = GameManager.Instance;
-            if (gameManager == null || gameManager.StreamingWorld == null || DaggerfallUnity.Instance == null)
+            if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.StreamingWorld == null || DaggerfallUnity.Instance == null)
                 return false;
 
             var sampler = DaggerfallUnity.Instance.TerrainSampler;
@@ -183,7 +192,7 @@ namespace DeepWaters
             column = new DeepWaterColumn();
 
             var gameManager = GameManager.Instance;
-            if (gameManager == null)
+            if (gameManager == null || !gameManager.IsPlayingGame())
                 return false;
 
             var streamingWorld = gameManager.StreamingWorld;
@@ -191,22 +200,25 @@ namespace DeepWaters
             if (streamingWorld == null || playerGPS == null)
                 return false;
 
-            DaggerfallTerrain playerDfTerrain;
-            Terrain playerTerrain;
-            if (!DeepWaterTerrainLookup.TryGet(streamingWorld, playerGPS.CurrentMapPixel.X, playerGPS.CurrentMapPixel.Y, out playerDfTerrain, out playerTerrain))
-                return false;
-
             float tileWorldSize = TileWorldSize;
-            Vector3 playerTileOrigin = playerDfTerrain.transform.position;
-            int tileDx = Mathf.FloorToInt((worldX - playerTileOrigin.x) / tileWorldSize);
-            int tileDz = Mathf.FloorToInt((worldZ - playerTileOrigin.z) / tileWorldSize);
-            int targetX = playerGPS.CurrentMapPixel.X + tileDx;
-            int targetY = playerGPS.CurrentMapPixel.Y - tileDz;
-
             DaggerfallTerrain dfTerrain;
             Terrain terrain;
-            if (!DeepWaterTerrainLookup.TryGet(streamingWorld, targetX, targetY, out dfTerrain, out terrain))
-                return false;
+            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(worldX, worldZ, out dfTerrain, out terrain))
+            {
+                DaggerfallTerrain playerDfTerrain;
+                Terrain playerTerrain;
+                if (!DeepWaterTerrainLookup.TryGet(streamingWorld, playerGPS.CurrentMapPixel.X, playerGPS.CurrentMapPixel.Y, out playerDfTerrain, out playerTerrain))
+                    return false;
+
+                Vector3 playerTileOrigin = playerDfTerrain.transform.position;
+                int tileDx = Mathf.FloorToInt((worldX - playerTileOrigin.x) / tileWorldSize);
+                int tileDz = Mathf.FloorToInt((worldZ - playerTileOrigin.z) / tileWorldSize);
+                int targetX = playerGPS.CurrentMapPixel.X + tileDx;
+                int targetY = playerGPS.CurrentMapPixel.Y - tileDz;
+
+                if (!DeepWaterTerrainLookup.TryGet(streamingWorld, targetX, targetY, out dfTerrain, out terrain))
+                    return false;
+            }
 
             if (dfTerrain == null || terrain == null || terrain.terrainData == null || dfTerrain.MapData.heightmapSamples == null)
                 return false;
@@ -214,6 +226,16 @@ namespace DeepWaters
             float fracX = (worldX - dfTerrain.transform.position.x) / tileWorldSize;
             float fracZ = (worldZ - dfTerrain.transform.position.z) / tileWorldSize;
             if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
+                return false;
+
+            var tile = dfTerrain.GetComponent<DeepWaterTileData>();
+            if (tile == null || !tile.IsOceanConnected || !tile.HasDistanceField)
+                return false;
+
+            if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ))
+                return false;
+
+            if (DeepWaterDistanceBake.HasFineWaterMask && !tile.IsCarvedWater(worldX, worldZ))
                 return false;
 
             float[,] heights = dfTerrain.MapData.heightmapSamples;
@@ -239,6 +261,61 @@ namespace DeepWaters
             return true;
         }
 
+        public static bool TryGetRenderedSeafloorLocalY(
+            DeepWaterColumn column,
+            float worldX,
+            float worldZ,
+            out float seafloorLocalY)
+        {
+            seafloorLocalY = column.SeafloorLocalY;
+
+            if (column.Parent == null)
+                return false;
+
+            DeepWaterFloorMesh floorMesh = GetCachedFloorMesh(column.Parent);
+            if (floorMesh != null)
+            {
+                float meshLocalY;
+                if (floorMesh.TrySampleMeshLocalY(worldX, worldZ, out meshLocalY))
+                {
+                    seafloorLocalY = meshLocalY;
+                    return true;
+                }
+            }
+
+            return true;
+        }
+
+        private static DeepWaterFloorMesh GetCachedFloorMesh(Transform parent)
+        {
+            if (parent == null)
+                return null;
+
+            DeepWaterFloorMesh floorMesh;
+            if (floorMeshCache.TryGetValue(parent, out floorMesh) && floorMesh != null)
+                return floorMesh;
+
+            floorMesh = parent.GetComponentInChildren<DeepWaterFloorMesh>();
+            floorMeshCache[parent] = floorMesh;
+            return floorMesh;
+        }
+
+        public static bool TryGetRenderedSeafloorWorldY(
+            DeepWaterColumn column,
+            float worldX,
+            float worldZ,
+            out float seafloorWorldY)
+        {
+            seafloorWorldY = column.SeafloorWorldY;
+
+            float seafloorLocalY;
+            if (!TryGetRenderedSeafloorLocalY(column, worldX, worldZ, out seafloorLocalY))
+                return false;
+
+            seafloorWorldY = column.Parent.position.y + seafloorLocalY;
+            return true;
+        }
+
         /// <summary>
         /// Resolve seafloor local Y at a world position. Ocean-connected tiles
         /// route through <see cref="DeepBathymetry.SampleDepthMeters"/> so the
@@ -258,8 +335,11 @@ namespace DeepWaters
             var tile = dfTerrain.GetComponent<DeepWaterTileData>();
             if (tile != null && tile.IsOceanConnected && tile.HasDistanceField)
             {
-                float distanceToCoast = tile.GetDistanceToCoastMeters(worldX, worldZ);
-                float depth = DeepBathymetry.SampleDepthMeters(worldX, worldZ, tile.ClimateIndex, distanceToCoast);
+                float shoreDistance = tile.GetDistanceToEdgeMeters(worldX, worldZ);
+                float noiseX, noiseZ;
+                tile.GetNoiseWorldCoords(worldX, worldZ, out noiseX, out noiseZ);
+                float depth = DeepBathymetry.SampleDepthMeters(
+                    noiseX, noiseZ, tile.GetBlendedClimateBaseDepth(worldX, worldZ), shoreDistance);
                 return oceanLocalY - depth;
             }
 
@@ -284,9 +364,80 @@ namespace DeepWaters
             if (column.Depth < minimumDepth)
                 return false;
 
-            worldPos = new Vector3(worldX, column.SeafloorWorldY + seafloorLift, worldZ);
+            float seafloorWorldY;
+            if (!TryGetRenderedSeafloorWorldY(column, worldX, worldZ, out seafloorWorldY))
+                return false;
+
+            if (column.OceanWorldY - seafloorWorldY < minimumDepth)
+                return false;
+
+            worldPos = new Vector3(worldX, seafloorWorldY + seafloorLift, worldZ);
             parent = column.Parent;
             return true;
+        }
+
+        public static bool AlignObjectBottomToWorldY(GameObject gameObject, float bottomWorldY)
+        {
+            if (gameObject == null)
+                return false;
+
+            Bounds bounds;
+            if (!TryGetObjectWorldBounds(gameObject, out bounds))
+                return false;
+
+            float deltaY = bottomWorldY - bounds.min.y;
+            if (Mathf.Abs(deltaY) <= 0.001f)
+                return true;
+
+            gameObject.transform.position += Vector3.up * deltaY;
+            return true;
+        }
+
+        private static bool TryGetObjectWorldBounds(GameObject gameObject, out Bounds bounds)
+        {
+            bounds = new Bounds(gameObject != null ? gameObject.transform.position : Vector3.zero, Vector3.zero);
+            if (gameObject == null)
+                return false;
+
+            bool hasBounds = false;
+            Renderer[] renderers = gameObject.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] == null)
+                    continue;
+
+                if (!hasBounds)
+                {
+                    bounds = renderers[i].bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderers[i].bounds);
+                }
+            }
+
+            if (hasBounds)
+                return true;
+
+            Collider[] colliders = gameObject.GetComponentsInChildren<Collider>(true);
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                if (colliders[i] == null)
+                    continue;
+
+                if (!hasBounds)
+                {
+                    bounds = colliders[i].bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(colliders[i].bounds);
+                }
+            }
+
+            return hasBounds;
         }
 
         public static bool HasNearbyWaterColumn(Vector3 center, float minDistance, float maxDistance, int directions, float minimumDepth, out float depth)
@@ -342,5 +493,3 @@ namespace DeepWaters
     }
 
 }
-
-

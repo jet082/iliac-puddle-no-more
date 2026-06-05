@@ -1,10 +1,9 @@
 // Project:         Deep Waters
 // License:         MIT
 //
-// Simple visible ocean surface. Underwater visibility and the apparent
-// underside are handled by the camera water-volume pass. Drawing a physical
-// transparent underside plane in DFU creates a hard screen-space band because
-// the sky is rendered as a separate full-screen backdrop.
+// Simple visible ocean surface. The top pass renders only from above, while
+// a separate underwater pass draws the underside only when the camera is below
+// the plane so it cannot create an above-water screen-space band.
 
 Shader "DeepWaters/StenciledWaterSurface"
 {
@@ -143,6 +142,91 @@ Shader "DeepWaters/StenciledWaterSurface"
 
                 fixed4 col;
                 col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, waterTint * 0.35);
+                col.a = finalOpacity;
+                return col;
+            }
+            ENDCG
+        }
+
+        Pass
+        {
+            Name "UNDERWATER_SURFACE"
+            Cull Front
+            Blend SrcAlpha OneMinusSrcAlpha
+            ZWrite Off
+
+            Stencil
+            {
+                Ref [_StencilRef]
+                ReadMask [_StencilReadMask]
+                Comp NotEqual
+            }
+
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma target 3.0
+            #include "UnityCG.cginc"
+
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+
+            fixed4 _Color;
+            fixed4 _UnderwaterFogColor;
+            float _UndersideAlpha;
+            float _WaterColumnFogStrength;
+            float _SurfaceOpaqueFadeStart;
+            float _SurfaceOpaqueFadeEnd;
+            float _ScrollX;
+            float _ScrollY;
+            float _DeepWatersUnderwater;
+
+            struct appdata
+            {
+                float4 vertex : POSITION;
+                float2 uv : TEXCOORD0;
+            };
+
+            struct v2f
+            {
+                float4 pos : SV_POSITION;
+                float2 uv : TEXCOORD0;
+                float3 worldPos : TEXCOORD1;
+            };
+
+            v2f vert(appdata v)
+            {
+                v2f o;
+                o.pos = UnityObjectToClipPos(v.vertex);
+                o.uv = TRANSFORM_TEX(v.uv, _MainTex) + float2(_ScrollX, _ScrollY) * _Time.y;
+                o.worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;
+                return o;
+            }
+
+            fixed4 frag(v2f i) : SV_Target
+            {
+                // Only draw the physical underside when the camera is in the
+                // underwater presentation and below the water plane.
+                clip(_DeepWatersUnderwater - 0.5);
+                clip(i.worldPos.y - _WorldSpaceCameraPos.y + 0.02);
+
+                fixed4 wave = tex2D(_MainTex, i.uv);
+                fixed3 surfaceRgb = wave.rgb * _Color.rgb;
+
+                float viewDistance = length(i.worldPos - _WorldSpaceCameraPos);
+                float farOpacity = smoothstep(
+                    _SurfaceOpaqueFadeStart * 0.35,
+                    max(_SurfaceOpaqueFadeStart * 0.35 + 1.0, _SurfaceOpaqueFadeEnd),
+                    viewDistance);
+
+                float undersideAlpha = saturate(_UndersideAlpha);
+                float finalOpacity = lerp(
+                    undersideAlpha,
+                    max(undersideAlpha, 0.72),
+                    farOpacity * saturate(_WaterColumnFogStrength));
+
+                fixed4 col;
+                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, 0.35);
                 col.a = finalOpacity;
                 return col;
             }

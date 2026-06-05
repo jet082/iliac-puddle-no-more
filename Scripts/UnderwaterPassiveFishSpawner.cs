@@ -146,6 +146,9 @@ namespace DeepWaters
             if (DeepWaters.Instance == null)
                 return false;
 
+            if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+                return false;
+
             if (DeepWaters.Instance.PassiveFishFrequency <= 0f)
                 return false;
 

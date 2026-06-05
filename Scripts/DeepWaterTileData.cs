@@ -8,371 +8,344 @@ using UnityEngine;
 namespace DeepWaters
 {
     /// <summary>
-    /// Per-DaggerfallTerrain cache. Holds the climate index for the tile, an
-    /// ocean-connectivity verdict, and a distance-to-coast field in meters
-    /// computed from the heightmap. Other systems read this to call
-    /// <see cref="DeepBathymetry.SampleDepthMeters"/> without recomputing
-    /// distance on every query.
+    /// Per-DaggerfallTerrain cache. Holds the climate index, ocean-connectivity
+    /// verdict, and convenience access to the pre-baked global distance-to-coast
+    /// field. Other systems read this to call <see cref="DeepBathymetry.SampleDepthMeters"/>
+    /// without having to know the bake format.
+    ///
+    /// Before the bake was introduced this class ran a per-tile chamfer BFS at
+    /// promotion time and tried to reconcile cross-tile mismatches with seeding
+    /// from neighbor edges plus a deferred neighbor-refresh cascade. The bake
+    /// makes all of that unnecessary: distance values for the same world position
+    /// are identical regardless of which tile is asking, so adjacent meshes
+    /// automatically meet at the same depth.
     /// </summary>
     public class DeepWaterTileData : MonoBehaviour
     {
-        private const float StraightStep = 1f;
-        private const float DiagonalStep = 1.41421356f;
-        private const int MaxDistanceCells = 64;
-
         public int ClimateIndex { get; private set; }
         public bool IsOceanConnected { get; private set; }
+        public int MapPixelX { get; private set; }
+        public int MapPixelY { get; private set; }
 
-        private float[,] distanceMeters;
-        private int hDim0;
-        private int hDim1;
         private float tileWorldSize;
+        private Vector3 cachedOrigin;
+        private bool initialized;
 
         public bool HasDistanceField
         {
-            get { return distanceMeters != null; }
+            get { return initialized && DeepWaterDistanceBake.IsLoaded; }
         }
 
         public void Initialize(DaggerfallTerrain dfTerrain, int climateIndex)
         {
             ClimateIndex = climateIndex;
-
-            float[,] heights = dfTerrain.MapData.heightmapSamples;
-            if (heights == null)
-            {
-                distanceMeters = null;
-                IsOceanConnected = false;
-                return;
-            }
-
-            hDim0 = heights.GetLength(0);
-            hDim1 = heights.GetLength(1);
+            MapPixelX = dfTerrain.MapPixelX;
+            MapPixelY = dfTerrain.MapPixelY;
             tileWorldSize = MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale;
-
-            float cellWidthMeters = (hDim1 > 1) ? tileWorldSize / (hDim1 - 1) : tileWorldSize;
-
-            // Cross-tile BFS seeding: for each cardinal neighbor we collect
-            // (a) the heightmap edge that abuts us, and (b) the neighbor's
-            // already-computed distance field edge if available. The distance
-            // edge is preferred because it represents the neighbor's BFS
-            // result at the shared boundary — using it lets adjacent tiles
-            // compute IDENTICAL distance values at the seam, so their seafloor
-            // meshes meet at the same depth and slopes flow continuously.
-            // Heightmap edge is a fallback when the neighbor hasn't initialized
-            // its distance field yet (very first tile to load, etc).
-            NeighborEdges east = GetNeighborEdges(dfTerrain, NeighborSide.East);
-            NeighborEdges west = GetNeighborEdges(dfTerrain, NeighborSide.West);
-            NeighborEdges north = GetNeighborEdges(dfTerrain, NeighborSide.North);
-            NeighborEdges south = GetNeighborEdges(dfTerrain, NeighborSide.South);
-
-            distanceMeters = ComputeDistanceField(
-                heights, cellWidthMeters, east, west, north, south);
-            IsOceanConnected = ComputeOceanConnectivity(heights);
-        }
-
-        private struct NeighborEdges
-        {
-            public float[] heightmapEdge;   // null = no neighbor loaded
-            public float[] distanceEdge;    // null = neighbor's BFS not yet computed
-        }
-
-        private enum NeighborSide { East, West, North, South }
-        private enum EdgeAxis { EastWest, NorthSouth }
-
-        // Apply cross-tile boundary seeding for one edge of our distance grid.
-        // The neighbor's distance edge takes precedence — for each cell, our
-        // boundary cell is "one straight step" away from the neighbor's value.
-        // If we only have heightmap data (neighbor's distance not computed yet),
-        // fall back to a 0-vs-straight binary based on land/water.
-        private static void SeedFromNeighbor(float[,] dist, NeighborEdges edge,
-            float oceanThreshold, float straight, int rows, int cols,
-            EdgeAxis axis, int atIndex)
-        {
-            int length = (axis == EdgeAxis.EastWest) ? rows : cols;
-
-            if (edge.distanceEdge != null && edge.distanceEdge.Length == length)
-            {
-                if (axis == EdgeAxis.EastWest)
-                {
-                    for (int y = 0; y < rows; y++)
-                        dist[y, atIndex] = Mathf.Min(dist[y, atIndex],
-                            edge.distanceEdge[y] + straight);
-                }
-                else
-                {
-                    for (int x = 0; x < cols; x++)
-                        dist[atIndex, x] = Mathf.Min(dist[atIndex, x],
-                            edge.distanceEdge[x] + straight);
-                }
-                return;
-            }
-
-            if (edge.heightmapEdge != null && edge.heightmapEdge.Length == length)
-            {
-                if (axis == EdgeAxis.EastWest)
-                {
-                    for (int y = 0; y < rows; y++)
-                        if (edge.heightmapEdge[y] > oceanThreshold)
-                            dist[y, atIndex] = Mathf.Min(dist[y, atIndex], straight);
-                }
-                else
-                {
-                    for (int x = 0; x < cols; x++)
-                        if (edge.heightmapEdge[x] > oceanThreshold)
-                            dist[atIndex, x] = Mathf.Min(dist[atIndex, x], straight);
-                }
-            }
-        }
-
-        // Find a loaded DaggerfallTerrain immediately adjacent to `self` in the
-        // given cardinal direction. Match by world-space origin within an
-        // epsilon — DFU's tile placement is exact on a tileWorldSize grid.
-        private static DaggerfallTerrain FindNeighbor(DaggerfallTerrain self, NeighborSide side)
-        {
-            if (self == null) return null;
-
-            float tileWS = MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale;
-            Vector3 origin = self.transform.position;
-            Vector3 target;
-            switch (side)
-            {
-                case NeighborSide.East:  target = origin + new Vector3(tileWS, 0, 0); break;
-                case NeighborSide.West:  target = origin - new Vector3(tileWS, 0, 0); break;
-                case NeighborSide.North: target = origin + new Vector3(0, 0, tileWS); break;
-                case NeighborSide.South: target = origin - new Vector3(0, 0, tileWS); break;
-                default: return null;
-            }
-
-            const float epsilon = 0.5f;
-            DaggerfallTerrain[] terrains = UnityEngine.Object.FindObjectsOfType<DaggerfallTerrain>();
-            for (int i = 0; i < terrains.Length; i++)
-            {
-                DaggerfallTerrain t = terrains[i];
-                if (t == self) continue;
-                Vector3 pos = t.transform.position;
-                if (Mathf.Abs(pos.x - target.x) < epsilon &&
-                    Mathf.Abs(pos.z - target.z) < epsilon)
-                    return t;
-            }
-            return null;
-        }
-
-        // Return both the heightmap row/column AND the distance field
-        // row/column of `self`'s neighbor on `side` that physically abuts
-        // `self`. Heightmap is used as a fallback seed when the neighbor
-        // hasn't computed its distance field yet.
-        private static NeighborEdges GetNeighborEdges(DaggerfallTerrain self, NeighborSide side)
-        {
-            NeighborEdges result = default(NeighborEdges);
-            DaggerfallTerrain neighbor = FindNeighbor(self, side);
-            if (neighbor == null) return result;
-
-            float[,] hm = neighbor.MapData.heightmapSamples;
-            DeepWaterTileData neighborTile = neighbor.GetComponent<DeepWaterTileData>();
-            float[,] nd = (neighborTile != null) ? neighborTile.distanceMeters : null;
-
-            if (hm == null && nd == null) return result;
-
-            int rows = hm != null ? hm.GetLength(0) : nd.GetLength(0);
-            int cols = hm != null ? hm.GetLength(1) : nd.GetLength(1);
-
-            switch (side)
-            {
-                case NeighborSide.East:
-                    // East neighbor's WEST edge — its first column abuts us.
-                    if (hm != null)
-                    {
-                        result.heightmapEdge = new float[rows];
-                        for (int y = 0; y < rows; y++) result.heightmapEdge[y] = hm[y, 0];
-                    }
-                    if (nd != null)
-                    {
-                        result.distanceEdge = new float[rows];
-                        for (int y = 0; y < rows; y++) result.distanceEdge[y] = nd[y, 0];
-                    }
-                    break;
-
-                case NeighborSide.West:
-                    // West neighbor's EAST edge — its last column abuts us.
-                    if (hm != null)
-                    {
-                        result.heightmapEdge = new float[rows];
-                        for (int y = 0; y < rows; y++) result.heightmapEdge[y] = hm[y, cols - 1];
-                    }
-                    if (nd != null)
-                    {
-                        result.distanceEdge = new float[rows];
-                        for (int y = 0; y < rows; y++) result.distanceEdge[y] = nd[y, cols - 1];
-                    }
-                    break;
-
-                case NeighborSide.North:
-                    // North neighbor's SOUTH edge — its first row abuts us.
-                    // (heightmap convention: row 0 is south, row last is north,
-                    // since worldZ = origin.z + hy * cellWidth.)
-                    if (hm != null)
-                    {
-                        result.heightmapEdge = new float[cols];
-                        for (int x = 0; x < cols; x++) result.heightmapEdge[x] = hm[0, x];
-                    }
-                    if (nd != null)
-                    {
-                        result.distanceEdge = new float[cols];
-                        for (int x = 0; x < cols; x++) result.distanceEdge[x] = nd[0, x];
-                    }
-                    break;
-
-                case NeighborSide.South:
-                    // South neighbor's NORTH edge — its last row abuts us.
-                    if (hm != null)
-                    {
-                        result.heightmapEdge = new float[cols];
-                        for (int x = 0; x < cols; x++) result.heightmapEdge[x] = hm[rows - 1, x];
-                    }
-                    if (nd != null)
-                    {
-                        result.distanceEdge = new float[cols];
-                        for (int x = 0; x < cols; x++) result.distanceEdge[x] = nd[rows - 1, x];
-                    }
-                    break;
-            }
-
-            return result;
+            cachedOrigin = dfTerrain.transform.position;
+            IsOceanConnected = ComputeOceanConnectivity(dfTerrain);
+            initialized = true;
         }
 
         public float GetDistanceToCoastMeters(float worldX, float worldZ)
         {
-            if (distanceMeters == null)
+            if (!DeepWaterDistanceBake.IsLoaded)
                 return float.MaxValue;
 
-            Vector3 origin = transform.position;
-            float fracX = Mathf.Clamp01((worldX - origin.x) / tileWorldSize);
-            float fracZ = Mathf.Clamp01((worldZ - origin.z) / tileWorldSize);
-
-            float fx = fracX * (hDim1 - 1);
-            float fz = fracZ * (hDim0 - 1);
-            int x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, hDim1 - 1);
-            int z0 = Mathf.Clamp(Mathf.FloorToInt(fz), 0, hDim0 - 1);
-            int x1 = Mathf.Min(x0 + 1, hDim1 - 1);
-            int z1 = Mathf.Min(z0 + 1, hDim0 - 1);
-            float tx = fx - x0;
-            float tz = fz - z0;
-
-            float d00 = distanceMeters[z0, x0];
-            float d10 = distanceMeters[z0, x1];
-            float d01 = distanceMeters[z1, x0];
-            float d11 = distanceMeters[z1, x1];
-
-            float dx0 = Mathf.Lerp(d00, d10, tx);
-            float dx1 = Mathf.Lerp(d01, d11, tx);
-            return Mathf.Lerp(dx0, dx1, tz);
+            int mapPixelX;
+            int mapPixelY;
+            float fracX;
+            float fracZ;
+            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+            return DeepWaterDistanceBake.SampleDistanceMeters(
+                mapPixelX, mapPixelY, fracX, fracZ);
         }
 
-        private static bool ComputeOceanConnectivity(float[,] heights)
+        // Distance (meters) to the nearest CARVED SHORE EDGE — resolves small
+        // islands the coast-distance field misses. Falls back to coast distance
+        // on pre-v5 bakes (handled inside SampleEdgeDistanceMeters).
+        public float GetDistanceToEdgeMeters(float worldX, float worldZ)
         {
-            var sampler = DaggerfallUnity.Instance.TerrainSampler;
-            float oceanThreshold = sampler.OceanElevation / sampler.MaxTerrainHeight;
+            if (!DeepWaterDistanceBake.IsLoaded)
+                return float.MaxValue;
 
-            int rows = heights.GetLength(0);
-            int cols = heights.GetLength(1);
-            int minRun = Mathf.Max(rows, cols) / 4;
-
-            if (HasWaterRun(heights, 0, true, cols, oceanThreshold, minRun)) return true;
-            if (HasWaterRun(heights, rows - 1, true, cols, oceanThreshold, minRun)) return true;
-            if (HasWaterRun(heights, 0, false, rows, oceanThreshold, minRun)) return true;
-            if (HasWaterRun(heights, cols - 1, false, rows, oceanThreshold, minRun)) return true;
-
-            return false;
+            int mapPixelX;
+            int mapPixelY;
+            float fracX;
+            float fracZ;
+            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+            return DeepWaterDistanceBake.SampleEdgeDistanceMeters(
+                mapPixelX, mapPixelY, fracX, fracZ);
         }
 
-        private static bool HasWaterRun(float[,] heights, int fixedIndex, bool fixedIsRow, int length, float oceanThreshold, int minRun)
+        public bool IsBakedWater(float worldX, float worldZ)
         {
-            int run = 0;
-            for (int i = 0; i < length; i++)
-            {
-                float h = fixedIsRow ? heights[fixedIndex, i] : heights[i, fixedIndex];
-                if (h <= oceanThreshold + 1e-5f)
-                {
-                    run++;
-                    if (run >= minRun) return true;
-                }
-                else
-                {
-                    run = 0;
-                }
-            }
-            return false;
+            if (!DeepWaterDistanceBake.IsLoaded)
+                return false;
+
+            int mapPixelX;
+            int mapPixelY;
+            float fracX;
+            float fracZ;
+            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+            return DeepWaterDistanceBake.IsWaterAt(mapPixelX, mapPixelY, fracX, fracZ);
         }
 
-        private static float[,] ComputeDistanceField(
-            float[,] heights, float cellWidthMeters,
-            NeighborEdges east, NeighborEdges west,
-            NeighborEdges north, NeighborEdges south)
+        /// <summary>
+        /// Phase B: per-cell carving query against the bake's FINE water
+        /// mask. Adjacent tiles that share a boundary world position will
+        /// read the same global bake value, so they agree on every
+        /// boundary cell's carve decision — no per-tile heightmap
+        /// reclassification, no map-pixel-transition seams. On pre-v4
+        /// bakes (no fine mask), returns false; the caller is expected
+        /// to fall back to the heightmap any-corner check.
+        /// </summary>
+        public bool IsCarvedWater(float worldX, float worldZ)
         {
-            var sampler = DaggerfallUnity.Instance.TerrainSampler;
-            float oceanThreshold = sampler.OceanElevation / sampler.MaxTerrainHeight;
+            if (!DeepWaterDistanceBake.IsLoaded || !DeepWaterDistanceBake.HasFineWaterMask)
+                return false;
 
-            int rows = heights.GetLength(0);
-            int cols = heights.GetLength(1);
-            var dist = new float[rows, cols];
-
-            float saturated = MaxDistanceCells * cellWidthMeters;
-            float straight = StraightStep * cellWidthMeters;
-            float diagonal = DiagonalStep * cellWidthMeters;
-
-            // Initial seed from own heightmap: land = 0, water = saturated.
-            for (int y = 0; y < rows; y++)
-            {
-                for (int x = 0; x < cols; x++)
-                {
-                    dist[y, x] = heights[y, x] > oceanThreshold ? 0f : saturated;
-                }
-            }
-
-            // Cross-tile boundary seeds. Prefer the neighbor's computed distance
-            // edge (so we match it exactly with one straight-step crossing)
-            // over the heightmap-only fallback. Where the neighbor has reported
-            // distance D at its boundary cell, our adjacent cell gets D + step
-            // — that's the BFS-exact "one cell away" relationship across the
-            // shared edge, which makes both tiles agree at the seam.
-            SeedFromNeighbor(dist, east, oceanThreshold, straight, rows, cols, EdgeAxis.EastWest, atIndex: cols - 1);
-            SeedFromNeighbor(dist, west, oceanThreshold, straight, rows, cols, EdgeAxis.EastWest, atIndex: 0);
-            SeedFromNeighbor(dist, north, oceanThreshold, straight, rows, cols, EdgeAxis.NorthSouth, atIndex: rows - 1);
-            SeedFromNeighbor(dist, south, oceanThreshold, straight, rows, cols, EdgeAxis.NorthSouth, atIndex: 0);
-
-            for (int y = 0; y < rows; y++)
-            {
-                for (int x = 0; x < cols; x++)
-                {
-                    float current = dist[y, x];
-                    if (y > 0)
-                    {
-                        if (x > 0)        current = Mathf.Min(current, dist[y - 1, x - 1] + diagonal);
-                        current = Mathf.Min(current, dist[y - 1, x] + straight);
-                        if (x < cols - 1) current = Mathf.Min(current, dist[y - 1, x + 1] + diagonal);
-                    }
-                    if (x > 0)            current = Mathf.Min(current, dist[y, x - 1] + straight);
-                    dist[y, x] = Mathf.Min(current, saturated);
-                }
-            }
-
-            for (int y = rows - 1; y >= 0; y--)
-            {
-                for (int x = cols - 1; x >= 0; x--)
-                {
-                    float current = dist[y, x];
-                    if (y < rows - 1)
-                    {
-                        if (x < cols - 1) current = Mathf.Min(current, dist[y + 1, x + 1] + diagonal);
-                        current = Mathf.Min(current, dist[y + 1, x] + straight);
-                        if (x > 0)        current = Mathf.Min(current, dist[y + 1, x - 1] + diagonal);
-                    }
-                    if (x < cols - 1)     current = Mathf.Min(current, dist[y, x + 1] + straight);
-                    dist[y, x] = Mathf.Min(current, saturated);
-                }
-            }
-
-            return dist;
+            int mapPixelX;
+            int mapPixelY;
+            float fracX;
+            float fracZ;
+            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+            return DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracX, fracZ);
         }
+
+        public int GetClimateIndex(float worldX, float worldZ)
+        {
+            DaggerfallUnity dfu = DaggerfallUnity.Instance;
+            if (dfu == null || dfu.ContentReader == null || dfu.ContentReader.MapFileReader == null)
+                return ClimateIndex;
+
+            // Resolve climate from global map coordinates, not from the
+            // owning tile, so both sides of a shared edge pick the same
+            // climate when sampling the same world position. DFU terrain
+            // local Z grows north while map pixel Y grows south, so the
+            // helper returns a flipped fracZ for the selected map pixel.
+            int mapX;
+            int mapY;
+            float fracX;
+            float fracZ;
+            GetGlobalMapFractions(worldX, worldZ, out mapX, out mapY, out fracX, out fracZ);
+            return dfu.ContentReader.MapFileReader.GetClimateIndex(mapX, mapY);
+        }
+
+        // Floating-origin-INDEPENDENT coordinate for the bathymetry noise.
+        // Anchored to the global map-pixel grid, NOT the Unity origin (which
+        // DFU's floating origin shifts as the player swims). Two tiles sampling
+        // the same physical point return the same value regardless of when, or
+        // at what origin offset, they were built — so the Perlin seabed hills
+        // meet exactly at shared map-pixel edges instead of tearing into seams.
+        public void GetNoiseWorldCoords(float worldX, float worldZ, out float noiseX, out float noiseZ)
+        {
+            int mapPixelX;
+            int mapPixelY;
+            float fracX;
+            float fracZ;
+            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+            noiseX = (mapPixelX + fracX) * tileWorldSize;
+            noiseZ = (mapPixelY + (1f - fracZ)) * tileWorldSize;
+        }
+
+        // Bilinearly blend the per-map-pixel climate across the 4 surrounding
+        // pixel CENTERS, returning both the blended seabed base depth and the
+        // blended texture band. Climate is constant within a map pixel, so this
+        // smooths the per-climate base/band across pixel boundaries — no hard
+        // depth STEP (wall/seam) and no abrupt texture line where the climate
+        // changes, while regional variety is preserved between boundaries.
+        public void GetBlendedClimate(float worldX, float worldZ, out float baseDepth, out float band)
+        {
+            int climateWN, climateEN, climateWS, climateES;
+            float wx, wy;
+            GetSurroundingClimates(worldX, worldZ, out climateWN, out climateEN, out climateWS, out climateES, out wx, out wy);
+
+            float depthN = Mathf.Lerp(DeepBathymetry.ClimateBaseDepth(climateWN), DeepBathymetry.ClimateBaseDepth(climateEN), wx);
+            float depthS = Mathf.Lerp(DeepBathymetry.ClimateBaseDepth(climateWS), DeepBathymetry.ClimateBaseDepth(climateES), wx);
+            baseDepth = Mathf.Lerp(depthN, depthS, wy);
+
+            float bandN = Mathf.Lerp(DeepBathymetry.ClimateBandSignal(climateWN), DeepBathymetry.ClimateBandSignal(climateEN), wx);
+            float bandS = Mathf.Lerp(DeepBathymetry.ClimateBandSignal(climateWS), DeepBathymetry.ClimateBandSignal(climateES), wx);
+            band = Mathf.Lerp(bandN, bandS, wy);
+        }
+
+        public float GetBlendedClimateBaseDepth(float worldX, float worldZ)
+        {
+            float baseDepth, band;
+            GetBlendedClimate(worldX, worldZ, out baseDepth, out band);
+            return baseDepth;
+        }
+
+        // The 4 map-pixel climates whose CENTERS surround this world position,
+        // plus the bilinear weights. Pixel centers sit at frac 0.5, so the -0.5
+        // shift puts centers on integers; resolving through the same global
+        // mapping as GetGlobalMapFractions keeps the result identical on both
+        // sides of a shared edge.
+        private void GetSurroundingClimates(
+            float worldX, float worldZ,
+            out int climateWN, out int climateEN, out int climateWS, out int climateES,
+            out float wx, out float wy)
+        {
+            int mapPixelX;
+            int mapPixelY;
+            float fracX;
+            float fracZ;
+            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+
+            // Global pixel-center space (south-growing Y matches the map pixel Y).
+            float gx = mapPixelX + fracX - 0.5f;
+            float gy = mapPixelY + (1f - fracZ) - 0.5f;
+            int px = Mathf.FloorToInt(gx);
+            int py = Mathf.FloorToInt(gy);
+            wx = gx - px;
+            wy = gy - py;
+
+            climateWN = ClimateAtPixel(px, py);
+            climateEN = ClimateAtPixel(px + 1, py);
+            climateWS = ClimateAtPixel(px, py + 1);
+            climateES = ClimateAtPixel(px + 1, py + 1);
+        }
+
+        private int ClimateAtPixel(int mapX, int mapY)
+        {
+            DaggerfallUnity dfu = DaggerfallUnity.Instance;
+            if (dfu == null || dfu.ContentReader == null || dfu.ContentReader.MapFileReader == null)
+                return ClimateIndex;
+            mapX = Mathf.Clamp(mapX, 0, MapsFile.MaxMapPixelX - 1);
+            mapY = Mathf.Clamp(mapY, 0, MapsFile.MaxMapPixelY - 1);
+            return dfu.ContentReader.MapFileReader.GetClimateIndex(mapX, mapY);
+        }
+
+        private void GetTileFractions(float worldX, float worldZ, out float fracX, out float fracZ)
+        {
+            // Re-read the tile origin each query in case the streaming world
+            // shifted us (FloatingOrigin can move terrains between updates,
+            // so caching the position from Initialize would drift).
+            Vector3 origin = transform != null ? transform.position : cachedOrigin;
+            fracX = (worldX - origin.x) / tileWorldSize;
+            fracZ = (worldZ - origin.z) / tileWorldSize;
+        }
+
+        private void GetGlobalMapFractions(
+            float worldX,
+            float worldZ,
+            out int mapPixelX,
+            out int mapPixelY,
+            out float fracX,
+            out float fracZ)
+        {
+            float localFracX;
+            float localFracZ;
+            GetTileFractions(worldX, worldZ, out localFracX, out localFracZ);
+
+            float globalX = MapPixelX + localFracX;
+            float globalSouthY = MapPixelY + (1f - localFracZ);
+
+            mapPixelX = Mathf.FloorToInt(globalX);
+            mapPixelY = Mathf.FloorToInt(globalSouthY);
+            fracX = globalX - mapPixelX;
+            float southFrac = globalSouthY - mapPixelY;
+            fracZ = 1f - southFrac;
+
+            NormalizeMapFractionX(ref mapPixelX, ref fracX, MapsFile.MaxMapPixelX);
+            NormalizeMapFractionY(ref mapPixelY, ref fracZ, MapsFile.MaxMapPixelY);
+        }
+
+        private static void NormalizeMapFractionX(ref int mapPixel, ref float frac, int maxMapPixels)
+        {
+            if (mapPixel < 0)
+            {
+                mapPixel = 0;
+                frac = 0f;
+                return;
+            }
+
+            if (mapPixel >= maxMapPixels)
+            {
+                mapPixel = maxMapPixels - 1;
+                frac = 1f;
+                return;
+            }
+
+            frac = Mathf.Clamp01(frac);
+        }
+
+        private static void NormalizeMapFractionY(ref int mapPixel, ref float fracZ, int maxMapPixels)
+        {
+            if (mapPixel < 0)
+            {
+                mapPixel = 0;
+                fracZ = 1f;
+                return;
+            }
+
+            if (mapPixel >= maxMapPixels)
+            {
+                mapPixel = maxMapPixels - 1;
+                fracZ = 0f;
+                return;
+            }
+
+            fracZ = Mathf.Clamp01(fracZ);
+        }
+
+        // Ocean-connectivity gate. Two criteria combined:
+        //   1. THIS tile's heightmap has at least one sample at or below
+        //      sea level — the SAME criterion ComputeHoleMask uses to
+        //      carve cells and WaterSurfaceManager uses to place the
+        //      water plane. If the carving + water plane will happen
+        //      anywhere on this tile, we MUST build a mesh + apply the
+        //      hole mask, or the player ends up walking on solid
+        //      vanilla terrain under a visible water plane.
+        //   2. At least one cardinal neighbor pixel has bake water
+        //      cells. This rules out isolated inland lakes — the bake's
+        //      BuildOceanConnectedWaterMask already strips disconnected
+        //      water bodies, so a true inland puddle's neighbors will
+        //      all report MapPixelHasWaterCells == false.
+        //
+        // The previous gate used MapPixelHasWaterCells(self) for #1,
+        // which is the bake's 30%-vanilla / 50%-IT majority
+        // classification at the SUB-CELL level. A typical shoreline
+        // pixel — mostly beach DIRT under IT, or mostly slightly-above-
+        // sea-level samples under vanilla — has zero bake water cells
+        // even though its heightmap shows water along the coast. Those
+        // shoreline tiles were silently dropping out of ocean-
+        // connectivity, which is exactly the "solid land where water
+        // visually shows" / "cows on water" / "swimmable seam between
+        // adjacent tiles" / "walk through ledge under the land"
+        // symptoms the user reported.
+        private static bool ComputeOceanConnectivity(DaggerfallTerrain dfTerrain)
+        {
+            if (!DeepWaterDistanceBake.IsLoaded) return false;
+            if (dfTerrain == null) return false;
+
+            int mx = dfTerrain.MapPixelX;
+            int my = dfTerrain.MapPixelY;
+
+            if (!DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData))
+                return false;
+
+            // Treat the promoted tile as ocean-connected when the coarse
+            // ocean-connected bake reaches this pixel or its immediate shore
+            // neighborhood. This keeps shoreline pixels that are mostly beach
+            // from dropping out, while still filtering isolated inland water.
+            if (DeepWaterDistanceBake.MapPixelHasWaterCellsNear(mx, my, 2))
+                return true;
+
+            if (DeepWaterDistanceBake.HasFineWaterMask)
+                return DeepWaterDistanceBake.MapPixelHasFineWaterCells(mx, my);
+
+            // Pre-v4 (legacy) fallback: heightmap-based self-check
+            // combined with coarse-mask neighbor check. Identical to
+            // v0.52.4 behavior so old bakes still get the shoreline
+            // ocean-connectivity improvement.
+            return DeepWaterDistanceBake.MapPixelHasWaterCells(mx + 1, my)
+                || DeepWaterDistanceBake.MapPixelHasWaterCells(mx - 1, my)
+                || DeepWaterDistanceBake.MapPixelHasWaterCells(mx, my + 1)
+                || DeepWaterDistanceBake.MapPixelHasWaterCells(mx, my - 1)
+                || DeepWaterDistanceBake.MapPixelHasWaterCells(mx, my);
+        }
+
     }
 }

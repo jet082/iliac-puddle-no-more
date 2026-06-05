@@ -40,6 +40,13 @@ namespace DeepWaters
         private const float FailedEnemyRetrySeconds = 4f;
         private const float DespawnDistance = 160f;
         private const float MinimumColumnDepth = 4f;
+        private const float EnemySeafloorClearance = 2.5f;
+        private const float EnemySurfaceClearance = 3f;
+        private const float EnemyColumnFractionMin = 0.28f;
+        private const float EnemyColumnFractionMax = 0.78f;
+        private const int CandidateAttemptsPerSpawn = 8;
+        private const float OutdoorAquaticSwimSpeed = 3.8f;
+        private const float OutdoorAquaticStopDistance = 2.25f;
         private const float TreasureGuardMinDistance = 8f;
         private const float TreasureGuardMaxDistance = 30f;
         private const int MaxTreasureGuardCount = 5;
@@ -131,6 +138,9 @@ namespace DeepWaters
             if (DeepWaters.Instance == null)
                 return false;
 
+            if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+                return false;
+
             if (!DeepWaters.Instance.SpawnUnderwaterEnemies)
                 return false;
 
@@ -149,26 +159,35 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
                 return false;
 
-            Vector3 spawnPoint = DeepWaterWorld.PickRingPoint(
-                playerPos,
-                DeepWaterWorld.EncounterSpawnMinDistance,
-                DeepWaterWorld.EncounterSpawnMaxDistance);
+            for (int i = 0; i < CandidateAttemptsPerSpawn; i++)
+            {
+                Vector3 spawnPoint = DeepWaterWorld.PickRingPoint(
+                    playerPos,
+                    DeepWaterWorld.EncounterSpawnMinDistance,
+                    DeepWaterWorld.EncounterSpawnMaxDistance);
 
-            Vector3 resolvedPos;
-            Transform parent;
-            if (!TryResolveSpawnPosition(spawnPoint.x, spawnPoint.z, out resolvedPos, out parent))
-                return false;
+                Vector3 resolvedPos;
+                Transform parent;
+                if (!TryResolveSpawnPosition(spawnPoint.x, spawnPoint.z, out resolvedPos, out parent))
+                    continue;
 
-            if (!DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.EncounterSpawnViewSafetyDistance, SpawnViewportMargin))
-                return false;
+                if (!DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.EncounterSpawnViewSafetyDistance, SpawnViewportMargin))
+                    continue;
 
-            MobileTypes[] pool = Random.value < RareSpawnChance ? RareTypes : AquaticTypes;
-            return SpawnEnemy(resolvedPos, parent, pool) != null;
+                MobileTypes[] pool = Random.value < RareSpawnChance ? RareTypes : AquaticTypes;
+                if (SpawnEnemy(resolvedPos, parent, pool) != null)
+                    return true;
+            }
+
+            return false;
         }
 
         public static int TrySpawnRareEnemiesNearTreasureCluster(Vector3 centre)
         {
             if (DeepWaters.Instance == null || !DeepWaters.Instance.SpawnUnderwaterEnemies)
+                return 0;
+
+            if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
                 return 0;
 
             int targetCount = RollTreasureGuardCount();
@@ -210,7 +229,26 @@ namespace DeepWaters
 
         private static bool TryResolveSpawnPosition(float worldX, float worldZ, out Vector3 worldPos, out Transform parent)
         {
-            return DeepWaterWorld.TryResolveSeafloorPosition(worldX, worldZ, MinimumColumnDepth, 1.5f, out worldPos, out parent);
+            worldPos = Vector3.zero;
+            parent = null;
+
+            DeepWaterColumn column;
+            if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
+                return false;
+
+            float seafloorWorldY;
+            if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, worldX, worldZ, out seafloorWorldY))
+                return false;
+
+            float floorClearY = seafloorWorldY + EnemySeafloorClearance;
+            float surfaceClearY = column.OceanWorldY - EnemySurfaceClearance;
+            if (surfaceClearY - floorClearY < MinimumColumnDepth)
+                return false;
+
+            float t = Random.Range(EnemyColumnFractionMin, EnemyColumnFractionMax);
+            worldPos = new Vector3(worldX, Mathf.Lerp(floorClearY, surfaceClearY, t), worldZ);
+            parent = column.Parent;
+            return parent != null;
         }
 
         private static GameObject SpawnEnemy(Vector3 worldPos, Transform parent, MobileTypes[] pool)
@@ -228,9 +266,37 @@ namespace DeepWaters
                 parent);
 
             if (enemy != null)
+            {
+                ConfigureSpawnedEnemy(enemy, worldPos);
                 liveEnemies.Add(enemy);
+            }
 
             return enemy;
+        }
+
+        private static void ConfigureSpawnedEnemy(GameObject enemy, Vector3 worldPos)
+        {
+            if (enemy == null)
+                return;
+
+            // GameObjectHelper aligns non-flying enemies with raycast ground,
+            // which is correct on land but unreliable over carved ocean holes.
+            // Put the enemy back at the resolved underwater position.
+            enemy.transform.position = worldPos;
+
+            EnemyMotor motor = enemy.GetComponent<EnemyMotor>();
+            GameManager gameManager = GameManager.Instance;
+            if (motor != null && gameManager != null && gameManager.PlayerEntityBehaviour != null)
+                motor.MakeEnemyHostileToAttacker(gameManager.PlayerEntityBehaviour);
+
+            MobileUnit mobile = enemy.GetComponentInChildren<MobileUnit>();
+            if (mobile != null && mobile.Enemy.Behaviour == MobileBehaviour.Aquatic &&
+                enemy.GetComponent<OutdoorAquaticEnemyPilot>() == null)
+            {
+                enemy.AddComponent<OutdoorAquaticEnemyPilot>();
+            }
+
+            Physics.SyncTransforms();
         }
 
         public static int RollScaledSpawnCount(int fullSpawnCount)
@@ -260,6 +326,65 @@ namespace DeepWaters
             return DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column) &&
                    column.Depth >= MinimumColumnDepth &&
                    position.y <= column.OceanWorldY + 3f;
+        }
+
+        private class OutdoorAquaticEnemyPilot : MonoBehaviour
+        {
+            private CharacterController controller;
+
+            void Awake()
+            {
+                controller = GetComponent<CharacterController>();
+            }
+
+            void Update()
+            {
+                if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+                    return;
+
+                GameManager gameManager = GameManager.Instance;
+                GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+                if (player == null)
+                    return;
+
+                Vector3 position = transform.position;
+                DeepWaterColumn column;
+                if (!DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column))
+                    return;
+
+                float seafloorWorldY;
+                if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, position.x, position.z, out seafloorWorldY))
+                    return;
+
+                float minY = seafloorWorldY + EnemySeafloorClearance;
+                float maxY = column.OceanWorldY - EnemySurfaceClearance;
+                if (maxY <= minY)
+                    return;
+
+                position.y = Mathf.Clamp(position.y, minY, maxY);
+                Vector3 target = player.transform.position;
+                target.y = Mathf.Clamp(target.y, minY, maxY);
+
+                Vector3 delta = target - position;
+                if (delta.sqrMagnitude <= OutdoorAquaticStopDistance * OutdoorAquaticStopDistance)
+                {
+                    MoveTo(position);
+                    return;
+                }
+
+                Vector3 motion = delta.normalized * OutdoorAquaticSwimSpeed * Time.deltaTime;
+                Vector3 next = position + motion;
+                next.y = Mathf.Clamp(next.y, minY, maxY);
+                MoveTo(next);
+            }
+
+            private void MoveTo(Vector3 worldPosition)
+            {
+                if (controller != null && controller.enabled)
+                    controller.Move(worldPosition - transform.position);
+                else
+                    transform.position = worldPosition;
+            }
         }
 
     }

@@ -29,6 +29,8 @@ namespace DeepWaters
                 true);
 
             DeepWaterRendering.DisableShadows(loot != null ? loot.gameObject : null);
+            if (loot != null)
+                DeepWaterWorld.AlignObjectBottomToWorldY(loot.gameObject, worldPos.y);
             if (tracker != null)
                 tracker.Add(loot != null ? loot.gameObject : null);
 
@@ -59,6 +61,11 @@ namespace DeepWaters
                 batchItems = new List<DaggerfallBillboardBatch.BasicInfo>();
                 rubbleBatches.Add(parent, batchItems);
             }
+
+            worldPos.y = UnderwaterDecorationPlacement.ResolveBillboardBaseWorldY(
+                UnderwaterLootCatalog.RubbleArchive,
+                record,
+                worldPos.y);
 
             batchItems.Add(new DaggerfallBillboardBatch.BasicInfo(record, worldPos - parent.position));
         }

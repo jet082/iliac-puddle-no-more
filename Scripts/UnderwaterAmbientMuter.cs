@@ -25,10 +25,18 @@ namespace DeepWaters
             if (DeepWaters.Instance == null)
                 return;
 
+            var gameManager = GameManager.Instance;
+            if (gameManager == null || !gameManager.IsPlayingGame())
+            {
+                if (isMuffled)
+                    RemoveFilter();
+                return;
+            }
+
             // Lazily find the AudioListener once. In DFU, it's on a child of the main camera.
             if (listenerObject == null)
             {
-                var mainCamera = GameManager.Instance?.MainCamera;
+                var mainCamera = gameManager.MainCamera;
                 if (mainCamera == null) return;
                 var listener = mainCamera.GetComponentInChildren<AudioListener>();
                 if (listener == null)
@@ -40,8 +48,7 @@ namespace DeepWaters
             }
 
             // Don't apply effect when indoors.
-            var gameManager = GameManager.Instance;
-            if (gameManager == null || gameManager.PlayerEnterExit == null || gameManager.PlayerEnterExit.IsPlayerInside)
+            if (gameManager.PlayerEnterExit == null || gameManager.PlayerEnterExit.IsPlayerInside)
             {
                 if (isMuffled) RemoveFilter();
                 return;

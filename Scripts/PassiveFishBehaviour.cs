@@ -258,7 +258,11 @@ namespace DeepWaters
             }
 
             Vector3 pos = transform.position;
-            float minY = column.SeafloorWorldY + SeafloorClearance;
+            float seafloorWorldY;
+            if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, pos.x, pos.z, out seafloorWorldY))
+                return;
+
+            float minY = seafloorWorldY + SeafloorClearance;
             float maxY = column.OceanWorldY - SurfaceClearance;
 
             if (pos.y < minY)
@@ -296,4 +300,3 @@ namespace DeepWaters
 
     }
 }
-

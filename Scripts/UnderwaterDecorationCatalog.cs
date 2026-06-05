@@ -63,7 +63,7 @@ namespace DeepWaters
     {
         public const int Archive = 105;
         private const int GeneralPoolWeight = 120;
-        private const int AnimatedGeneralPoolBonusWeight = 30;
+        private const int AnimatedGeneralPoolBonusWeight = 220;
         private const int DebrisPoolWeight = 4;
         private const float Texture106FramesPerSecond = 5f;
 

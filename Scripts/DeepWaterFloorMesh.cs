@@ -21,42 +21,98 @@ namespace DeepWaters
     [RequireComponent(typeof(MeshCollider))]
     public class DeepWaterFloorMesh : MonoBehaviour
     {
-        // 33x33 = 1089 verts, 2048 tris per tile. Cell spacing ~25.6m on an
-        // 819m tile. Resolves the bathymetric shape without exploding the
-        // MeshCollider rebuild cost across the streaming radius.
-        public const int VertexGridSize = 33;
+        // 65x65 = 4225 verts, 8192 tris per tile. Cell spacing ~12.8m on an
+        // 819m tile. Finer grid (v0.55.43) so the rolling-hill floor reads as
+        // smooth (not faceted into rigid pyramids) and its clipped edge hugs the
+        // carved coastline closely. Heavier MeshCollider cooking, but the
+        // streaming buffer warms tiles ahead so the cost is spread out.
+        public const int VertexGridSize = 65;
         private const float WallMinimumDrop = 0.25f;
-        private const float ShoreWallSurfaceInset = 1.25f;
+        private const float ShoreWallSurfaceInset = 0.20f;
         private const float ShoreWallBottomOverlap = 0.10f;
-        private const float ShoreWallTopTextureStrength = 0f;
+        private const float ShoreWallTopTextureStrength = 0.35f;
+        // Continuous shore-skirt tuning (v0.55.36). The skirt bridges the deep
+        // carved floor to the shallow vanilla coast as ONE gap-free surface
+        // (shared per-perimeter-vertex bottoms), with a run that widens as the
+        // drop deepens so it grades in like natural seabed instead of standing
+        // up as a wall.
+        private const float SkirtSlopeTangent = 0.3f;        // ~17deg target grade: run = drop / this
+        private const float SkirtMinWidthMeters = 12.0f;
+        private const float SkirtMaxWidthMeters = 150.0f;
+        private const float SkirtWidthNoisePeriod = 70.0f;  // undulate the toe so it wanders naturally
+        private const float SkirtWidthNoiseAmount = 0.35f;  // +/-35% width variation
 
         private Mesh mesh;
         private MeshCollider meshCollider;
         private DeepWaterTileData tileData;
         private DaggerfallTerrain dfTerrain;
+        private int buildVersion;
+        private int colliderBuildVersion = -1;
 
         // Cache of the vertex grid local Y values. Decoration placement
         // samples this instead of the raw bathymetry function so it lands
         // ON the rendered mesh surface rather than on the higher-frequency
         // function value that the mesh's linear interpolation misses.
         private float[,] vertexLocalY;
+        private bool[,] floorQuadWater;
         private float tileWorldSizeCached;
 
         // Diagnostic counters captured per Build call, logged at the end.
         // The user runs the game with this and shares the Player.log so we
-        // can verify wall/skirt geometry is actually being generated.
-        public static bool DiagnosticLogging = true;
+        // can verify shore wall geometry is actually being generated.
+        public static bool DiagnosticLogging = false;
+        // v0.55.51 shore-drop DIRECTION diagnostic.
+        // Logs, per coastal tile, the baked distance + resulting floor depth at
+        // the carve shore for each land-facing direction, so walls can be
+        // correlated with compass facing.
+        public static bool ShoreDropDiagnostics = false;
+        private static int shoreDiagLinesLogged = 0;
         public static int DiagnosticTilesBuilt = 0;
         private int diagWithinTileWalls;
-        private int diagBoundarySkirts;
+        private int diagBoundaryWalls;
         private int diagSkippedShortWalls;
+
+        public int BuildVersion
+        {
+            get { return buildVersion; }
+        }
+
+        public int BuiltMapPixelX { get; private set; }
+        public int BuiltMapPixelY { get; private set; }
+
+        public bool HasValidRuntimeCollider
+        {
+            get
+            {
+                return mesh != null &&
+                       mesh.vertexCount > 0 &&
+                       meshCollider != null &&
+                       meshCollider.enabled &&
+                       meshCollider.sharedMesh == mesh;
+            }
+        }
+
+        // Reference to the heightmap array we last built against. DFU
+        // allocates a fresh float[,] on every legitimate promote (verified
+        // for Default, IT, and WoD samplers), so reference equality is a
+        // reliable "data unchanged" signal. DeepWaterFloorBuilder uses this
+        // to short-circuit RefreshPlayerArea's redundant re-promotion path,
+        // which would otherwise bump BuildVersion every stream cycle and
+        // cause UnderwaterDecorations to tear down + respawn the entire
+        // ring on every streaming update (visible as decorations "moving
+        // around rapidly" to the player).
+        public float[,] LastBuiltHeightmapSamples { get; private set; }
 
         public void Build(DaggerfallTerrain owner, DeepWaterTileData tile, float oceanLocalY, bool[,] holes)
         {
             dfTerrain = owner;
             tileData = tile;
+            buildVersion++;
+            BuiltMapPixelX = owner != null ? owner.MapPixelX : int.MinValue;
+            BuiltMapPixelY = owner != null ? owner.MapPixelY : int.MinValue;
+            LastBuiltHeightmapSamples = owner != null ? owner.MapData.heightmapSamples : null;
             diagWithinTileWalls = 0;
-            diagBoundarySkirts = 0;
+            diagBoundaryWalls = 0;
             diagSkippedShortWalls = 0;
 
             if (mesh == null)
@@ -78,10 +134,10 @@ namespace DeepWaters
 
             if (vertexLocalY == null || vertexLocalY.GetLength(0) != n)
                 vertexLocalY = new float[n, n];
+            if (floorQuadWater == null || floorQuadWater.GetLength(0) != n - 1)
+                floorQuadWater = new bool[n - 1, n - 1];
 
             float cellSpacing = tileWorldSize / (n - 1);
-            int climateIndex = tile.ClimateIndex;
-            float climateBand = ClimateBandSignal(climateIndex);
 
             for (int z = 0; z < n; z++)
             {
@@ -92,14 +148,30 @@ namespace DeepWaters
                     float localX = x * cellSpacing;
                     float worldX = terrainOrigin.x + localX;
 
-                    float distanceToCoast = tile.GetDistanceToCoastMeters(worldX, worldZ);
-                    float depth = DeepBathymetry.SampleDepthMeters(worldX, worldZ, climateIndex, distanceToCoast);
+                    // Distance to the nearest shore edge (baked, global — now
+                    // accurate via the CPU hybrid WOD classifier) drives the deep
+                    // shelf, so the floor descends gradually over the full
+                    // continental margin, consistent across tile boundaries.
+                    float shoreDistance = tile.GetDistanceToEdgeMeters(worldX, worldZ);
+                    // Blended (bilinear across the 4 surrounding map pixels)
+                    // climate base depth + texture band, so neither steps at a
+                    // map-pixel climate boundary.
+                    float climateBase, vertexClimateBand;
+                    tile.GetBlendedClimate(worldX, worldZ, out climateBase, out vertexClimateBand);
+                    // Sample the seabed noise in map-pixel-anchored coordinates
+                    // (not the floating-origin-shifted worldX) so adjacent tiles
+                    // built at different origin offsets still agree at shared
+                    // edges — otherwise the hills tear into seams at every
+                    // map-pixel boundary.
+                    float noiseX, noiseZ;
+                    tile.GetNoiseWorldCoords(worldX, worldZ, out noiseX, out noiseZ);
+                    float depth = DeepBathymetry.SampleDepthMeters(noiseX, noiseZ, climateBase, shoreDistance);
                     float localY = oceanLocalY - depth;
 
                     vertices.Add(new Vector3(localX, localY, localZ));
                     vertexLocalY[z, x] = localY;
 
-                    colors.Add(CreateVertexColor(depth, climateBand, distanceToCoast));
+                    colors.Add(CreateVertexColor(depth, vertexClimateBand, shoreDistance));
 
                     // UV in world-meter local coordinates. The shader
                     // multiplies by _TextureWorldScale (= 1 / meters-per-tile)
@@ -115,6 +187,11 @@ namespace DeepWaters
             {
                 for (int x = 0; x < n - 1; x++)
                 {
+                    bool isWaterQuad = IsFloorQuadWater(holes, x, z, n - 1);
+                    floorQuadWater[z, x] = isWaterQuad;
+                    if (!isWaterQuad)
+                        continue;
+
                     int v00 = z * n + x;
                     int v10 = v00 + 1;
                     int v01 = v00 + n;
@@ -129,29 +206,12 @@ namespace DeepWaters
                 }
             }
 
-            AppendHoleEdgeWalls(
-                holes,
-                vertices,
-                colors,
-                uvs,
-                triangles,
-                oceanLocalY,
-                terrainOrigin,
-                tileWorldSize,
-                climateIndex,
-                climateBand);
-
-            AppendTileBoundarySkirt(
-                holes,
-                vertices,
-                colors,
-                uvs,
-                triangles,
-                oceanLocalY,
-                terrainOrigin,
-                tileWorldSize,
-                climateIndex,
-                climateBand);
+            // v0.55.44: skirt RE-ADDED. Removing it (v0.55.43) exposed
+            // see-through voids at the carve perimeter where the deep floor
+            // doesn't reach the shallow shore — worse than walls. The skirt
+            // covers those; it self-skips where the floor already meets the
+            // terrain (small drop), so it only "walls" at the hard deep edges.
+            AppendHoleEdgeWalls(holes, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize);
 
             mesh.Clear();
             mesh.SetVertices(vertices);
@@ -161,7 +221,11 @@ namespace DeepWaters
             mesh.RecalculateBounds();
 
             EnsureMaterial();
+            if (DeepWaterFloorBuilder.DiagTrace)
+                Debug.Log("[DeepWaters.DIAG] meshCollider>> tile=(" + BuiltMapPixelX + "," + BuiltMapPixelY + ") verts=" + mesh.vertexCount);
             EnsureCollider();
+            if (DeepWaterFloorBuilder.DiagTrace)
+                Debug.Log("[DeepWaters.DIAG] meshCollider<< tile=(" + BuiltMapPixelX + "," + BuiltMapPixelY + ")");
 
             if (DiagnosticLogging)
             {
@@ -180,11 +244,122 @@ namespace DeepWaters
                     " oceanY=" + oceanLocalY.ToString("F2") +
                     " holes=" + holeCount + "/" + (rows * cols) +
                     " withinWalls=" + diagWithinTileWalls +
-                    " boundarySkirts=" + diagBoundarySkirts +
+                    " boundaryWalls=" + diagBoundaryWalls +
                     " skippedShort=" + diagSkippedShortWalls +
                     " meshVerts=" + mesh.vertexCount +
                     " meshTris=" + (mesh.triangles.Length / 3));
             }
+
+            LogShoreDropDiagnostics(owner, tile, holes, terrainOrigin, tileWorldSize);
+        }
+
+        // v0.55.51 DIAGNOSTIC: confirm the north-vs-other-direction wall pattern.
+        // holes[z,x]==false is a CARVED (water) cell; z increases NORTH (z=0 is
+        // the tile's south edge), x increases EAST. A solid (==true) cardinal
+        // neighbour is LAND. For each land-facing direction we keep the carve-
+        // perimeter cell with the LARGEST baked distance-to-edge — the deeper
+        // the bake reads at the carved shore, the taller the skirt wall there.
+        // Comparing edge/depth across landN/landS/landE/landW per tile tells us
+        // whether the walls track a specific compass facing (a systematic bake
+        // vs carve misalignment) or are random.
+        private void LogShoreDropDiagnostics(
+            DaggerfallTerrain owner, DeepWaterTileData tile, bool[,] holes,
+            Vector3 terrainOrigin, float tileWorldSize)
+        {
+            if (!ShoreDropDiagnostics || tile == null || holes == null || shoreDiagLinesLogged >= 1000)
+                return;
+            int rows = holes.GetLength(0);
+            int cols = holes.GetLength(1);
+            if (rows < 3 || cols < 3)
+                return;
+            float cellW = tileWorldSize / cols;
+            float cellH = tileWorldSize / rows;
+
+            // Detect "underwater land": uncarved cells whose terrain is below sea
+            // level (submerged ground the carve skipped — you swim over a thin
+            // film but can't dive). Counting these per tile tests the hypothesis
+            // that the walls sit at carved-floor vs uncarved-submerged boundaries.
+            float[,] heights = owner != null ? owner.MapData.heightmapSamples : null;
+            var dfu = DaggerfallUnity.Instance;
+            float oceanThreshold = (dfu != null && dfu.TerrainSampler != null)
+                ? dfu.TerrainSampler.OceanElevation / dfu.TerrainSampler.MaxTerrainHeight
+                : 0.5f;
+            bool canCheckSubmerged = heights != null &&
+                heights.GetLength(0) >= rows && heights.GetLength(1) >= cols;
+            int underwaterLandCells = 0;
+            float maxTerrainHeight = (dfu != null && dfu.TerrainSampler != null)
+                ? dfu.TerrainSampler.MaxTerrainHeight : 5000f;
+            float maxCarvedItDepth = 0f;   // deepest IT seabed (m) under a carved cell
+
+            var maxEdge = new float[4];  // 0=landN 1=landS 2=landE 3=landW
+            var atCoast = new float[4];
+            var atDepth = new float[4];
+            var atWX = new float[4];
+            var atWZ = new float[4];
+            var seen = new bool[4];
+
+            for (int z = 1; z < rows - 1; z++)
+            {
+                for (int x = 1; x < cols - 1; x++)
+                {
+                    if (holes[z, x])
+                    {
+                        if (canCheckSubmerged &&
+                            heights[z, x] <= oceanThreshold && heights[z, x + 1] <= oceanThreshold &&
+                            heights[z + 1, x] <= oceanThreshold && heights[z + 1, x + 1] <= oceanThreshold)
+                            underwaterLandCells++;
+                        continue;                         // uncarved cell
+                    }
+                    if (canCheckSubmerged)
+                    {
+                        float itd = (oceanThreshold - heights[z, x]) * maxTerrainHeight;
+                        if (itd > maxCarvedItDepth) maxCarvedItDepth = itd;
+                    }
+                    int dir;
+                    if (holes[z + 1, x]) dir = 0;         // land to the north
+                    else if (holes[z - 1, x]) dir = 1;    // land to the south
+                    else if (holes[z, x + 1]) dir = 2;    // land to the east
+                    else if (holes[z, x - 1]) dir = 3;    // land to the west
+                    else continue;                        // interior water
+
+                    float wx = terrainOrigin.x + (x + 0.5f) * cellW;
+                    float wz = terrainOrigin.z + (z + 0.5f) * cellH;
+                    float ed = tile.GetDistanceToEdgeMeters(wx, wz);
+                    if (seen[dir] && ed <= maxEdge[dir]) continue;
+
+                    seen[dir] = true;
+                    maxEdge[dir] = ed;
+                    atCoast[dir] = tile.GetDistanceToCoastMeters(wx, wz);
+                    atWX[dir] = wx;
+                    atWZ[dir] = wz;
+                    float climateBase, band;
+                    tile.GetBlendedClimate(wx, wz, out climateBase, out band);
+                    float nX, nZ;
+                    tile.GetNoiseWorldCoords(wx, wz, out nX, out nZ);
+                    atDepth[dir] = DeepBathymetry.SampleDepthMeters(nX, nZ, climateBase, ed);
+                }
+            }
+
+            if (!seen[0] && !seen[1] && !seen[2] && !seen[3])
+                return;                                   // open-ocean tile, no carved shore
+
+            string[] names = { "landN", "landS", "landE", "landW" };
+            var sb = new System.Text.StringBuilder();
+            sb.Append("[DeepWaters.ShoreDiag] tile=(").Append(owner.MapPixelX)
+              .Append(",").Append(owner.MapPixelY).Append(") uwLand=")
+              .Append(underwaterLandCells).Append(" itSeabedMax=")
+              .Append(maxCarvedItDepth.ToString("F0")).Append("m  ");
+            for (int i = 0; i < 4; i++)
+            {
+                if (!seen[i]) continue;
+                sb.Append(names[i]).Append(" edge=").Append(maxEdge[i].ToString("F0"))
+                  .Append(" coast=").Append(atCoast[i].ToString("F0"))
+                  .Append(" depth=").Append(atDepth[i].ToString("F0"))
+                  .Append(" @(").Append(atWX[i].ToString("F0")).Append(",")
+                  .Append(atWZ[i].ToString("F0")).Append(")   ");
+            }
+            Debug.Log(sb.ToString());
+            shoreDiagLinesLogged++;
         }
 
         public void TearDown()
@@ -205,6 +380,7 @@ namespace DeepWaters
             }
 
             vertexLocalY = null;
+            floorQuadWater = null;
         }
 
         /// <summary>
@@ -231,6 +407,9 @@ namespace DeepWaters
             float fz = fracZ * (n - 1);
             int x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, n - 2);
             int z0 = Mathf.Clamp(Mathf.FloorToInt(fz), 0, n - 2);
+            if (floorQuadWater != null && !floorQuadWater[z0, x0])
+                return false;
+
             int x1 = x0 + 1;
             int z1 = z0 + 1;
             float tx = Mathf.Clamp01(fx - x0);
@@ -252,6 +431,31 @@ namespace DeepWaters
             return true;
         }
 
+        public void EnsureRuntimeCollider()
+        {
+            if (HasValidRuntimeCollider && colliderBuildVersion == buildVersion)
+                return;
+
+            EnsureCollider();
+        }
+
+        private static bool IsFloorQuadWater(bool[,] holes, int quadX, int quadZ, int quadResolution)
+        {
+            if (holes == null || quadResolution <= 0)
+                return true;
+
+            int rows = holes.GetLength(0);
+            int cols = holes.GetLength(1);
+            if (rows <= 0 || cols <= 0)
+                return false;
+
+            float fracX = (quadX + 0.5f) / quadResolution;
+            float fracZ = (quadZ + 0.5f) / quadResolution;
+            int hx = Mathf.Clamp(Mathf.FloorToInt(fracX * cols), 0, cols - 1);
+            int hz = Mathf.Clamp(Mathf.FloorToInt(fracZ * rows), 0, rows - 1);
+            return !holes[hz, hx];
+        }
+
         private void AppendHoleEdgeWalls(
             bool[,] holes,
             List<Vector3> vertices,
@@ -260,9 +464,7 @@ namespace DeepWaters
             List<int> triangles,
             float oceanLocalY,
             Vector3 terrainOrigin,
-            float tileWorldSize,
-            int climateIndex,
-            float climateBand)
+            float tileWorldSize)
         {
             if (holes == null || tileData == null)
                 return;
@@ -272,6 +474,17 @@ namespace DeepWaters
             if (rows <= 0 || cols <= 0)
                 return;
 
+            // 1. Collect perimeter edges: a water cell facing land inside the
+            //    tile, or facing a not-carved neighbour across a tile boundary.
+            //    Vertex coords run [0..cols] x [0..rows]; the A->B order is the
+            //    same the old per-edge walls used, so the edge normal points
+            //    toward the water (carved) side.
+            //
+            //    Boundary-side rule (IsBakedHoleAcrossBoundary): skirt only where
+            //    the neighbour tile will NOT carve (land, or shore inside
+            //    HoleBufferMeters). Without the negation every all-ocean tile
+            //    skirts its whole perimeter and the streaming region explodes.
+            var edges = new List<SkirtEdge>();
             for (int z = 0; z < rows; z++)
             {
                 for (int x = 0; x < cols; x++)
@@ -279,306 +492,319 @@ namespace DeepWaters
                     if (holes[z, x])
                         continue;
 
-                    if (x > 0 && holes[z, x - 1] &&
-                        AddWallSegment(x, z, x, z + 1, cols, rows, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize, climateIndex, climateBand))
-                        diagWithinTileWalls++;
+                    if (x > 0 && holes[z, x - 1]) { edges.Add(new SkirtEdge(x, z, x, z + 1)); diagWithinTileWalls++; }
+                    if (x < cols - 1 && holes[z, x + 1]) { edges.Add(new SkirtEdge(x + 1, z + 1, x + 1, z)); diagWithinTileWalls++; }
+                    if (z > 0 && holes[z - 1, x]) { edges.Add(new SkirtEdge(x + 1, z, x, z)); diagWithinTileWalls++; }
+                    if (z < rows - 1 && holes[z + 1, x]) { edges.Add(new SkirtEdge(x, z + 1, x + 1, z + 1)); diagWithinTileWalls++; }
 
-                    if (x < cols - 1 && holes[z, x + 1] &&
-                        AddWallSegment(x + 1, z + 1, x + 1, z, cols, rows, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize, climateIndex, climateBand))
-                        diagWithinTileWalls++;
-
-                    if (z > 0 && holes[z - 1, x] &&
-                        AddWallSegment(x + 1, z, x, z, cols, rows, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize, climateIndex, climateBand))
-                        diagWithinTileWalls++;
-
-                    if (z < rows - 1 && holes[z + 1, x] &&
-                        AddWallSegment(x, z + 1, x + 1, z + 1, cols, rows, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize, climateIndex, climateBand))
-                        diagWithinTileWalls++;
+                    if (x == 0 && !IsBakedHoleAcrossBoundary(x, z, -1, 0, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x, z, x, z + 1)); diagBoundaryWalls++; }
+                    if (x == cols - 1 && !IsBakedHoleAcrossBoundary(x, z, 1, 0, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x + 1, z + 1, x + 1, z)); diagBoundaryWalls++; }
+                    if (z == 0 && !IsBakedHoleAcrossBoundary(x, z, 0, -1, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x + 1, z, x, z)); diagBoundaryWalls++; }
+                    if (z == rows - 1 && !IsBakedHoleAcrossBoundary(x, z, 0, 1, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x, z + 1, x + 1, z + 1)); diagBoundaryWalls++; }
                 }
             }
-        }
 
-        /// <summary>
-        /// Tile-boundary skirt: each tile drops a wall from ocean surface to its
-        /// own seafloor depth at every edge cell that is a hole. This closes
-        /// the cross-tile gap noted in the README's known limitations — where
-        /// a per-tile distance-to-coast BFS makes adjacent tiles disagree on
-        /// depth at their shared edge, leaving a visible void in the seafloor.
-        /// Both tiles emitting the skirt is intentional; the overlapping upper
-        /// portions z-fight invisibly because they sample the same vertex
-        /// color signal, and the lower stretch is covered by whichever tile
-        /// sampled the deeper depth.
-        /// </summary>
-        private void AppendTileBoundarySkirt(
-            bool[,] holes,
-            List<Vector3> vertices,
-            List<Color> colors,
-            List<Vector2> uvs,
-            List<int> triangles,
-            float oceanLocalY,
-            Vector3 terrainOrigin,
-            float tileWorldSize,
-            int climateIndex,
-            float climateBand)
-        {
-            if (holes == null || tileData == null)
+            if (edges.Count == 0)
                 return;
 
-            int rows = holes.GetLength(0);
-            int cols = holes.GetLength(1);
-            if (rows <= 0 || cols <= 0)
-                return;
-
-            // DFU's TerrainData.SetHoles convention: holes[i,j] == true means
-            // SOLID terrain, holes[i,j] == false means a HOLE (terrain removed,
-            // seafloor mesh visible). We want walls where the seafloor mesh is
-            // visible — i.e. where holes[i,j] == false — so adjacent tiles'
-            // mesh-edge mismatches at that world position get a wall to bridge
-            // the void. Skip the *terrain* cells, process the *hole* cells.
-
-            // z = 0 edge (south face of tile)
-            for (int x = 0; x < cols; x++)
+            // 2. Accumulate an inward (toward-water) normal at each perimeter
+            //    vertex from its adjacent edges. Sharing this averaged normal is
+            //    what lets neighbouring skirt quads meet exactly (no slots).
+            int stride = cols + 1;
+            float cellW = tileWorldSize / cols;
+            float cellH = tileWorldSize / rows;
+            var inwardNormals = new Dictionary<int, Vector2>(edges.Count * 2);
+            for (int i = 0; i < edges.Count; i++)
             {
-                if (holes[0, x]) continue;  // skip terrain cells
-                if (AddWallSegment(x + 1, 0, x, 0, cols, rows, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize, climateIndex, climateBand, isBoundarySkirt: true))
-                    diagBoundarySkirts++;
+                SkirtEdge e = edges[i];
+                float dX = (e.bx - e.ax) * cellW;
+                float dZ = (e.bz - e.az) * cellH;
+                float len = Mathf.Sqrt(dX * dX + dZ * dZ);
+                if (len < 1e-4f)
+                    continue;
+                Vector2 n = new Vector2(dZ / len, -dX / len);
+                int ka = e.az * stride + e.ax;
+                int kb = e.bz * stride + e.bx;
+                Vector2 cur;
+                inwardNormals.TryGetValue(ka, out cur); inwardNormals[ka] = cur + n;
+                inwardNormals.TryGetValue(kb, out cur); inwardNormals[kb] = cur + n;
             }
 
-            // z = rows-1 edge (north face of tile, wall sits at z=rows)
-            for (int x = 0; x < cols; x++)
+            // 3. Build one shared top+bottom vertex per perimeter vertex.
+            float skirtTopY = oceanLocalY - ShoreWallSurfaceInset;
+            var sampler = DaggerfallUnity.Instance.TerrainSampler;
+            float oceanThreshold = sampler != null ? sampler.OceanElevation / sampler.MaxTerrainHeight : 0.5f;
+            var topIndex = new Dictionary<int, int>(inwardNormals.Count);
+            var bottomIndex = new Dictionary<int, int>(inwardNormals.Count);
+            for (int i = 0; i < edges.Count; i++)
             {
-                if (holes[rows - 1, x]) continue;
-                if (AddWallSegment(x, rows, x + 1, rows, cols, rows, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize, climateIndex, climateBand, isBoundarySkirt: true))
-                    diagBoundarySkirts++;
+                SkirtEdge e = edges[i];
+                EnsureSkirtVertex(e.ax, e.az, stride, cols, rows, inwardNormals, topIndex, bottomIndex,
+                    vertices, colors, uvs, oceanLocalY, skirtTopY, oceanThreshold, terrainOrigin, tileWorldSize);
+                EnsureSkirtVertex(e.bx, e.bz, stride, cols, rows, inwardNormals, topIndex, bottomIndex,
+                    vertices, colors, uvs, oceanLocalY, skirtTopY, oceanThreshold, terrainOrigin, tileWorldSize);
             }
 
-            // x = 0 edge (west face of tile)
-            for (int z = 0; z < rows; z++)
+            // 4. Two-sided quad per edge, reusing the shared vertex indices so
+            //    neighbouring quads meet exactly.
+            for (int i = 0; i < edges.Count; i++)
             {
-                if (holes[z, 0]) continue;
-                if (AddWallSegment(0, z, 0, z + 1, cols, rows, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize, climateIndex, climateBand, isBoundarySkirt: true))
-                    diagBoundarySkirts++;
-            }
+                SkirtEdge e = edges[i];
+                int ka = e.az * stride + e.ax;
+                int kb = e.bz * stride + e.bx;
+                int tA, tB, bA, bB;
+                if (!topIndex.TryGetValue(ka, out tA) || !topIndex.TryGetValue(kb, out tB) ||
+                    !bottomIndex.TryGetValue(ka, out bA) || !bottomIndex.TryGetValue(kb, out bB))
+                    continue;
 
-            // x = cols-1 edge (east face of tile, wall sits at x=cols)
-            for (int z = 0; z < rows; z++)
-            {
-                if (holes[z, cols - 1]) continue;
-                if (AddWallSegment(cols, z + 1, cols, z, cols, rows, vertices, colors, uvs, triangles, oceanLocalY, terrainOrigin, tileWorldSize, climateIndex, climateBand, isBoundarySkirt: true))
-                    diagBoundarySkirts++;
+                float span = Mathf.Max(vertices[tA].y - vertices[bA].y, vertices[tB].y - vertices[bB].y);
+                if (span < WallMinimumDrop)
+                {
+                    diagSkippedShortWalls++;
+                    continue;
+                }
+
+                triangles.Add(tA); triangles.Add(tB); triangles.Add(bB);
+                triangles.Add(tA); triangles.Add(bB); triangles.Add(bA);
+                // Reverse winding so the skirt is solid + visible from both sides.
+                triangles.Add(tA); triangles.Add(bB); triangles.Add(tB);
+                triangles.Add(tA); triangles.Add(bA); triangles.Add(bB);
             }
         }
 
-        // Boundary-skirt walls extend down to the climate-base depth rather
-        // than the locally-sampled depth, so they always reach deep enough
-        // to cover any cross-tile mesh elevation mismatch.
-        private bool AddWallSegment(
-            int ax,
-            int az,
-            int bx,
-            int bz,
+        private bool IsBakedHoleAcrossBoundary(
+            int x,
+            int z,
+            int dx,
+            int dz,
             int cols,
             int rows,
+            Vector3 terrainOrigin,
+            float tileWorldSize)
+        {
+            if (tileData == null)
+                return false;
+
+            float cellWidth = tileWorldSize / cols;
+            float cellHeight = tileWorldSize / rows;
+            float sampleX = terrainOrigin.x + (x + 0.5f + dx) * cellWidth;
+            float sampleZ = terrainOrigin.z + (z + 0.5f + dz) * cellHeight;
+
+            // Phase B path (v4 bake with fine mask): the neighbor carves
+            // when the global bake says the cross-boundary sample is carved
+            // water. Do not depend on the neighboring DaggerfallTerrain being
+            // promoted or having DeepWaterTileData initialized yet: streaming
+            // order made that test fail transiently, permanently baking giant
+            // map-pixel perimeter walls into whichever tile built first.
+            if (DeepWaterDistanceBake.HasFineWaterMask)
+            {
+                return tileData.IsCarvedWater(sampleX, sampleZ);
+            }
+
+            // Pre-v4 fallback: heightmap shared-corner prediction (the
+            // v0.52.1 fix), then bake-classification fallback. Kept for
+            // backward compatibility with legacy bakes.
+            if (dfTerrain != null)
+            {
+                float[,] heights = dfTerrain.MapData.heightmapSamples;
+                if (heights != null)
+                {
+                    int hRows = heights.GetLength(0);
+                    int hCols = heights.GetLength(1);
+
+                    int c1Row, c1Col, c2Row, c2Col;
+                    if (dx == -1)
+                    {
+                        c1Row = z;     c1Col = 0;
+                        c2Row = z + 1; c2Col = 0;
+                    }
+                    else if (dx == 1)
+                    {
+                        c1Row = z;     c1Col = x + 1;
+                        c2Row = z + 1; c2Col = x + 1;
+                    }
+                    else if (dz == -1)
+                    {
+                        c1Row = 0; c1Col = x;
+                        c2Row = 0; c2Col = x + 1;
+                    }
+                    else // dz == 1
+                    {
+                        c1Row = z + 1; c1Col = x;
+                        c2Row = z + 1; c2Col = x + 1;
+                    }
+
+                    if (c1Row >= 0 && c1Row < hRows && c1Col >= 0 && c1Col < hCols &&
+                        c2Row >= 0 && c2Row < hRows && c2Col >= 0 && c2Col < hCols)
+                    {
+                        var sampler = DaggerfallUnity.Instance.TerrainSampler;
+                        float oceanThreshold = sampler.OceanElevation / sampler.MaxTerrainHeight;
+                        float waterThreshold = oceanThreshold + 1e-5f;
+
+                        if (heights[c1Row, c1Col] <= waterThreshold ||
+                            heights[c2Row, c2Col] <= waterThreshold)
+                            return true;
+                    }
+                }
+            }
+
+            return tileData.IsBakedWater(sampleX, sampleZ) &&
+                   tileData.GetDistanceToCoastMeters(sampleX, sampleZ) >= DeepWaterFloorBuilder.HoleBufferMeters;
+        }
+
+        // Build (once) the shared top + bottom skirt vertices for one perimeter
+        // grid vertex. The top sits just under the surface at the carve edge;
+        // the bottom is pushed inward (toward water) along the vertex's averaged
+        // normal by a run that scales with the local drop, landing on the seabed.
+        // Because adjacent edges look up the SAME key, their quads share these
+        // vertices exactly — no slots.
+        private void EnsureSkirtVertex(
+            int vx,
+            int vz,
+            int stride,
+            int cols,
+            int rows,
+            Dictionary<int, Vector2> inwardNormals,
+            Dictionary<int, int> topIndex,
+            Dictionary<int, int> bottomIndex,
             List<Vector3> vertices,
             List<Color> colors,
             List<Vector2> uvs,
-            List<int> triangles,
             float oceanLocalY,
+            float skirtTopY,
+            float oceanThreshold,
             Vector3 terrainOrigin,
-            float tileWorldSize,
-            int climateIndex,
-            float climateBand,
-            bool isBoundarySkirt = false)
+            float tileWorldSize)
         {
-            float localAX = (ax / (float)cols) * tileWorldSize;
-            float localAZ = (az / (float)rows) * tileWorldSize;
-            float localBX = (bx / (float)cols) * tileWorldSize;
-            float localBZ = (bz / (float)rows) * tileWorldSize;
+            int key = vz * stride + vx;
+            if (topIndex.ContainsKey(key))
+                return;
 
-            float worldAX = terrainOrigin.x + localAX;
-            float worldAZ = terrainOrigin.z + localAZ;
-            float worldBX = terrainOrigin.x + localBX;
-            float worldBZ = terrainOrigin.z + localBZ;
+            float localX = (vx / (float)cols) * tileWorldSize;
+            float localZ = (vz / (float)rows) * tileWorldSize;
 
-            float distanceA;
-            float depthA;
-            float bottomA = SampleSeafloorLocalY(worldAX, worldAZ, oceanLocalY, climateIndex, out distanceA, out depthA);
-            float distanceB;
-            float depthB;
-            float bottomB = SampleSeafloorLocalY(worldBX, worldBZ, oceanLocalY, climateIndex, out distanceB, out depthB);
+            // Pin the skirt top to the ACTUAL vanilla terrain height here (which
+            // Interesting Terrains often carves well below sea level), not the
+            // water surface — otherwise the skirt floats above the uncarved
+            // terrain edge and you see a gap straight along the shoreline. The
+            // min() keeps it from poking above the just-under-surface cap.
+            float vanillaTopY = SampleVanillaLocalY(vx / (float)cols, vz / (float)rows, oceanLocalY, oceanThreshold);
+            float topY = Mathf.Min(skirtTopY, vanillaTopY);
 
-            // Boundary skirts bridge the cross-tile mesh-edge gap. Their TOP
-            // sits at this tile's own seafloor mesh edge. Within-tile walls
-            // (the buffer-to-hole shoreline cliff) pull their BOTTOM to the
-            // mesh edge so the wall meets the seafloor mesh exactly. Their TOP
-            // is kept below the water plane so the opaque wall cannot draw a
-            // bright contour exactly on the transparent surface.
-            float topAY = oceanLocalY;
-            float topBY = oceanLocalY;
-            float topDepthA = 0f;
-            float topDepthB = 0f;
-
-            if (!isBoundarySkirt)
-            {
-                float meshBottomA, meshBottomB;
-                if (TrySampleMeshLocalY(worldAX, worldAZ, out meshBottomA))
-                {
-                    bottomA = meshBottomA;
-                    depthA = Mathf.Max(0f, oceanLocalY - meshBottomA);
-                }
-                if (TrySampleMeshLocalY(worldBX, worldBZ, out meshBottomB))
-                {
-                    bottomB = meshBottomB;
-                    depthB = Mathf.Max(0f, oceanLocalY - meshBottomB);
-                }
-                // Slight overlap below the mesh edge so any sub-millimetre FP
-                // seam between wall bottom and mesh top is invisibly covered.
-                bottomA -= ShoreWallBottomOverlap;
-                bottomB -= ShoreWallBottomOverlap;
-                depthA = Mathf.Max(0f, oceanLocalY - bottomA);
-                depthB = Mathf.Max(0f, oceanLocalY - bottomB);
-
-                // The old top=oceanY wall was the white shoreline isoline:
-                // an opaque seafloor edge coplanar with a transparent water
-                // plane, amplified by winter terrain textures. Start the wall
-                // below the surface instead; very shallow spans naturally skip
-                // via WallMinimumDrop below.
-                topAY = oceanLocalY - ShoreWallSurfaceInset;
-                topBY = oceanLocalY - ShoreWallSurfaceInset;
-                topDepthA = ShoreWallSurfaceInset;
-                topDepthB = ShoreWallSurfaceInset;
-            }
-
-            if (isBoundarySkirt)
-            {
-                // Critical: the wall top must align with the seafloor mesh
-                // EDGE, not with DeepBathymetry's sampled depth. The mesh is
-                // 33×33 (cell spacing ~25.6m) but the wall is iterated per
-                // heightmap cell (~6.4m), and DeepBathymetry includes 24m and
-                // 330m noise layers. Between two mesh vertices, the function
-                // can swing several metres away from the linear interpolation
-                // the mesh actually renders. Using the function value here
-                // means the wall top alternately pokes through or sits below
-                // the mesh edge. TrySampleMeshLocalY interpolates the actual
-                // mesh vertices, so wall top = mesh edge exactly.
-                float meshTopA, meshTopB;
-                float adjustedTopAY = TrySampleMeshLocalY(worldAX, worldAZ, out meshTopA)
-                    ? meshTopA : bottomA;
-                float adjustedTopBY = TrySampleMeshLocalY(worldBX, worldBZ, out meshTopB)
-                    ? meshTopB : bottomB;
-
-                topDepthA = Mathf.Max(0f, oceanLocalY - adjustedTopAY);
-                topDepthB = Mathf.Max(0f, oceanLocalY - adjustedTopBY);
-
-                // Small overlap so any sub-millimetre seam between wall top
-                // and mesh edge is still covered.
-                const float overlapMeters = 0.25f;
-                topAY = adjustedTopAY + overlapMeters;
-                topBY = adjustedTopBY + overlapMeters;
-
-                // Wall bottom: extend at most a fixed distance below the
-                // mesh top to cover residual cross-tile mismatches without
-                // creating unnaturally tall walls. With cross-tile BFS the
-                // typical mismatch is a few metres; 18m is comfortable
-                // headroom for noise and FP precision without the wall
-                // visibly poking above the seafloor at coastal depths.
-                // If the locally-sampled bottom is already deeper than this
-                // cap (rare — happens only when noise produces a large
-                // function value off the mesh edge), use that instead.
-                const float maxSkirtExtension = 18f;
-                float skirtBottomY = Mathf.Min(adjustedTopAY, adjustedTopBY) - maxSkirtExtension;
-                bottomA = Mathf.Min(bottomA, skirtBottomY);
-                bottomB = Mathf.Min(bottomB, skirtBottomY);
-                depthA = Mathf.Max(0f, oceanLocalY - bottomA);
-                depthB = Mathf.Max(0f, oceanLocalY - bottomB);
-            }
-
-            float verticalSpan = Mathf.Min(topAY, topBY) - Mathf.Max(bottomA, bottomB);
-            // Boundary skirts accept very short spans (down to 1cm) because
-            // even a tiny gap between adjacent meshes can let the player slip
-            // through into the void. Within-tile walls keep the 0.25m floor.
-            float minDrop = isBoundarySkirt ? 0.01f : WallMinimumDrop;
-            if (verticalSpan < minDrop)
-            {
-                diagSkippedShortWalls++;
-                return false;
-            }
-
-            int start = vertices.Count;
-            vertices.Add(new Vector3(localAX, topAY, localAZ));
-            vertices.Add(new Vector3(localBX, topBY, localBZ));
-            vertices.Add(new Vector3(localBX, bottomB, localBZ));
-            vertices.Add(new Vector3(localAX, bottomA, localAZ));
-
-            // Within-tile walls keep their upper edge visually muted because
-            // they live close to the shore buffer and can otherwise read as a
-            // drawn waterline from above. Boundary skirts already sit
-            // underwater throughout, so their top inherits the tile's local
-            // depth/texture signal and matches the seafloor edge they bridge.
-            float topTextureStrength = isBoundarySkirt ? 1f : ShoreWallTopTextureStrength;
-            colors.Add(CreateVertexColor(topDepthA, climateBand, distanceA, topTextureStrength));
-            colors.Add(CreateVertexColor(topDepthB, climateBand, distanceB, topTextureStrength));
-            colors.Add(CreateVertexColor(depthB, climateBand, distanceB));
-            colors.Add(CreateVertexColor(depthA, climateBand, distanceA));
-
-            // Use natural along-wall × depth UV for all walls. A flat
-            // (localX, localZ) UV stretches one texel column vertically
-            // across the wall — that's the "vertical streak" appearance
-            // visible on the shoreline cliff. One axis runs along the
-            // wall's length, the other along its depth. The regional
-            // terrain texture (sampled at uv * _TextureWorldScale by the
-            // seafloor shader) tiles correctly in both directions.
-            float uvAlongA, uvAlongB;
-            if (Mathf.Abs(localAX - localBX) > Mathf.Abs(localAZ - localBZ))
-            {
-                uvAlongA = localAX;
-                uvAlongB = localBX;
-            }
+            Vector2 inward;
+            inwardNormals.TryGetValue(key, out inward);
+            if (inward.sqrMagnitude > 1e-6f)
+                inward = inward.normalized;
             else
-            {
-                uvAlongA = localAZ;
-                uvAlongB = localBZ;
-            }
-            uvs.Add(new Vector2(uvAlongA, -topAY));
-            uvs.Add(new Vector2(uvAlongB, -topBY));
-            uvs.Add(new Vector2(uvAlongB, -bottomB));
-            uvs.Add(new Vector2(uvAlongA, -bottomA));
+                inward = Vector2.zero;
 
-            triangles.Add(start);
-            triangles.Add(start + 1);
-            triangles.Add(start + 2);
-            triangles.Add(start);
-            triangles.Add(start + 2);
-            triangles.Add(start + 3);
+            // Drop from the surface to the seabed here decides the run: deeper
+            // drop -> wider, gentler grade.
+            float worldX = terrainOrigin.x + localX;
+            float worldZ = terrainOrigin.z + localZ;
+            float topDistance, topDepthUnused, topClimateBand;
+            float seafloorTop = SampleSeafloorLocalY(worldX, worldZ, oceanLocalY, out topDistance, out topDepthUnused, out topClimateBand);
+            float meshTop;
+            if (TrySampleMeshLocalY(worldX, worldZ, out meshTop))
+                seafloorTop = meshTop;
+            float drop = Mathf.Max(0f, topY - seafloorTop);
 
-            if (isBoundarySkirt)
+            float noise01 = SkirtWidthNoise01(worldX, worldZ);
+            float widthScale = 1f + (noise01 * 2f - 1f) * SkirtWidthNoiseAmount;
+            float skirtWidth = Mathf.Clamp((drop / SkirtSlopeTangent) * widthScale,
+                                           SkirtMinWidthMeters, SkirtMaxWidthMeters);
+
+            float bottomLocalX = Mathf.Clamp(localX + inward.x * skirtWidth, 0f, tileWorldSize);
+            float bottomLocalZ = Mathf.Clamp(localZ + inward.y * skirtWidth, 0f, tileWorldSize);
+            float bottomWorldX = terrainOrigin.x + bottomLocalX;
+            float bottomWorldZ = terrainOrigin.z + bottomLocalZ;
+
+            float bottomDistance, bottomDepth, bottomClimateBand;
+            float seafloorBottom = SampleSeafloorLocalY(bottomWorldX, bottomWorldZ, oceanLocalY, out bottomDistance, out bottomDepth, out bottomClimateBand);
+            float meshBottom;
+            if (TrySampleMeshLocalY(bottomWorldX, bottomWorldZ, out meshBottom))
+                seafloorBottom = meshBottom;
+            float bottomY = seafloorBottom - ShoreWallBottomOverlap;
+            bottomDepth = Mathf.Max(0f, oceanLocalY - bottomY);
+
+            topIndex[key] = vertices.Count;
+            vertices.Add(new Vector3(localX, topY, localZ));
+            colors.Add(CreateVertexColor(Mathf.Max(0f, oceanLocalY - topY), topClimateBand, topDistance, ShoreWallTopTextureStrength));
+            uvs.Add(new Vector2(localX, localZ));
+
+            bottomIndex[key] = vertices.Count;
+            vertices.Add(new Vector3(bottomLocalX, bottomY, bottomLocalZ));
+            colors.Add(CreateVertexColor(bottomDepth, bottomClimateBand, bottomDistance));
+            uvs.Add(new Vector2(bottomLocalX, bottomLocalZ));
+        }
+
+        // Vanilla terrain local-Y at a tile fraction, from the promoted
+        // heightmap. The floor mesh shares the terrain's local space, where
+        // localY scales linearly with the height sample and the ocean surface
+        // sits at oceanThreshold -> oceanLocalY, so a sample h maps to
+        // (h / oceanThreshold) * oceanLocalY. Same [z, x] indexing as the carve.
+        private float SampleVanillaLocalY(float fracX, float fracZ, float oceanLocalY, float oceanThreshold)
+        {
+            if (dfTerrain == null || oceanThreshold <= 1e-6f)
+                return oceanLocalY;
+            float[,] heights = dfTerrain.MapData.heightmapSamples;
+            if (heights == null)
+                return oceanLocalY;
+            int hRows = heights.GetLength(0);
+            int hCols = heights.GetLength(1);
+            if (hRows < 2 || hCols < 2)
+                return oceanLocalY;
+
+            float fz = Mathf.Clamp01(fracZ) * (hRows - 1);
+            float fx = Mathf.Clamp01(fracX) * (hCols - 1);
+            int z0 = Mathf.Clamp(Mathf.FloorToInt(fz), 0, hRows - 2);
+            int x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, hCols - 2);
+            float tz = fz - z0;
+            float tx = fx - x0;
+            float h0 = Mathf.Lerp(heights[z0, x0], heights[z0, x0 + 1], tx);
+            float h1 = Mathf.Lerp(heights[z0 + 1, x0], heights[z0 + 1, x0 + 1], tx);
+            float h = Mathf.Lerp(h0, h1, tz);
+            return (h / oceanThreshold) * oceanLocalY;
+        }
+
+        private float SkirtWidthNoise01(float worldX, float worldZ)
+        {
+            float noiseX, noiseZ;
+            tileData.GetNoiseWorldCoords(worldX, worldZ, out noiseX, out noiseZ);
+            float freq = 1f / Mathf.Max(1f, SkirtWidthNoisePeriod);
+            return Mathf.PerlinNoise(noiseX * freq + 13.7f, noiseZ * freq - 4.2f);
+        }
+
+        private struct SkirtEdge
+        {
+            public int ax;
+            public int az;
+            public int bx;
+            public int bz;
+
+            public SkirtEdge(int ax, int az, int bx, int bz)
             {
-                // Reverse-winding pair so the wall collides from both sides.
-                // Cull Off in the shader means rendering is unchanged — the
-                // duplicate triangles only matter for PhysX collision, which
-                // treats each triangle's front face as the solid side. With
-                // both windings present, the wall blocks the player whether
-                // they approach from the seam's east or west.
-                triangles.Add(start);
-                triangles.Add(start + 2);
-                triangles.Add(start + 1);
-                triangles.Add(start);
-                triangles.Add(start + 3);
-                triangles.Add(start + 2);
+                this.ax = ax;
+                this.az = az;
+                this.bx = bx;
+                this.bz = bz;
             }
-            return true;
         }
 
         private float SampleSeafloorLocalY(
             float worldX,
             float worldZ,
             float oceanLocalY,
-            int climateIndex,
             out float distanceToCoast,
-            out float depth)
+            out float depth,
+            out float climateBand)
         {
-            distanceToCoast = tileData.GetDistanceToCoastMeters(worldX, worldZ);
-            depth = DeepBathymetry.SampleDepthMeters(worldX, worldZ, climateIndex, distanceToCoast);
+            distanceToCoast = tileData.GetDistanceToEdgeMeters(worldX, worldZ);
+            float climateBase;
+            tileData.GetBlendedClimate(worldX, worldZ, out climateBase, out climateBand);
+            float noiseX, noiseZ;
+            tileData.GetNoiseWorldCoords(worldX, worldZ, out noiseX, out noiseZ);
+            depth = DeepBathymetry.SampleDepthMeters(noiseX, noiseZ, climateBase, distanceToCoast);
             return oceanLocalY - depth;
         }
 
@@ -621,19 +847,6 @@ namespace DeepWaters
                 }
             }
 
-            // Boundary skirt segments (one per edge cell that is a hole).
-            // DFU convention: holes[i,j] == false IS a hole.
-            for (int x = 0; x < cols; x++)
-            {
-                if (!holes[0, x]) edges++;
-                if (!holes[rows - 1, x]) edges++;
-            }
-            for (int z = 0; z < rows; z++)
-            {
-                if (!holes[z, 0]) edges++;
-                if (!holes[z, cols - 1]) edges++;
-            }
-
             return edges;
         }
 
@@ -664,9 +877,22 @@ namespace DeepWaters
             if (mc == null) return;
 
             meshCollider = mc;
+            mc.enabled = false;
             mc.sharedMesh = null;
             mc.convex = false;
+#if UNITY_2017_3_OR_NEWER
+            // This mesh is generated from a regular grid with shared skirt
+            // vertices, so Unity's general-purpose cleaning/welding pass is
+            // redundant and expensive during terrain streaming.
+            mc.cookingOptions = MeshColliderCookingOptions.None;
+#if UNITY_2019_3_OR_NEWER
+            mc.cookingOptions |= MeshColliderCookingOptions.UseFastMidphase;
+#endif
+#endif
             mc.sharedMesh = mesh;
+            mc.enabled = true;
+            colliderBuildVersion = buildVersion;
+            Physics.SyncTransforms();
 
             // Push to Ignore Raycast so the shore-exit-assist raycast still
             // finds vanilla shore terrain first. The seafloor remains
@@ -675,24 +901,6 @@ namespace DeepWaters
             int ignoreRaycastLayer = LayerMask.NameToLayer("Ignore Raycast");
             if (ignoreRaycastLayer >= 0)
                 gameObject.layer = ignoreRaycastLayer;
-        }
-
-        private static float ClimateBandSignal(int climateIndex)
-        {
-            switch (climateIndex)
-            {
-                case (int)MapsFile.Climates.Ocean:            return 1.00f;
-                case (int)MapsFile.Climates.Subtropical:      return 0.70f;
-                case (int)MapsFile.Climates.Rainforest:       return 0.55f;
-                case (int)MapsFile.Climates.Swamp:            return 0.15f;
-                case (int)MapsFile.Climates.Woodlands:        return 0.60f;
-                case (int)MapsFile.Climates.HauntedWoodlands: return 0.45f;
-                case (int)MapsFile.Climates.MountainWoods:    return 0.65f;
-                case (int)MapsFile.Climates.Mountain:         return 0.65f;
-                case (int)MapsFile.Climates.Desert:           return 0.30f;
-                case (int)MapsFile.Climates.Desert2:          return 0.30f;
-                default:                                      return 0.80f;
-            }
         }
     }
 }

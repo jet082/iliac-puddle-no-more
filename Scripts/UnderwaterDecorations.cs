@@ -15,17 +15,22 @@ namespace DeepWaters
     /// </summary>
     public static class UnderwaterDecorations
     {
-        private const int PopulateRadius = 1;
+        private const int MinimumPopulateRadius = 2;
+        private const int MaxPopulateRadius = 3;
+        private const int MaxTilesPerWorkCycle = 1;
+        private const float PlayerAreaRefreshIntervalSeconds = 2f;
 
         private static readonly Queue<DaggerfallTerrain> workQueue = new Queue<DaggerfallTerrain>();
         private static readonly HashSet<DaggerfallTerrain> queuedTerrains = new HashSet<DaggerfallTerrain>();
         private static GameObject workerObject;
+        private static float nextPlayerAreaRefreshTime;
         private static bool installed;
 
         private class DecorationMarker : MonoBehaviour
         {
             public int MapPixelX;
             public int MapPixelY;
+            public int FloorBuildVersion;
         }
 
         private class Worker : MonoBehaviour
@@ -40,9 +45,25 @@ namespace DeepWaters
                 StreamingWorld.OnUpdateTerrainsEnd -= ProcessWorkQueue;
             }
 
+            void Update()
+            {
+                if (DeepWaterRuntime.CanRunLightRuntimeWork &&
+                    Time.time >= nextPlayerAreaRefreshTime)
+                {
+                    nextPlayerAreaRefreshTime = Time.time + PlayerAreaRefreshIntervalSeconds;
+                    EnqueueLoadedPlayerArea();
+                }
+
+                ProcessWorkQueue();
+            }
+
             private void ProcessWorkQueue()
             {
-                while (workQueue.Count > 0)
+                if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+                    return;
+
+                int processed = 0;
+                while (workQueue.Count > 0 && processed < MaxTilesPerWorkCycle)
                 {
                     DaggerfallTerrain dfTerrain = workQueue.Dequeue();
                     queuedTerrains.Remove(dfTerrain);
@@ -60,11 +81,15 @@ namespace DeepWaters
                         continue;
                     }
 
+                    if (ShouldPreservePlayerTileDecorations(dfTerrain))
+                        continue;
+
                     if (IsCurrentDecoration(dfTerrain)) continue;
 
                     RemoveDecoration(dfTerrain);
 
                     PopulateTile(dfTerrain, terrain.terrainData);
+                    processed++;
                 }
             }
         }
@@ -80,6 +105,7 @@ namespace DeepWaters
 
             DeepWaterRuntime.OnTransientReset += ResetRuntimeState;
             DaggerfallTerrain.OnPromoteTerrainData += HandlePromote;
+            DeepWaterFloorBuilder.OnFloorRefreshed += HandleFloorRefreshed;
             PlayerGPS.OnMapPixelChanged += HandleMapPixelChanged;
             installed = true;
         }
@@ -90,6 +116,7 @@ namespace DeepWaters
                 return;
 
             DaggerfallTerrain.OnPromoteTerrainData -= HandlePromote;
+            DeepWaterFloorBuilder.OnFloorRefreshed -= HandleFloorRefreshed;
             PlayerGPS.OnMapPixelChanged -= HandleMapPixelChanged;
             DeepWaterRuntime.OnTransientReset -= ResetRuntimeState;
 
@@ -104,21 +131,68 @@ namespace DeepWaters
             installed = false;
         }
 
+        public static void RefreshPlayerArea()
+        {
+            if (!DeepWaterRuntime.CanRunLightRuntimeWork)
+                return;
+
+            EnqueueLoadedPlayerArea();
+        }
+
         private static void ResetRuntimeState()
         {
             workQueue.Clear();
             queuedTerrains.Clear();
+            nextPlayerAreaRefreshTime = 0f;
+
+            DecorationMarker[] markers = Object.FindObjectsOfType<DecorationMarker>();
+            for (int i = 0; i < markers.Length; i++)
+            {
+                DecorationMarker marker = markers[i];
+                if (marker == null)
+                    continue;
+
+                DaggerfallTerrain dfTerrain = marker.GetComponent<DaggerfallTerrain>();
+                if (dfTerrain != null)
+                    RemoveDecoration(dfTerrain);
+
+                Object.Destroy(marker);
+            }
         }
 
         private static void HandleMapPixelChanged(DFPosition mapPixel)
+        {
+            if (!DeepWaterRuntime.CanRunLightRuntimeWork)
+                return;
+
+            DeepWaterTerrainLookup.Clear();
+            nextPlayerAreaRefreshTime = 0f;
+            EnqueueAroundMapPixel(mapPixel);
+        }
+
+        private static void EnqueueLoadedPlayerArea()
+        {
+            var gameManager = GameManager.Instance;
+            var playerGPS = gameManager != null ? gameManager.PlayerGPS : null;
+            if (playerGPS == null) return;
+
+            EnqueueAroundMapPixel(playerGPS.CurrentMapPixel);
+        }
+
+        private static void EnqueueAroundMapPixel(DFPosition mapPixel)
         {
             var gameManager = GameManager.Instance;
             var sw = gameManager != null ? gameManager.StreamingWorld : null;
             if (sw == null) return;
 
-            for (int dx = -PopulateRadius; dx <= PopulateRadius; dx++)
-            for (int dy = -PopulateRadius; dy <= PopulateRadius; dy++)
+            int radius = GetPopulateRadius(sw);
+            for (int ring = 0; ring <= radius; ring++)
+            for (int dx = -ring; dx <= ring; dx++)
+            for (int dy = -ring; dy <= ring; dy++)
             {
+                if (Mathf.Max(System.Math.Abs(dx), System.Math.Abs(dy)) != ring)
+                    continue;
+
                 var go = sw.GetTerrainFromPixel(mapPixel.X + dx, mapPixel.Y + dy);
                 if (go == null) continue;
                 var dfTerrain = go.GetComponent<DaggerfallTerrain>();
@@ -129,17 +203,48 @@ namespace DeepWaters
         private static void HandlePromote(DaggerfallTerrain sender, TerrainData terrainData)
         {
             if (sender == null) return;
+            if (!DeepWaterRuntime.CanRunLightRuntimeWork)
+                return;
 
             var pgps = GameManager.Instance?.PlayerGPS;
             if (pgps != null)
             {
+                int populateRadius = GetPopulateRadius(GameManager.Instance?.StreamingWorld);
                 int dx = sender.MapPixelX - pgps.CurrentMapPixel.X;
                 int dy = sender.MapPixelY - pgps.CurrentMapPixel.Y;
-                if (System.Math.Abs(dx) > PopulateRadius || System.Math.Abs(dy) > PopulateRadius)
+                if (System.Math.Abs(dx) > populateRadius || System.Math.Abs(dy) > populateRadius)
                     return;
             }
             
             Enqueue(sender);
+        }
+
+        private static void HandleFloorRefreshed(DaggerfallTerrain sender)
+        {
+            if (sender == null)
+                return;
+
+            if (!DeepWaterRuntime.CanRunLightRuntimeWork)
+                return;
+
+            var pgps = GameManager.Instance?.PlayerGPS;
+            if (pgps != null)
+            {
+                int populateRadius = GetPopulateRadius(GameManager.Instance?.StreamingWorld);
+                int dx = sender.MapPixelX - pgps.CurrentMapPixel.X;
+                int dy = sender.MapPixelY - pgps.CurrentMapPixel.Y;
+                if (System.Math.Abs(dx) > populateRadius || System.Math.Abs(dy) > populateRadius)
+                    return;
+            }
+
+            Enqueue(sender);
+        }
+
+        private static int GetPopulateRadius(StreamingWorld streamingWorld)
+        {
+            return streamingWorld != null
+                ? Mathf.Clamp(streamingWorld.TerrainDistance, MinimumPopulateRadius, MaxPopulateRadius)
+                : MinimumPopulateRadius;
         }
         
         private static void PopulateTile(DaggerfallTerrain dfTerrain, TerrainData terrainData)
@@ -193,11 +298,13 @@ namespace DeepWaters
             var marker = dfTerrain.GetComponent<DecorationMarker>() ?? dfTerrain.gameObject.AddComponent<DecorationMarker>();
             marker.MapPixelX = dfTerrain.MapPixelX;
             marker.MapPixelY = dfTerrain.MapPixelY;
+            marker.FloorBuildVersion = CurrentFloorBuildVersion(dfTerrain);
         }
 
         private static bool CanPopulate()
         {
             return DeepWaters.Instance != null &&
+                   DeepWaters.Instance.SpawnWaterSurfaces &&
                    DeepWaters.Instance.SpawnUnderwaterDecorations;
         }
 
@@ -212,7 +319,32 @@ namespace DeepWaters
             var marker = dfTerrain.GetComponent<DecorationMarker>();
             return marker != null &&
                    marker.MapPixelX == dfTerrain.MapPixelX &&
-                   marker.MapPixelY == dfTerrain.MapPixelY;
+                   marker.MapPixelY == dfTerrain.MapPixelY &&
+                   marker.FloorBuildVersion == CurrentFloorBuildVersion(dfTerrain);
+        }
+
+        private static bool ShouldPreservePlayerTileDecorations(DaggerfallTerrain dfTerrain)
+        {
+            if (dfTerrain == null)
+                return false;
+
+            var playerGPS = GameManager.Instance != null ? GameManager.Instance.PlayerGPS : null;
+            if (playerGPS == null)
+                return false;
+
+            if (dfTerrain.MapPixelX != playerGPS.CurrentMapPixel.X ||
+                dfTerrain.MapPixelY != playerGPS.CurrentMapPixel.Y)
+            {
+                return false;
+            }
+
+            return dfTerrain.transform.Find(UnderwaterDecorationBatchFactory.GroupName) != null;
+        }
+
+        private static int CurrentFloorBuildVersion(DaggerfallTerrain dfTerrain)
+        {
+            DeepWaterFloorMesh floorMesh = dfTerrain != null ? dfTerrain.GetComponentInChildren<DeepWaterFloorMesh>() : null;
+            return floorMesh != null ? floorMesh.BuildVersion : 0;
         }
 
         private static void RemoveDecoration(DaggerfallTerrain dfTerrain)

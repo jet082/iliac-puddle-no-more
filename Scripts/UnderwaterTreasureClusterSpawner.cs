@@ -15,10 +15,21 @@ namespace DeepWaters
 
         public static bool TrySpawn(TransientObjectTracker trackedObjects)
         {
+            return TrySpawn(
+                trackedObjects,
+                UnderwaterLootPlacement.MinSpawnDistance,
+                UnderwaterLootPlacement.MaxSpawnDistance);
+        }
+
+        public static bool TrySpawn(
+            TransientObjectTracker trackedObjects,
+            float minSpawnDistance,
+            float maxSpawnDistance)
+        {
             Vector3 centre;
             Transform parent;
             long spawnCellKey;
-            if (!UnderwaterLootPlacement.PickSpawnSpot(out centre, out parent, out spawnCellKey))
+            if (!UnderwaterLootPlacement.PickSpawnSpot(minSpawnDistance, maxSpawnDistance, out centre, out parent, out spawnCellKey))
                 return false;
 
             int debrisPlaced = SpawnDebris(centre, trackedObjects);

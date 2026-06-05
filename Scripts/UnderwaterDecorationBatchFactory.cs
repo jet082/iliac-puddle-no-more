@@ -23,8 +23,8 @@ namespace DeepWaters
         // Only the replacement-aware code path supports per-item scale
         // (CustomInfo overload); the vanilla archive batch path stays at
         // the material's authored size.
-        private const float DecorationScaleMin = 0.70f;
-        private const float DecorationScaleMax = 1.20f;
+        internal const float DecorationScaleMin = 0.70f;
+        internal const float DecorationScaleMax = 1.20f;
 
         public static void Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {

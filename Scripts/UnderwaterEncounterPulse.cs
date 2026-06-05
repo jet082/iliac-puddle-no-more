@@ -70,6 +70,12 @@ namespace DeepWaters
         {
             void Update()
             {
+                if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+                {
+                    ResetPulseState();
+                    return;
+                }
+
                 UnderwaterPassiveFishSpawner.UpdateInventoryState();
 
                 bool enemiesEnabled = UnderwaterEnemySpawner.CanRunFromEncounterPulse();

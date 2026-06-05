@@ -34,6 +34,16 @@ namespace DeepWaters
 
         public static bool PickSpawnSpot(out Vector3 worldPos, out Transform parent, out long spawnCellKey)
         {
+            return PickSpawnSpot(MinSpawnDistance, MaxSpawnDistance, out worldPos, out parent, out spawnCellKey);
+        }
+
+        public static bool PickSpawnSpot(
+            float minDistance,
+            float maxDistance,
+            out Vector3 worldPos,
+            out Transform parent,
+            out long spawnCellKey)
+        {
             worldPos = Vector3.zero;
             parent = null;
             spawnCellKey = 0L;
@@ -42,10 +52,13 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
                 return false;
 
+            minDistance = Mathf.Max(0f, minDistance);
+            maxDistance = Mathf.Max(minDistance + 1f, maxDistance);
+
             for (int attempt = 0; attempt < SpawnSpotAttempts; attempt++)
             {
                 float angle = PickSpawnAngle();
-                float dist = DeepWaterWorld.PickRingDistance(MinSpawnDistance, MaxSpawnDistance);
+                float dist = DeepWaterWorld.PickRingDistance(minDistance, maxDistance);
                 float worldX = playerPos.x + Mathf.Cos(angle) * dist;
                 float worldZ = playerPos.z + Mathf.Sin(angle) * dist;
                 long key = SpawnCellKey(worldX, worldZ);
@@ -58,6 +71,15 @@ namespace DeepWaters
                     continue;
 
                 worldPos = new Vector3(worldX, worldY, worldZ);
+                if (!DeepWaterWorld.IsOutsideImmediateView(
+                    worldPos,
+                    playerPos,
+                    DeepWaterWorld.UnderwaterVisionDistance,
+                    0.12f))
+                {
+                    continue;
+                }
+
                 parent = terrainParent;
                 spawnCellKey = key;
                 return true;
@@ -97,14 +119,9 @@ namespace DeepWaters
             if (column.Parent == null || column.Depth < SeafloorYClearance)
                 return false;
 
-            float seafloorLocalY = column.SeafloorLocalY;
-            DeepWaterFloorMesh floorMesh = column.Parent.GetComponentInChildren<DeepWaterFloorMesh>();
-            if (floorMesh != null)
-            {
-                float meshLocalY;
-                if (floorMesh.TrySampleMeshLocalY(worldX, worldZ, out meshLocalY))
-                    seafloorLocalY = meshLocalY;
-            }
+            float seafloorLocalY;
+            if (!DeepWaterWorld.TryGetRenderedSeafloorLocalY(column, worldX, worldZ, out seafloorLocalY))
+                return false;
 
             if (column.OceanLocalY - seafloorLocalY < SeafloorYClearance)
                 return false;

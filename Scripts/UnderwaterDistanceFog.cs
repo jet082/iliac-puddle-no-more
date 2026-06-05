@@ -70,6 +70,7 @@ namespace DeepWaters
         {
             return DeepWaters.Instance != null &&
                    DeepWaters.Instance.SpawnWaterSurfaces &&
+                   !DeepWaterHoleApplier.IsTerrainHoleMutationSettling &&
                    gameManager.IsPlayingGame() &&
                    gameManager.PlayerEnterExit != null &&
                    !gameManager.PlayerEnterExit.IsPlayerInside;
@@ -86,6 +87,9 @@ namespace DeepWaters
             {
                 return false;
             }
+
+            if (DeepWaterHoleApplier.IsTerrainHoleMutationSettling)
+                return false;
 
             bool hasOceanSurface = DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY);
             float localOceanSurfaceY;
@@ -196,9 +200,19 @@ namespace DeepWaters
             {
                 const float minimumDepth = 0.25f;
                 const float floorGrace = 8f;
+                float seafloorWorldY;
+                if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(
+                    column,
+                    worldPosition.x,
+                    worldPosition.z,
+                    out seafloorWorldY))
+                {
+                    seafloorWorldY = column.SeafloorWorldY;
+                }
+
                 return column.Depth > minimumDepth &&
                        worldPosition.y <= column.OceanWorldY + surfacePadding &&
-                       worldPosition.y >= column.SeafloorWorldY - floorGrace;
+                       worldPosition.y >= seafloorWorldY - floorGrace;
             }
 
             float nearbyDepth;
@@ -242,6 +256,7 @@ namespace DeepWaters
                 " headY=" + (hasHead ? headPosition.y.ToString("F2") : "none") +
                 " oceanY=" + oceanSurfaceY.ToString("F2") +
                 " cameraColumn=" + hasCameraColumn +
+                " terrainHolesSettling=" + DeepWaterHoleApplier.IsTerrainHoleMutationSettling +
                 " depthMode=" + (camera != null ? camera.depthTextureMode.ToString() : "none") +
                 " renderFog=" + RenderSettings.fog +
                 " fogMode=" + RenderSettings.fogMode +

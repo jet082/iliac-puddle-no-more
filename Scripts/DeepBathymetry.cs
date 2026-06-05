@@ -73,29 +73,40 @@ namespace DeepWaters
         private const float ClimateBaseMountain     = 185f;
         private const float ClimateBaseDesert       = 90f;
 
-        // Coast-distance curve: a four-stage ramp tuned so the player reaches
-        // genuine ocean depth well before the BFS distance-field saturates
-        // (~410m on a 33-cell heightmap). The beach stays wadeable, then
-        // depth ramps in fast so being "out in the bay" feels like an ocean
-        // rather than a swimming pool. End reached at 380m so depths beyond
-        // that all read as climate-base without per-tile saturation banding.
+        // Continental-margin depth curve (v0.55.38). distance-to-coast drives a
+        // single smooth descent that mirrors a real ocean margin: gentle and
+        // wadeable across the near-shore SHELF, steepest through the mid-depth
+        // continental SLOPE, then easing onto the abyssal plain at the FOOT.
+        // One smoothstep gives that gentle-steep-gentle shape with no kinks.
+        //
+        // Genuine ocean depth now arrives much further out (full depth at
+        // ShelfRampMeters) than the old steep 290m ramp — the deliberate trade
+        // for a gradual, natural descent. At 2700m the ~210m climate-base drop
+        // is spread over a long, wadeable slope (avg ~8% grade, no hard wall).
+        // This MUST stay inside the baked edge-distance field's range: with the
+        // baker's DistanceScaleMeters = 16 that range is 0..4080m, so 2700m is
+        // reached with headroom and full ocean depth is still attained. The ramp
+        // is a pure RUNTIME knob — tune it freely up to ~4000m with a recompile
+        // (no rebake). Only shorten the bake's DistanceScaleMeters if you also
+        // shorten this to match (ramp <= 255 * scale).
         //
         // ShelfMinDepth is intentionally tiny — at the shoreline the seafloor
         // mesh meets the water surface within a few cm, so there's no visible
         // vertical "step" between vanilla shore terrain and our seafloor.
-        // The slope from there to BeachDropDepth provides the wading gradient.
         public const float ShelfMinDepth      = 0.25f;
-        public const float BeachDropDistance  = 18f;
-        public const float BeachDropDepth     = 4.5f;
-        public const float InnerShelfDistance = 70f;
-        public const float InnerShelfDepth    = 30f;
-        public const float MidShelfDistance   = 210f;
-        public const float MidShelfDepth      = 105f;
-        public const float ShelfRampMeters    = 380f;
+        public const float ShelfBreakDistance = 360f;  // shelf/slope split (geography classify only)
+        public const float ShelfRampMeters    = 2700f; // distance at which full climate-base depth is reached
+        // Fraction of straight-line descent blended into the smoothstep shelf
+        // curve. Smoothstep alone has ~zero slope right at the shore (reads as
+        // too flat off the beach); a linear term has real slope there. 0 = pure
+        // smoothstep, higher = faster drop near shore. Both still reach full
+        // depth at ShelfRampMeters, so the deep-water distance is unchanged.
+        public const float ShelfNearShoreSteepen = 0.30f;
 
         // Macro layer: bay-scale "deep zones" vs "shallow zones".
         private const float MacroPeriodMeters       = 4200f;
         private const float MacroAmplitudeFraction  = 0.30f;
+        private const float DeepMacroAmplitudeScale = 0.55f;
 
         // Mid layer: rolling hills and hummocks.
         private const float MidPeriodMeters    = 330f;
@@ -105,20 +116,43 @@ namespace DeepWaters
         private const float HighPeriodMeters    = 24f;
         private const float HighAmplitudeMeters = 3.5f;
 
-        // Ravine layer: sparse linear-feeling deep cuts. MinDistanceToCoast
-        // matched to the new shelf ramp so trenches start at the same offshore
-        // distance where climate-base depth is reached.
+        // Abyssal layer: small, persistent deep-sea relief. The previous deep
+        // basin often saturated at WaterDepth, clipping ordinary noise into a
+        // flat sheet. These layers come in only offshore and ride on a slightly
+        // shallower baseline so the final clamp does not erase them.
+        private const float DeepPlainHeadroomMeters = 42f;
+        private const float AbyssalSwellPeriodMeters = 680f;
+        private const float AbyssalSwellAmplitudeMeters = 12f;
+        private const float AbyssalUndulationPeriodMeters = 115f;
+        private const float AbyssalUndulationAmplitudeMeters = 5.5f;
+
+        // Shallow-water safety cap: ordinary negative noise can otherwise lift
+        // shelf hills close enough to the waterline that the player can stand
+        // on the seafloor with their head in open air. Preserve the true shore
+        // contact, then ramp to a hard offshore minimum depth.
+        private const float MinimumOffshoreNavigableDepthMeters = 11.2f;
+        private const float NoStandDepthRampMeters = 128f;
+
+        // Ravine layer: sparse linear-feeling deep cuts. Start well offshore so
+        // trenches only cut the deep slope/abyss, not the shallow shelf. Scaled
+        // out with the longer 2700m shelf ramp so they still land in deep water.
         private const float RavinePeriodMeters         = 1300f;
         private const float RavineThreshold            = 0.66f;
         private const float RavineMaxAdditionalMeters  = 110f;
-        private const float RavineMinDistanceToCoast   = 280f;
+        private const float RavineMinDistanceToCoast   = 1500f;
 
-        // Seamount layer: sparse pronounced rises. Subtracts from depth so
-        // the seafloor pushes upward toward the surface.
+        // Seamount layer: sparse pronounced rises. Subtracts from depth so the
+        // seafloor pushes upward. In deep water these scale from the local water
+        // column instead of a fixed meter cap, allowing major peaks to climb
+        // most of the way toward the surface without breaching it.
         private const float SeamountPeriodMeters       = 2500f;
-        private const float SeamountThreshold          = 0.72f;
-        private const float SeamountMaxLiftMeters      = 95f;
-        private const float SeamountMinDistanceToCoast = 320f;
+        private const float SeamountThreshold          = 0.62f;
+        private const float SeamountLiftDepthFraction  = 0.82f;
+        private const float SeamountMinDistanceToCoast = 1500f;
+        private const float VolcanicConePeriodMeters       = 1800f;
+        private const float VolcanicConeThreshold          = 0.70f;
+        private const float VolcanicConeLiftDepthFraction  = 0.88f;
+        private const float VolcanicConeMinDistanceToCoast = 1800f;
 
         // Classification thresholds: a feature must contribute at least this
         // fraction of its max value before we call the location after that
@@ -143,27 +177,53 @@ namespace DeepWaters
         public static float SampleDepthMeters(
             float worldX,
             float worldZ,
-            int climateIndex,
+            float climateBaseDepth,
             float distanceToCoastMeters)
         {
-            float climateBase = ClimateBaseDepth(climateIndex);
-            float shelf = ComputeShelfDepth(climateBase, distanceToCoastMeters);
+            float userMax = ResolveUserMaxDepth();
+            float minimumDepth = ComputeMinimumNavigableDepth(distanceToCoastMeters, userMax);
+            float scale = userMax / 200f;
+            float deepOcean = ComputeDeepOcean01(distanceToCoastMeters);
+
+            // climateBaseDepth is supplied PRE-BLENDED by the caller (bilinearly
+            // across the 4 surrounding map pixels), so the per-climate base no
+            // longer STEPS at map-pixel climate boundaries — the harsh walls,
+            // seams, and abrupt shelf/deep texture changes that used to fall
+            // exactly on a pixel line are gone, while regional depth variety
+            // (shallow swamps, deep open ocean) is preserved between boundaries.
+            climateBaseDepth = ApplyDeepPlainHeadroom(climateBaseDepth, userMax, minimumDepth, scale, deepOcean);
+            float shelf = ComputeShelfDepth(climateBaseDepth, distanceToCoastMeters);
 
             float macro = SampleSignedPerlin(worldX, worldZ, MacroPeriodMeters, MacroSeedX, MacroSeedZ);
-            float aroundShelf = shelf + macro * MacroAmplitudeFraction * shelf;
+            float macroScale = Mathf.Lerp(1f, DeepMacroAmplitudeScale, deepOcean);
+            float aroundShelf = shelf + macro * MacroAmplitudeFraction * macroScale * shelf;
 
             float mid = SampleSignedPerlin(worldX, worldZ, MidPeriodMeters, MidSeedX, MidSeedZ) * MidAmplitudeMeters;
             float high = SampleSignedPerlin(worldX, worldZ, HighPeriodMeters, HighSeedX, HighSeedZ) * HighAmplitudeMeters;
+            float abyssal = ComputeAbyssalRelief(worldX, worldZ, deepOcean);
             float ravine = ComputeRavineAddition(worldX, worldZ, distanceToCoastMeters);
-            float seamount = ComputeSeamountLift(worldX, worldZ, distanceToCoastMeters);
+            float featureBaseDepth = aroundShelf + mid + high + abyssal + ravine;
+            float minimumRawDepth = minimumDepth / Mathf.Max(0.0001f, scale);
+            float seamount = ComputeSeamountLift(
+                worldX,
+                worldZ,
+                distanceToCoastMeters,
+                ComputePeakLiftCapacity(featureBaseDepth, minimumRawDepth, SeamountLiftDepthFraction));
+            float volcanicCone = ComputeVolcanicConeLift(
+                worldX,
+                worldZ,
+                distanceToCoastMeters,
+                ComputePeakLiftCapacity(featureBaseDepth, minimumRawDepth, VolcanicConeLiftDepthFraction));
 
-            float rawDepth = aroundShelf + mid + high + ravine - seamount;
+            float rawDepth = featureBaseDepth - seamount - volcanicCone;
 
-            float userMax = ResolveUserMaxDepth();
-            float scale = userMax / MaxAbsoluteDepth;
+            // The setting is presented as "maximum ocean depth". The original
+            // 250m normalization made the default 200m setting scale every
+            // bathymetry feature down to 80%, so even open bay tiles felt too
+            // shallow. Use 200m as the authoring baseline, then clamp the
+            // final value to the configured maximum.
             float scaledDepth = rawDepth * scale;
-            float effectiveShelfMin = Mathf.Min(ShelfMinDepth, userMax * 0.4f);
-            return Mathf.Clamp(scaledDepth, effectiveShelfMin, userMax);
+            return Mathf.Clamp(scaledDepth, minimumDepth, userMax);
         }
 
         public static float DepthBand01(float depthMeters)
@@ -189,6 +249,27 @@ namespace DeepWaters
             }
         }
 
+        // Per-climate seafloor texture-band signal (vertex colour G). Public so
+        // DeepWaterTileData can blend it across map-pixel boundaries the same way
+        // it blends the base depth, keeping the texture continuous too.
+        public static float ClimateBandSignal(int climateIndex)
+        {
+            switch (climateIndex)
+            {
+                case (int)MapsFile.Climates.Ocean:            return 1.00f;
+                case (int)MapsFile.Climates.Subtropical:      return 0.70f;
+                case (int)MapsFile.Climates.Rainforest:       return 0.55f;
+                case (int)MapsFile.Climates.Swamp:            return 0.15f;
+                case (int)MapsFile.Climates.Woodlands:        return 0.60f;
+                case (int)MapsFile.Climates.HauntedWoodlands: return 0.45f;
+                case (int)MapsFile.Climates.MountainWoods:    return 0.65f;
+                case (int)MapsFile.Climates.Mountain:         return 0.65f;
+                case (int)MapsFile.Climates.Desert:           return 0.30f;
+                case (int)MapsFile.Climates.Desert2:          return 0.30f;
+                default:                                      return 0.80f;
+            }
+        }
+
         /// <summary>
         /// Classify the seafloor at a position. External mod builders use this
         /// to decide where to place set pieces (e.g. sunken ships on plains).
@@ -196,28 +277,30 @@ namespace DeepWaters
         public static SeafloorGeographyInfo Classify(
             float worldX,
             float worldZ,
-            int climateIndex,
+            float climateBaseDepth,
             float distanceToCoastMeters)
         {
             SeafloorGeographyInfo info;
-            info.DepthMeters = SampleDepthMeters(worldX, worldZ, climateIndex, distanceToCoastMeters);
+            info.DepthMeters = SampleDepthMeters(worldX, worldZ, climateBaseDepth, distanceToCoastMeters);
             info.Kind = SeafloorGeographyKind.Plain;
             info.Magnitude = 0f;
 
-            // Shore: within the inner shelf. Sandy gradual drop.
-            if (distanceToCoastMeters < InnerShelfDistance)
+            // Shore: across the gentle near-shore shelf. Sandy gradual drop.
+            if (distanceToCoastMeters < ShelfBreakDistance)
             {
                 info.Kind = SeafloorGeographyKind.Shore;
-                info.Magnitude = 1f - Mathf.Clamp01(distanceToCoastMeters / InnerShelfDistance);
+                info.Magnitude = 1f - Mathf.Clamp01(distanceToCoastMeters / ShelfBreakDistance);
                 return info;
             }
 
             // Seamount has priority — these are dramatic landmark features.
-            float seamountLift = ComputeSeamountLift(worldX, worldZ, distanceToCoastMeters);
-            if (seamountLift > SeamountMaxLiftMeters * SeamountClassifyFraction)
+            float totalPeakProfile = Mathf.Max(
+                ComputeSeamountProfile(worldX, worldZ, distanceToCoastMeters),
+                ComputeVolcanicConeProfile(worldX, worldZ, distanceToCoastMeters));
+            if (totalPeakProfile > SeamountClassifyFraction)
             {
                 info.Kind = SeafloorGeographyKind.Seamount;
-                info.Magnitude = Mathf.Clamp01(seamountLift / SeamountMaxLiftMeters);
+                info.Magnitude = Mathf.Clamp01(totalPeakProfile);
                 return info;
             }
 
@@ -230,11 +313,11 @@ namespace DeepWaters
                 return info;
             }
 
-            // Continental slope: midshelf-to-ramp transition is steep.
-            if (distanceToCoastMeters > MidShelfDistance && distanceToCoastMeters < ShelfRampMeters)
+            // Continental slope: the steep mid-margin descent to the abyss.
+            if (distanceToCoastMeters > ShelfBreakDistance && distanceToCoastMeters < ShelfRampMeters)
             {
-                float dropFrac = (distanceToCoastMeters - MidShelfDistance) /
-                                 Mathf.Max(1f, ShelfRampMeters - MidShelfDistance);
+                float dropFrac = (distanceToCoastMeters - ShelfBreakDistance) /
+                                 Mathf.Max(1f, ShelfRampMeters - ShelfBreakDistance);
                 info.Kind = SeafloorGeographyKind.Slope;
                 info.Magnitude = 1f - Mathf.Abs(dropFrac - 0.5f) * 2f;
                 return info;
@@ -264,6 +347,62 @@ namespace DeepWaters
             return Mathf.Clamp(DeepWaters.Instance.WaterDepth, 1f, MaxAbsoluteDepth);
         }
 
+        private static float ComputeMinimumNavigableDepth(float distanceToCoastMeters, float userMaxDepth)
+        {
+            float effectiveShelfMin = Mathf.Min(ShelfMinDepth, userMaxDepth * 0.4f);
+            float noStandDepth = Mathf.Min(MinimumOffshoreNavigableDepthMeters, userMaxDepth);
+            if (noStandDepth <= effectiveShelfMin)
+                return effectiveShelfMin;
+
+            float t = Mathf.Clamp01(distanceToCoastMeters / NoStandDepthRampMeters);
+            float smooth = t * t * (3f - 2f * t);
+            return Mathf.Lerp(effectiveShelfMin, noStandDepth, smooth);
+        }
+
+        private static float ComputeDeepOcean01(float distanceToCoastMeters)
+        {
+            float t = (distanceToCoastMeters - ShelfBreakDistance) /
+                      Mathf.Max(1f, ShelfRampMeters - ShelfBreakDistance);
+            t = Mathf.Clamp01(t);
+            return t * t * (3f - 2f * t);
+        }
+
+        private static float ApplyDeepPlainHeadroom(
+            float climateBaseDepth,
+            float userMaxDepth,
+            float minimumDepth,
+            float scale,
+            float deepOcean)
+        {
+            if (scale <= 0f || deepOcean <= 0f)
+                return climateBaseDepth;
+
+            float headroom = Mathf.Min(DeepPlainHeadroomMeters, userMaxDepth * 0.28f) * deepOcean;
+            float cappedUserDepth = Mathf.Max(minimumDepth, userMaxDepth - headroom);
+            return Mathf.Min(climateBaseDepth, cappedUserDepth / scale);
+        }
+
+        private static float ComputeAbyssalRelief(float worldX, float worldZ, float deepOcean)
+        {
+            if (deepOcean <= 0f)
+                return 0f;
+
+            float swell = SampleSignedPerlin(worldX, worldZ, AbyssalSwellPeriodMeters, -6100f, 2700f) *
+                          AbyssalSwellAmplitudeMeters;
+            float ripple = SampleSignedPerlin(worldX, worldZ, AbyssalUndulationPeriodMeters, 4200f, -5100f) *
+                           AbyssalUndulationAmplitudeMeters;
+            return (swell + ripple) * deepOcean;
+        }
+
+        private static float ComputePeakLiftCapacity(
+            float featureBaseDepth,
+            float minimumRawDepth,
+            float depthFraction)
+        {
+            return Mathf.Max(0f, featureBaseDepth - minimumRawDepth) *
+                   Mathf.Clamp01(depthFraction);
+        }
+
         // Four-stage continental shelf curve. Each stage uses a smoothstep
         // interpolation between its end depths, so transitions have visibly
         // gentle inflection rather than sharp kinks.
@@ -271,39 +410,19 @@ namespace DeepWaters
         {
             if (distanceToCoastMeters <= 0f)
                 return ShelfMinDepth;
+            if (distanceToCoastMeters >= ShelfRampMeters)
+                return climateBase;
 
-            if (distanceToCoastMeters < BeachDropDistance)
-            {
-                float t = distanceToCoastMeters / BeachDropDistance;
-                float s = t * t * (3f - 2f * t);
-                return Mathf.Lerp(ShelfMinDepth, BeachDropDepth, s);
-            }
-
-            if (distanceToCoastMeters < InnerShelfDistance)
-            {
-                float t = (distanceToCoastMeters - BeachDropDistance) /
-                          (InnerShelfDistance - BeachDropDistance);
-                float s = t * t * (3f - 2f * t);
-                return Mathf.Lerp(BeachDropDepth, InnerShelfDepth, s);
-            }
-
-            if (distanceToCoastMeters < MidShelfDistance)
-            {
-                float t = (distanceToCoastMeters - InnerShelfDistance) /
-                          (MidShelfDistance - InnerShelfDistance);
-                float s = t * t * (3f - 2f * t);
-                return Mathf.Lerp(InnerShelfDepth, MidShelfDepth, s);
-            }
-
-            if (distanceToCoastMeters < ShelfRampMeters)
-            {
-                float t = (distanceToCoastMeters - MidShelfDistance) /
-                          (ShelfRampMeters - MidShelfDistance);
-                float s = t * t * (3f - 2f * t);
-                return Mathf.Lerp(MidShelfDepth, climateBase, s);
-            }
-
-            return climateBase;
+            // One smooth descent across the whole margin: gentle on the shelf
+            // near shore, steepest through the mid-depth continental slope,
+            // easing onto the abyssal plain at the foot. Smoothstep gives this
+            // gentle-steep-gentle shape with no kinks — but it's dead flat right
+            // at the shore, so blend in a little straight-line descent (which has
+            // real slope at t=0) to drop a bit faster off the beach.
+            float t = distanceToCoastMeters / ShelfRampMeters;
+            float smooth = t * t * (3f - 2f * t);
+            float s = ShelfNearShoreSteepen * t + (1f - ShelfNearShoreSteepen) * smooth;
+            return Mathf.Lerp(ShelfMinDepth, climateBase, s);
         }
 
         private static float ComputeRavineAddition(float worldX, float worldZ, float distanceToCoastMeters)
@@ -320,7 +439,7 @@ namespace DeepWaters
             return smooth * RavineMaxAdditionalMeters;
         }
 
-        private static float ComputeSeamountLift(float worldX, float worldZ, float distanceToCoastMeters)
+        private static float ComputeSeamountProfile(float worldX, float worldZ, float distanceToCoastMeters)
         {
             if (distanceToCoastMeters < SeamountMinDistanceToCoast)
                 return 0f;
@@ -330,10 +449,48 @@ namespace DeepWaters
                 return 0f;
 
             float t = (n - SeamountThreshold) / (1f - SeamountThreshold);
-            // Sharper peak ramp than ravines — seamounts should look like
-            // pronounced rises, not gentle bumps.
-            float peak = t * t;
-            return peak * SeamountMaxLiftMeters;
+            // Broader than the old squared profile: the previous high-threshold
+            // curve almost never reached the advertised lift fraction in real
+            // Perlin fields, so large seamounts looked like modest hummocks.
+            float peak = t * t * (3f - 2f * t);
+            return Mathf.Clamp01(peak);
+        }
+
+        private static float ComputeSeamountLift(
+            float worldX,
+            float worldZ,
+            float distanceToCoastMeters,
+            float maxLiftMeters)
+        {
+            return ComputeSeamountProfile(worldX, worldZ, distanceToCoastMeters) *
+                   Mathf.Max(0f, maxLiftMeters);
+        }
+
+        private static float ComputeVolcanicConeProfile(float worldX, float worldZ, float distanceToCoastMeters)
+        {
+            if (distanceToCoastMeters < VolcanicConeMinDistanceToCoast)
+                return 0f;
+
+            float n = SamplePerlin01(worldX, worldZ, VolcanicConePeriodMeters, 1800f, -9600f);
+            if (n < VolcanicConeThreshold)
+                return 0f;
+
+            float t = (n - VolcanicConeThreshold) / (1f - VolcanicConeThreshold);
+            // Keep cones pointier than seamounts, but avoid cubic suppression:
+            // at high max depth, mid-strong volcano signals should visibly use
+            // the available water column instead of requiring n ~= 1.
+            float cone = t * Mathf.Sqrt(Mathf.Clamp01(t));
+            return Mathf.Clamp01(cone);
+        }
+
+        private static float ComputeVolcanicConeLift(
+            float worldX,
+            float worldZ,
+            float distanceToCoastMeters,
+            float maxLiftMeters)
+        {
+            return ComputeVolcanicConeProfile(worldX, worldZ, distanceToCoastMeters) *
+                   Mathf.Max(0f, maxLiftMeters);
         }
 
         private static float SamplePerlin01(float worldX, float worldZ, float periodMeters, float seedX, float seedZ)

@@ -16,10 +16,15 @@ namespace DeepWaters
         private const float SeafloorLootRateAtMidpoint = 0.7f;
         private const float TreasureClusterRateAtMidpoint = 0.1f;
         private const float UnderwaterFogDensityMaxAtMidpoint = 0.014f;
+        private const float UnderwaterVisionDistanceAtDefaultSetting = 70f;
+        private const float MinimumUnderwaterVisionDistance = 22f;
+        private const float MaximumUnderwaterVisionDistance = 260f;
         private const float OpaqueWaterSurfaceAlpha = 0.55f;
         private const float MostTransparentWaterSurfaceAlpha = 0.08f;
         private const float MinFogDistanceMultiplier = 0.25f;
         private const float MaxFogDistanceMultiplier = 6.0f;
+        private const float MinSwimSpeedMultiplier = 0.25f;
+        private const float MaxSwimSpeedMultiplier = 30.0f;
         private const float DefaultEncounterMinSpawnDistance = 35f;
         private const float DefaultEncounterMaxSpawnDistance = 55f;
         private const float ClearWaterEncounterMinSpawnDistance = 90f;
@@ -43,6 +48,8 @@ namespace DeepWaters
         public float UnderwaterFogStrength { get; private set; } = SliderMidpoint;
         public float UnderwaterFogDistance { get; private set; } = SliderMidpoint;
         public bool ArgonianInfiniteBreath { get; private set; } = true;
+        public float SwimSpeedMultiplier { get; private set; } = 1f;
+        public bool EnableSwimStroke { get; private set; }
 
         public float WaterSurfaceTopAlpha
         {
@@ -62,6 +69,17 @@ namespace DeepWaters
         public float UnderwaterFogDistanceMultiplier
         {
             get { return FogDistanceSliderToMultiplier(UnderwaterFogDistance); }
+        }
+
+        public float UnderwaterVisionDistance
+        {
+            get
+            {
+                return Mathf.Clamp(
+                    UnderwaterVisionDistanceAtDefaultSetting * UnderwaterFogDistanceMultiplier,
+                    MinimumUnderwaterVisionDistance,
+                    MaximumUnderwaterVisionDistance);
+            }
         }
 
         public float EncounterSpawnMinDistance
@@ -102,7 +120,15 @@ namespace DeepWaters
             ApplySettings(settings);
             WaterSurfaceResources.ApplyMaterialSettings();
             WaterSurfaceManager.RefreshLoadedSurfaces();
-            DeepWaterFloorBuilder.RefreshLoadedTiles();
+            if (DeepWaterRuntime.CanRunHeavyRuntimeWork)
+            {
+                // Settings changed (e.g. WaterDepth, climate-band hue,
+                // hole buffer) but DFU has not re-promoted any tiles —
+                // heightmap arrays still match what we last built
+                // against. Force the rebuild so the new settings
+                // actually take effect on the existing meshes.
+                DeepWaterFloorBuilder.RefreshLoadedTiles(force: true);
+            }
         }
 
         private void ApplySettings(ModSettings s)
@@ -124,6 +150,8 @@ namespace DeepWaters
             UnderwaterFogStrength = GetFloatSetting(s, "UnderwaterFogStrength");
             UnderwaterFogDistance = GetFloatSetting(s, "UnderwaterFogDistance");
             ArgonianInfiniteBreath = GetBoolSetting(s, "ArgonianInfiniteBreath");
+            SwimSpeedMultiplier = ClampSwimSpeedMultiplier(GetFloatSetting(s, "SwimSpeedMultiplier"));
+            EnableSwimStroke = GetBoolSetting(s, "EnableSwimStroke");
         }
 
         private float EncounterVisibilityExpansion
@@ -170,6 +198,11 @@ namespace DeepWaters
             return t <= SliderMidpoint
                 ? Mathf.Lerp(MinFogDistanceMultiplier, 1f, t / SliderMidpoint)
                 : Mathf.Lerp(1f, MaxFogDistanceMultiplier, (t - SliderMidpoint) / SliderMidpoint);
+        }
+
+        private static float ClampSwimSpeedMultiplier(float value)
+        {
+            return Mathf.Clamp(value, MinSwimSpeedMultiplier, MaxSwimSpeedMultiplier);
         }
 
         private static bool GetBoolSetting(ModSettings settings, string key)

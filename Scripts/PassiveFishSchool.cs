@@ -116,7 +116,11 @@ namespace DeepWaters
                 return;
             }
 
-            float minY = column.SeafloorWorldY + SeafloorClearance;
+            float seafloorWorldY;
+            if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, nextCenter.x, nextCenter.z, out seafloorWorldY))
+                return;
+
+            float minY = seafloorWorldY + SeafloorClearance;
             float maxY = column.OceanWorldY - SurfaceClearance;
 
             if (nextCenter.y < minY)
