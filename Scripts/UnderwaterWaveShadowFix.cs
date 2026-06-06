@@ -212,7 +212,33 @@ namespace DeepWaters
 
             AddWaveRenderers(FindObjectsOfType<MeshRenderer>(), waveRenderers);
 
+            RestoreNoLongerWaveRenderers(waveRenderers);
             cachedRenderers = waveRenderers.ToArray();
+        }
+
+        private void RestoreNoLongerWaveRenderers(List<MeshRenderer> activeWaveRenderers)
+        {
+            var staleRenderers = new List<MeshRenderer>();
+            foreach (KeyValuePair<MeshRenderer, WaveRendererShadowState> pair in waveRendererStates)
+            {
+                MeshRenderer renderer = pair.Key;
+                if (renderer == null || !activeWaveRenderers.Contains(renderer))
+                    staleRenderers.Add(renderer);
+            }
+
+            for (int i = 0; i < staleRenderers.Count; i++)
+            {
+                MeshRenderer renderer = staleRenderers[i];
+                WaveRendererShadowState state;
+                if (renderer != null && waveRendererStates.TryGetValue(renderer, out state))
+                {
+                    renderer.shadowCastingMode = state.ShadowCastingMode;
+                    renderer.receiveShadows = state.ReceiveShadows;
+                    renderer.enabled = state.Enabled;
+                }
+
+                waveRendererStates.Remove(renderer);
+            }
         }
 
         private static bool ShouldFixUnderwaterLighting()
@@ -351,7 +377,39 @@ namespace DeepWaters
         {
             return renderer != null &&
                    (renderer.GetComponentInParent<DeepWatersWaterSurface>() != null ||
-                    renderer.GetComponentInParent<DeepWaterFloorMesh>() != null);
+                    renderer.GetComponentInParent<DeepWaterFloorMesh>() != null ||
+                    IsUnderTransformNamed(renderer.transform, UnderwaterDecorationBatchFactory.GroupName) ||
+                    HasDeepWatersShader(renderer));
+        }
+
+        private static bool IsUnderTransformNamed(Transform transform, string name)
+        {
+            while (transform != null)
+            {
+                if (transform.name == name)
+                    return true;
+
+                transform = transform.parent;
+            }
+
+            return false;
+        }
+
+        private static bool HasDeepWatersShader(MeshRenderer renderer)
+        {
+            Material[] materials = renderer.sharedMaterials;
+            for (int i = 0; i < materials.Length; i++)
+            {
+                Material material = materials[i];
+                if (material != null &&
+                    material.shader != null &&
+                    material.shader.name.StartsWith("DeepWaters/", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool IsKnownExternalWaterShader(string shaderName)

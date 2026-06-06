@@ -22,13 +22,16 @@ namespace DeepWaters
         private static readonly int WaterColumnDepthProperty = Shader.PropertyToID("_WaterColumnDepth");
         private static readonly int WaterColumnFogDepthProperty = Shader.PropertyToID("_WaterColumnFogDepth");
         private static readonly int WaterColumnFogStrengthProperty = Shader.PropertyToID("_WaterColumnFogStrength");
+        private static readonly int SrcBlendProperty = Uniforms.SrcBlend;
+        private static readonly int DstBlendProperty = Uniforms.DstBlend;
+        private static readonly int ZWriteProperty = Uniforms.ZWrite;
 
         private static Mesh sharedFlatMesh;
         private static Material sharedTopMaterial;
         private static Material sharedUndersideMaterial;
         private static Texture sharedSurfaceTexture;
-        private static readonly Color SurfaceTint = new Color(0.34f, 0.55f, 0.58f, 1f);
-        private static readonly Color FallbackSurfaceColor = new Color(0.045f, 0.22f, 0.30f, 1f);
+        private static readonly Color SurfaceTint = new Color(0.12f, 0.25f, 0.29f, 1f);
+        private static readonly Color FallbackSurfaceColor = new Color(0.035f, 0.10f, 0.13f, 1f);
 
         public const float SurfaceTextureTiling = 128f;
 
@@ -211,6 +214,19 @@ namespace DeepWaters
         {
             material.SetOverrideTag("RenderType", TransparentRenderType);
             material.renderQueue = (int)RenderQueue.Transparent;
+
+            if (material.HasProperty(SrcBlendProperty))
+                material.SetInt(SrcBlendProperty, (int)BlendMode.SrcAlpha);
+
+            if (material.HasProperty(DstBlendProperty))
+                material.SetInt(DstBlendProperty, (int)BlendMode.OneMinusSrcAlpha);
+
+            if (material.HasProperty(ZWriteProperty))
+                material.SetInt(ZWriteProperty, 0);
+
+            material.DisableKeyword(KeyWords.CutOut);
+            material.EnableKeyword(KeyWords.Fade);
+            material.DisableKeyword(KeyWords.Transparent);
         }
 
         private static void ApplyBaseTexture(Material material)

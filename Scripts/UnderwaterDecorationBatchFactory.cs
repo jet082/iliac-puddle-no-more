@@ -28,12 +28,13 @@ namespace DeepWaters
         // the material's authored size.
         internal const float DecorationScaleMin = 0.70f;
         internal const float DecorationScaleMax = 1.20f;
+        private const string UnderwaterDecorationShaderName = "DeepWaters/UnderwaterBillboardBatchUnlit";
+        private const string UnderwaterDecorationShaderAssetName = "UnderwaterBillboardBatchUnlit.shader";
         private const string TransparentCutoutRenderType = "TransparentCutout";
         private static readonly Color UnderwaterDecorationColor = new Color(1.12f, 1.12f, 1.12f, 1f);
-        private static readonly Color UnderwaterDecorationEmissionLift = new Color(0.08f, 0.08f, 0.08f, 1f);
+        private static bool loggedMissingUnderwaterDecorationShader;
         private static readonly int ColorProperty = Shader.PropertyToID("_Color");
         private static readonly int CutoffProperty = Shader.PropertyToID("_Cutoff");
-        private static readonly int EmissionColorProperty = Uniforms.EmissionColor;
 
         public static void Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {
@@ -311,7 +312,75 @@ namespace DeepWaters
             if (renderer == null)
                 return;
 
-            ConfigureUnderwaterDecorationMaterial(renderer.sharedMaterial);
+            Material underwaterMaterial = CreateUnderwaterDecorationMaterial(renderer.sharedMaterial);
+            if (underwaterMaterial == null)
+            {
+                ConfigureUnderwaterDecorationMaterial(renderer.sharedMaterial);
+                return;
+            }
+
+            renderer.sharedMaterial = underwaterMaterial;
+
+            var owner = renderer.GetComponent<OwnedUnderwaterDecorationMaterial>();
+            if (owner == null)
+                owner = renderer.gameObject.AddComponent<OwnedUnderwaterDecorationMaterial>();
+
+            owner.Set(underwaterMaterial);
+        }
+
+        private static Material CreateUnderwaterDecorationMaterial(Material sourceMaterial)
+        {
+            if (sourceMaterial == null)
+                return null;
+
+            Shader shader = LoadUnderwaterDecorationShader();
+            if (shader == null)
+                return null;
+
+            var material = new Material(shader)
+            {
+                name = sourceMaterial.name + " (Deep Waters Underwater)",
+            };
+
+            CopyTextureAndTransform(sourceMaterial, material, Uniforms.MainTex);
+            ConfigureUnderwaterDecorationMaterial(material);
+            return material;
+        }
+
+        private static Shader LoadUnderwaterDecorationShader()
+        {
+            Shader shader = Shader.Find(UnderwaterDecorationShaderName);
+
+            if (shader == null && DeepWaters.Mod != null)
+                shader = DeepWaters.Mod.GetAsset<Shader>(UnderwaterDecorationShaderAssetName);
+
+            if (shader == null && !loggedMissingUnderwaterDecorationShader)
+            {
+                Debug.LogWarning(
+                    "[DeepWaters] " + UnderwaterDecorationShaderName +
+                    " shader not found. Underwater decorations will use the vanilla billboard material.");
+                loggedMissingUnderwaterDecorationShader = true;
+            }
+
+            return shader;
+        }
+
+        private static void CopyTextureAndTransform(Material sourceMaterial, Material targetMaterial, int propertyId)
+        {
+            if (sourceMaterial == null ||
+                targetMaterial == null ||
+                !sourceMaterial.HasProperty(propertyId) ||
+                !targetMaterial.HasProperty(propertyId))
+            {
+                return;
+            }
+
+            Texture texture = sourceMaterial.GetTexture(propertyId);
+            if (texture != null)
+                targetMaterial.SetTexture(propertyId, texture);
+
+            targetMaterial.SetTextureScale(propertyId, sourceMaterial.GetTextureScale(propertyId));
+            targetMaterial.SetTextureOffset(propertyId, sourceMaterial.GetTextureOffset(propertyId));
         }
 
         private static void ConfigureUnderwaterDecorationMaterial(Material material)
@@ -327,9 +396,25 @@ namespace DeepWaters
 
             if (material.HasProperty(CutoffProperty))
                 material.SetFloat(CutoffProperty, 0.5f);
+        }
 
-            if (material.HasProperty(EmissionColorProperty))
-                material.SetColor(EmissionColorProperty, UnderwaterDecorationEmissionLift);
+        private sealed class OwnedUnderwaterDecorationMaterial : MonoBehaviour
+        {
+            private Material material;
+
+            public void Set(Material value)
+            {
+                if (material != null && material != value)
+                    Destroy(material);
+
+                material = value;
+            }
+
+            private void OnDestroy()
+            {
+                if (material != null)
+                    Destroy(material);
+            }
         }
 
         private sealed class AnimatedDecorationBatch : MonoBehaviour
@@ -416,31 +501,7 @@ namespace DeepWaters
 
             private static Material CreateBatchMaterial(Material sourceMaterial)
             {
-                Shader shader = Shader.Find(MaterialReader._DaggerfallBillboardBatchNoShadowsShaderName);
-                if (shader == null)
-                    return null;
-
-                Material material = new Material(shader);
-                material.mainTexture = sourceMaterial.mainTexture;
-                CopyOptionalTexture(sourceMaterial, material, Uniforms.BumpMap);
-                CopyOptionalTexture(sourceMaterial, material, Uniforms.EmissionMap);
-                ConfigureUnderwaterDecorationMaterial(material);
-                return material;
-            }
-
-            private static void CopyOptionalTexture(Material sourceMaterial, Material targetMaterial, int propertyId)
-            {
-                if (sourceMaterial == null ||
-                    targetMaterial == null ||
-                    !sourceMaterial.HasProperty(propertyId) ||
-                    !targetMaterial.HasProperty(propertyId))
-                {
-                    return;
-                }
-
-                Texture texture = sourceMaterial.GetTexture(propertyId);
-                if (texture != null)
-                    targetMaterial.SetTexture(propertyId, texture);
+                return CreateUnderwaterDecorationMaterial(sourceMaterial);
             }
 
             private void BuildMesh(

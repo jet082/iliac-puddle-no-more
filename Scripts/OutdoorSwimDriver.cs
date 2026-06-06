@@ -37,6 +37,9 @@ namespace DeepWaters
         private const float WaterContactProbeRadiusMax = 0.75f;
         private const float ColliderGateProbeRadiusMin = 1.25f;
         private const float ColliderGateProbeRadiusMax = 2.25f;
+        private const float ColliderGateShoreProbeRadiusMin = 2.50f;
+        private const float ColliderGateShoreProbeRadiusMax = 4.00f;
+        private const float ColliderGateShoreTerrainMargin = 0.35f;
         private const float ColliderGateTransientHoldSeconds = 0.65f;
         private const float BoatBoardingSurfaceClearance = 1.10f;
         private const float BoatSnapCooldownSeconds = 0.75f;
@@ -384,6 +387,12 @@ namespace DeepWaters
                 return;
             }
 
+            if (IsNearColliderGateShore(position, oceanSurfaceY))
+            {
+                RestoreWaterTerrainCollider();
+                return;
+            }
+
             CollectNearbyWaterTerrainColliders(position, desiredWaterTerrainColliders);
             if (desiredWaterTerrainColliders.Count == 0)
             {
@@ -433,6 +442,140 @@ namespace DeepWaters
                 controller.radius * 3f,
                 ColliderGateProbeRadiusMin,
                 ColliderGateProbeRadiusMax);
+        }
+
+        private static float GetColliderGateShoreProbeRadius()
+        {
+            GameObject player = GameManager.Instance != null ? GameManager.Instance.PlayerObject : null;
+            CharacterController controller = player != null ? player.GetComponent<CharacterController>() : null;
+            if (controller == null)
+                return ColliderGateShoreProbeRadiusMin;
+
+            return Mathf.Clamp(
+                controller.radius * 5f,
+                ColliderGateShoreProbeRadiusMin,
+                ColliderGateShoreProbeRadiusMax);
+        }
+
+        private static bool IsNearColliderGateShore(Vector3 position, float oceanSurfaceY)
+        {
+            if (IsSolidShoreForColliderGate(position.x, position.z, oceanSurfaceY))
+                return true;
+
+            float radius = GetColliderGateShoreProbeRadius();
+            if (IsSolidShoreForColliderGate(position.x + radius, position.z, oceanSurfaceY) ||
+                IsSolidShoreForColliderGate(position.x - radius, position.z, oceanSurfaceY) ||
+                IsSolidShoreForColliderGate(position.x, position.z + radius, oceanSurfaceY) ||
+                IsSolidShoreForColliderGate(position.x, position.z - radius, oceanSurfaceY))
+            {
+                return true;
+            }
+
+            float diagonal = radius * 0.70710678f;
+            if (IsSolidShoreForColliderGate(position.x + diagonal, position.z + diagonal, oceanSurfaceY) ||
+                IsSolidShoreForColliderGate(position.x + diagonal, position.z - diagonal, oceanSurfaceY) ||
+                IsSolidShoreForColliderGate(position.x - diagonal, position.z + diagonal, oceanSurfaceY) ||
+                IsSolidShoreForColliderGate(position.x - diagonal, position.z - diagonal, oceanSurfaceY))
+            {
+                return true;
+            }
+
+            Camera camera = GameManager.Instance != null ? GameManager.Instance.MainCamera : null;
+            if (camera == null)
+                return false;
+
+            Vector3 forward = camera.transform.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.001f)
+                return false;
+
+            forward.Normalize();
+            return IsSolidShoreForColliderGate(
+                position.x + forward.x * radius,
+                position.z + forward.z * radius,
+                oceanSurfaceY);
+        }
+
+        private static bool IsSolidShoreForColliderGate(float worldX, float worldZ, float oceanSurfaceY)
+        {
+            DaggerfallTerrain dfTerrain;
+            Terrain terrain;
+            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(worldX, worldZ, out dfTerrain, out terrain) ||
+                dfTerrain == null ||
+                terrain == null ||
+                terrain.terrainData == null ||
+                dfTerrain.MapData.heightmapSamples == null)
+            {
+                return false;
+            }
+
+            float tileWorldSize = DeepWaterWorld.TileWorldSize;
+            if (tileWorldSize <= 0f)
+                return false;
+
+            Vector3 origin = dfTerrain.transform.position;
+            float fracX = (worldX - origin.x) / tileWorldSize;
+            float fracZ = (worldZ - origin.z) / tileWorldSize;
+            if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
+                return false;
+
+            float terrainWorldY;
+            if (!TrySampleVanillaTerrainWorldY(dfTerrain, terrain, fracX, fracZ, out terrainWorldY))
+                return false;
+
+            if (terrainWorldY < oceanSurfaceY - ColliderGateShoreTerrainMargin)
+                return false;
+
+            bool waterLike =
+                DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ||
+                (DeepWaterDistanceBake.HasFineWaterMask &&
+                 DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ));
+
+            return !waterLike || terrainWorldY > oceanSurfaceY + ColliderGateShoreTerrainMargin;
+        }
+
+        private static bool TrySampleVanillaTerrainWorldY(
+            DaggerfallTerrain dfTerrain,
+            Terrain terrain,
+            float fracX,
+            float fracZ,
+            out float worldY)
+        {
+            worldY = 0f;
+
+            if (dfTerrain == null ||
+                terrain == null ||
+                terrain.terrainData == null ||
+                dfTerrain.MapData.heightmapSamples == null)
+            {
+                return false;
+            }
+
+            float[,] heights = dfTerrain.MapData.heightmapSamples;
+            int rows = heights.GetLength(0);
+            int cols = heights.GetLength(1);
+            if (rows <= 0 || cols <= 0)
+                return false;
+
+            float sampleX = Mathf.Clamp01(fracX) * (cols - 1);
+            float sampleZ = Mathf.Clamp01(fracZ) * (rows - 1);
+            int x0 = Mathf.Clamp(Mathf.FloorToInt(sampleX), 0, cols - 1);
+            int z0 = Mathf.Clamp(Mathf.FloorToInt(sampleZ), 0, rows - 1);
+            int x1 = Mathf.Min(x0 + 1, cols - 1);
+            int z1 = Mathf.Min(z0 + 1, rows - 1);
+            float tx = sampleX - x0;
+            float tz = sampleZ - z0;
+
+            float h00 = heights[z0, x0];
+            float h10 = heights[z0, x1];
+            float h01 = heights[z1, x0];
+            float h11 = heights[z1, x1];
+            float h0 = Mathf.Lerp(h00, h10, tx);
+            float h1 = Mathf.Lerp(h01, h11, tx);
+            float normalizedHeight = Mathf.Lerp(h0, h1, tz);
+
+            worldY = terrain.transform.position.y + normalizedHeight * terrain.terrainData.size.y;
+            return true;
         }
 
         private static void AddWaterTerrainColliderAt(

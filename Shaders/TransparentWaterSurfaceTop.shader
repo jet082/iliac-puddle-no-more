@@ -7,6 +7,9 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
     {
         _MainTex ("Wave texture (RGB)", 2D) = "white" {}
         _Color ("Surface tint and opacity", Color) = (0.34, 0.55, 0.58, 0.35)
+        _SrcBlend ("Source blend", Float) = 5
+        _DstBlend ("Destination blend", Float) = 10
+        _ZWrite ("Depth write", Float) = 0
 
         _StencilRef ("Stencil reject value", Range(0, 255)) = 200
         _StencilReadMask ("Stencil read mask", Range(0, 255)) = 255
@@ -33,8 +36,9 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
         {
             Name "TOP_SURFACE"
             Cull Back
-            Blend SrcAlpha OneMinusSrcAlpha
-            ZWrite Off
+            Blend [_SrcBlend] [_DstBlend]
+            ZWrite [_ZWrite]
+            ZTest LEqual
 
             Stencil
             {
@@ -104,8 +108,8 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 clip(surfaceOpacity - 0.001);
 
                 fixed4 wave = tex2D(_MainTex, i.uv);
-                fixed3 waveRgb = lerp(wave.rgb, wave.rgb * _Color.rgb, 0.35);
-                fixed3 surfaceRgb = lerp(_Color.rgb, waveRgb, 0.82);
+                fixed3 waveRgb = wave.rgb * _Color.rgb;
+                fixed3 surfaceRgb = lerp(_Color.rgb, waveRgb, 0.55);
 
                 float columnDepth = _WaterColumnDepth;
                 float rawDepth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.screenPos.xy / i.screenPos.w);
@@ -128,7 +132,7 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                     fogStrength);
 
                 fixed4 col;
-                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, waterTint * 0.20);
+                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, waterTint * 0.28);
                 col.a = surfaceOpacity;
                 return col;
             }

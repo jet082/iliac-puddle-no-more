@@ -7,6 +7,9 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
     {
         _MainTex ("Wave texture (RGB)", 2D) = "white" {}
         _Color ("Surface tint", Color) = (0.34, 0.55, 0.58, 1.0)
+        _SrcBlend ("Source blend", Float) = 5
+        _DstBlend ("Destination blend", Float) = 10
+        _ZWrite ("Depth write", Float) = 0
 
         _StencilRef ("Stencil reject value", Range(0, 255)) = 200
         _StencilReadMask ("Stencil read mask", Range(0, 255)) = 255
@@ -32,8 +35,9 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
         {
             Name "UNDERSIDE_SURFACE"
             Cull Front
-            Blend SrcAlpha OneMinusSrcAlpha
-            ZWrite Off
+            Blend [_SrcBlend] [_DstBlend]
+            ZWrite [_ZWrite]
+            ZTest LEqual
 
             Stencil
             {
@@ -90,7 +94,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
                 clip(undersideOpacity - 0.001);
 
                 fixed4 wave = tex2D(_MainTex, i.uv);
-                fixed3 surfaceRgb = lerp(_Color.rgb, wave.rgb * _Color.rgb, 0.45);
+                fixed3 surfaceRgb = lerp(_Color.rgb, wave.rgb * _Color.rgb, 0.35);
 
                 fixed4 col;
                 col.rgb = lerp(

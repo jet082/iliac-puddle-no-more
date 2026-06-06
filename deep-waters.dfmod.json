@@ -78,6 +78,7 @@
         "Assets/Game/Mods/deep-waters/Shaders/StenciledWaterSurface.shader",
         "Assets/Game/Mods/deep-waters/Shaders/TransparentWaterSurfaceTop.shader",
         "Assets/Game/Mods/deep-waters/Shaders/TransparentWaterSurfaceUnderside.shader",
+        "Assets/Game/Mods/deep-waters/Shaders/UnderwaterBillboardBatchUnlit.shader",
         "Assets/Game/Mods/deep-waters/Shaders/UnderwaterDistanceFog.shader",
         "Assets/Game/Mods/deep-waters/Shaders/DeepWaterSeafloor.shader",
         "Assets/Game/Mods/deep-waters/Scripts/PassiveFishResources.cs",
