@@ -6,7 +6,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
     Properties
     {
         _MainTex ("Wave texture (RGB)", 2D) = "white" {}
-        _Color ("Surface tint", Color) = (0.34, 0.55, 0.58, 1.0)
+        _Color ("Surface tint", Color) = (0.519, 0.527, 0.467, 1.0)
         _SrcBlend ("Source blend", Float) = 5
         _DstBlend ("Destination blend", Float) = 10
         _ZWrite ("Depth write", Float) = 0
@@ -94,7 +94,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
                 clip(undersideOpacity - 0.001);
 
                 fixed4 wave = tex2D(_MainTex, i.uv);
-                fixed3 surfaceRgb = lerp(_Color.rgb, wave.rgb * _Color.rgb, 0.35);
+                fixed3 surfaceRgb = wave.rgb * _Color.rgb;
 
                 fixed4 col;
                 col.rgb = lerp(

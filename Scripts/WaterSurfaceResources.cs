@@ -30,8 +30,8 @@ namespace DeepWaters
         private static Material sharedTopMaterial;
         private static Material sharedUndersideMaterial;
         private static Texture sharedSurfaceTexture;
-        private static readonly Color SurfaceTint = new Color(0.12f, 0.25f, 0.29f, 1f);
-        private static readonly Color FallbackSurfaceColor = new Color(0.035f, 0.10f, 0.13f, 1f);
+        private static readonly Color SurfaceTint = new Color(0.519f, 0.527f, 0.467f, 1f);
+        private static readonly Color FallbackSurfaceColor = new Color(0.075f, 0.24f, 0.38f, 1f);
 
         public const float SurfaceTextureTiling = 128f;
 

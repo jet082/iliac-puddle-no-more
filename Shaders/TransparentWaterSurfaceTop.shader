@@ -6,7 +6,7 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
     Properties
     {
         _MainTex ("Wave texture (RGB)", 2D) = "white" {}
-        _Color ("Surface tint and opacity", Color) = (0.34, 0.55, 0.58, 0.35)
+        _Color ("Surface tint and opacity", Color) = (0.519, 0.527, 0.467, 0.35)
         _SrcBlend ("Source blend", Float) = 5
         _DstBlend ("Destination blend", Float) = 10
         _ZWrite ("Depth write", Float) = 0
@@ -108,8 +108,8 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 clip(surfaceOpacity - 0.001);
 
                 fixed4 wave = tex2D(_MainTex, i.uv);
-                fixed3 waveRgb = wave.rgb * _Color.rgb;
-                fixed3 surfaceRgb = lerp(_Color.rgb, waveRgb, 0.55);
+                fixed3 legacyRgb = wave.rgb * _Color.rgb;
+                fixed3 surfaceRgb = lerp(legacyRgb, _Color.rgb * 0.32, 0.22);
 
                 float columnDepth = _WaterColumnDepth;
                 float rawDepth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.screenPos.xy / i.screenPos.w);
@@ -131,8 +131,11 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                     (1.0 - exp2(-normalizedDepth * lerp(0.35, 1.6, fogStrength))) *
                     fogStrength);
 
+                float transparency = 1.0 - surfaceOpacity;
+                float fogWeight = waterTint * lerp(0.35, 0.12, transparency);
+
                 fixed4 col;
-                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, waterTint * 0.28);
+                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, fogWeight);
                 col.a = surfaceOpacity;
                 return col;
             }
