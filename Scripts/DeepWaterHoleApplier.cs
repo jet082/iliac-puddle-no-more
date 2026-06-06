@@ -60,13 +60,12 @@ namespace DeepWaters
 
         // Diagnostic logging.
         public static bool Verbose = false;
-        // v0.55: real terrain holes re-enabled. The mask is computed at the
-        // promote event but the actual write is deferred (Enqueue -> drain
-        // coroutine) so it never runs inside DFU's promotion call stack, and
-        // it uses SetHolesDelayLOD + SyncTexture so the terrain LOD quadtree
-        // never becomes hole-aware. Set back to true to fall back to the
-        // outdoor swim collider gate if holes ever destabilize a GPU/driver.
-        public static bool DisableRuntimeTerrainHoles = false;
+        // Runtime terrain holes are disabled by default. On some Unity 2019.4
+        // load paths, even a deferred SetHolesDelayLOD write after DFU terrain
+        // and location updates have gone quiet can native-crash UnityPlayer.
+        // Keep the computed masks for swim/depth logic, but do not mutate
+        // TerrainData holes unless this is explicitly flipped for diagnostics.
+        public static bool DisableRuntimeTerrainHoles = true;
         private static bool disabledNoticeLogged;
         private static bool firstInactiveCarveLogged;
         private static bool firstDrainCarveLogged;
@@ -179,10 +178,19 @@ namespace DeepWaters
             if (installed) return;
             StreamingWorld.OnUpdateTerrainsEnd += OnStreamEnd;
             installed = true;
-            Debug.Log("[DeepWaters.Applier] Installed terrain hole writer mode=" +
-                      ApplyModeName + " cooldown=" +
-                      PostStreamCooldownSeconds.ToString("F1") + "s build=" +
-                      DeepWaters.BuildStamp);
+            if (DisableRuntimeTerrainHoles)
+            {
+                Debug.Log("[DeepWaters.Applier] Runtime Terrain holes disabled at startup; " +
+                          "using outdoor swim collider gate. build=" + DeepWaters.BuildStamp);
+                disabledNoticeLogged = true;
+            }
+            else
+            {
+                Debug.Log("[DeepWaters.Applier] Installed terrain hole writer mode=" +
+                          ApplyModeName + " cooldown=" +
+                          PostStreamCooldownSeconds.ToString("F1") + "s build=" +
+                          DeepWaters.BuildStamp);
+            }
             if (Verbose) Debug.Log("[DeepWaters.Applier] Subscribed to OnUpdateTerrainsEnd");
         }
 
@@ -313,15 +321,17 @@ namespace DeepWaters
         }
 
         /// <summary>
-        /// Carve a tile's holes from inside the DFU promote event using the
-        /// LOD-safe two-phase flow (SetHolesDelayLOD + SyncTexture). The mask
+        /// Carve a tile's holes immediately using the LOD-safe two-phase flow
+        /// (SetHolesDelayLOD + SyncTexture). The mask
         /// is written for both rendering and collision, but the terrain LOD
         /// quadtree is never made hole-aware — so later patch subdivision
         /// (e.g. when the camera rises through the surface) does not hit the
         /// Unity 2019.4 TerrainRenderer::ForceSplitParent native crash. Doing
         /// it at the promote event (before the tile's first render) also means
         /// the hole is present the moment the tile becomes visible, with no
-        /// pop-in. Returns true if the write was issued.
+        /// pop-in. Returns true if the write was issued. The floor builder no
+        /// longer uses this during promotion because load logs showed that it
+        /// can still race coastal location creation on Unity 2019.4.
         /// </summary>
         public static bool CarveTerrainNow(DaggerfallTerrain dfTerrain, TerrainData terrainData, bool[,] holes)
         {
@@ -359,9 +369,9 @@ namespace DeepWaters
                 MarkHeightmapSynced(dfTerrain);
                 if (!firstInactiveCarveLogged)
                 {
-                    Debug.Log("[DeepWaters.Applier] Promote-time terrain hole carving is ACTIVE " +
+                    Debug.Log("[DeepWaters.Applier] Immediate terrain hole carving is ACTIVE " +
                               "(first tile (" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY +
-                              ") carved at promote event via SetHolesDelayLOD). build=" + DeepWaters.BuildStamp);
+                              ") carved via SetHolesDelayLOD). build=" + DeepWaters.BuildStamp);
                     firstInactiveCarveLogged = true;
                 }
                 // NOTE: deliberately NOT calling MarkTerrainDataMutated().
@@ -504,14 +514,13 @@ namespace DeepWaters
         {
             // Leave DFU's promotion call stack (one frame) before touching any
             // holes; then drain FIFO with SetHolesDelayLOD, a short gap, then
-            // SyncTexture. We do NOT block on the whole terrain stream / save
-            // load (that broad blocking stalled the load and exploded the queue
-            // in v0.55.3) — SetHolesDelayLOD outside the call stack is safe
-            // during streaming. We DO wait out the narrow window while DFU is
-            // laying out a location's RMB blocks: the v0.55.12 load crash dump
-            // truncated right after "Location GameObject Created: Fonthope End /
-            // Grimton", proving a concurrent SetHolesDelayLOD/SyncTexture races
-            // CreateRMBBlockGameObject and native-crashes Unity 2019.4.
+            // SyncTexture. We do not block on terrain streaming as a whole
+            // (that broad blocking stalled load and made queues explode), but
+            // we do wait out the narrow window while DFU is laying out a
+            // location's RMB blocks. The crash signature truncates right after
+            // "Location GameObject Created: Fonthope End / Grimton", proving a
+            // concurrent SetHolesDelayLOD/SyncTexture can race location collider
+            // setup and native-crash Unity 2019.4.
             yield return null;
 
             if (PostStreamCooldownSeconds > 0f)
@@ -537,6 +546,9 @@ namespace DeepWaters
                 // made it land on an already-stitched, fully-subdivided tile,
                 // which is when the holed-patch render crash fires. Testing
                 // whether the working build's early-carve timing avoids it.
+                while (DeepWaterLocationLoadGate.IsAnyLocationLoading)
+                    yield return null;
+
                 if (ApplyOne(entry))
                 {
                     appliesThisDrain++;
@@ -555,6 +567,9 @@ namespace DeepWaters
                     // ring never does every SetHolesDelayLOD AND every
                     // SyncTexture in one frame (that burst crashed v0.55.4).
                     for (int j = 0; j < FramesBetweenPhases; j++)
+                        yield return null;
+
+                    while (DeepWaterLocationLoadGate.IsAnyLocationLoading)
                         yield return null;
 
                     if (SyncOne(entry))
@@ -733,6 +748,7 @@ namespace DeepWaters
                 // location tile during load), and never the high-level SetHoles
                 // (it makes the LOD quadtree hole-aware and crashes on a later
                 // subdivision when the camera surfaces).
+                terrainData.enableHolesTextureCompression = false;
                 if (DeepWaterFloorBuilder.DiagTrace)
                     Debug.Log("[DeepWaters.DIAG] drainCarve>> tile=(" + entry.MapPixelX + "," + entry.MapPixelY + ") reset=" + entry.IsReset);
                 terrainData.SetHolesDelayLOD(0, 0, entry.Holes);
@@ -776,12 +792,8 @@ namespace DeepWaters
             try
             {
                 TerrainData terrainData = unityTerrain.terrainData;
-                // v0.55.24 TEST: do NOT set enableHolesTextureCompression here.
-                // The minimal working build never touches it. Changing the holes
-                // texture's compression AFTER SetHolesDelayLOD but before
-                // SyncTexture (the deferred order) is the suspected render-thread
-                // crash — the immediate build set it BEFORE the mask write and
-                // loaded fine, so the ORDER, not the value, is the likely cause.
+                // Compression is disabled before SetHolesDelayLOD in ApplyOne.
+                // Do not change it here, between the mask write and SyncTexture.
                 if (DeepWaterFloorBuilder.DiagTrace)
                     Debug.Log("[DeepWaters.DIAG] drainSync>> tile=(" + entry.MapPixelX + "," + entry.MapPixelY + ")");
                 terrainData.SyncTexture(TerrainData.HolesTextureName);

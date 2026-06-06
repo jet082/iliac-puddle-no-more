@@ -1,6 +1,7 @@
 // Project:         Iliac Puddle No More
 // License:         MIT
 
+using System.Collections.Generic;
 using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Game.MagicAndEffects;
@@ -34,6 +35,9 @@ namespace DeepWaters
         private const float WaterContactMinimumDepth = 0.15f;
         private const float WaterContactProbeRadiusMin = 0.35f;
         private const float WaterContactProbeRadiusMax = 0.75f;
+        private const float ColliderGateProbeRadiusMin = 1.25f;
+        private const float ColliderGateProbeRadiusMax = 2.25f;
+        private const float ColliderGateTransientHoldSeconds = 0.65f;
         private const float BoatBoardingSurfaceClearance = 1.10f;
         private const float BoatSnapCooldownSeconds = 0.75f;
         private const string BoatEffectBundleName = "ImOnABoat";
@@ -47,9 +51,11 @@ namespace DeepWaters
         private float shoreExitGraceUntil;
         private static bool headWaterStateInitialized;
         private static bool headPresentationUnderwater;
-        private TerrainCollider disabledWaterTerrainCollider;
+        private readonly List<TerrainCollider> disabledWaterTerrainColliders = new List<TerrainCollider>(12);
+        private readonly List<TerrainCollider> desiredWaterTerrainColliders = new List<TerrainCollider>(12);
         private bool waterColliderGateActive;
         private bool loggedColliderGateSwim;
+        private float colliderGateHoldUntil;
 
         public static OutdoorSwimDriver Install(GameObject host)
         {
@@ -109,7 +115,9 @@ namespace DeepWaters
             if (pex == null)
                 return;
 
-            if (!pex.IsPlayerInside && DeepWaterRuntime.IsLoadGraceActive)
+            if (!pex.IsPlayerInside &&
+                DeepWaterRuntime.IsLoadGraceActive &&
+                !DeepWaterHoleApplier.DisableRuntimeTerrainHoles)
             {
                 RestoreWaterTerrainCollider();
                 ClearOutdoorWaterState();
@@ -369,52 +377,160 @@ namespace DeepWaters
             }
 
             Vector3 position = gameManager.PlayerObject.transform.position;
+            float oceanSurfaceY = ComputeOceanSurfaceY();
+            if (position.y > oceanSurfaceY + SwimExitClearance)
+            {
+                RestoreWaterTerrainCollider();
+                return;
+            }
+
+            CollectNearbyWaterTerrainColliders(position, desiredWaterTerrainColliders);
+            if (desiredWaterTerrainColliders.Count == 0)
+            {
+                if (disabledWaterTerrainColliders.Count > 0 && Time.time < colliderGateHoldUntil)
+                    waterColliderGateActive = true;
+                else
+                    RestoreWaterTerrainCollider();
+                return;
+            }
+
+            for (int i = 0; i < desiredWaterTerrainColliders.Count; i++)
+                DisableWaterTerrainCollider(desiredWaterTerrainColliders[i]);
+
+            RestoreWaterTerrainCollidersExcept(desiredWaterTerrainColliders);
+            waterColliderGateActive = disabledWaterTerrainColliders.Count > 0;
+            if (waterColliderGateActive)
+                colliderGateHoldUntil = Time.time + ColliderGateTransientHoldSeconds;
+        }
+
+        private void CollectNearbyWaterTerrainColliders(Vector3 position, List<TerrainCollider> colliders)
+        {
+            colliders.Clear();
+
+            AddWaterTerrainColliderAt(position.x, position.z, colliders);
+
+            float radius = GetColliderGateProbeRadius();
+            AddWaterTerrainColliderAt(position.x + radius, position.z, colliders);
+            AddWaterTerrainColliderAt(position.x - radius, position.z, colliders);
+            AddWaterTerrainColliderAt(position.x, position.z + radius, colliders);
+            AddWaterTerrainColliderAt(position.x, position.z - radius, colliders);
+
+            float diagonal = radius * 0.70710678f;
+            AddWaterTerrainColliderAt(position.x + diagonal, position.z + diagonal, colliders);
+            AddWaterTerrainColliderAt(position.x + diagonal, position.z - diagonal, colliders);
+            AddWaterTerrainColliderAt(position.x - diagonal, position.z + diagonal, colliders);
+            AddWaterTerrainColliderAt(position.x - diagonal, position.z - diagonal, colliders);
+        }
+
+        private static float GetColliderGateProbeRadius()
+        {
+            GameObject player = GameManager.Instance != null ? GameManager.Instance.PlayerObject : null;
+            CharacterController controller = player != null ? player.GetComponent<CharacterController>() : null;
+            if (controller == null)
+                return ColliderGateProbeRadiusMin;
+
+            return Mathf.Clamp(
+                controller.radius * 3f,
+                ColliderGateProbeRadiusMin,
+                ColliderGateProbeRadiusMax);
+        }
+
+        private static void AddWaterTerrainColliderAt(
+            float worldX,
+            float worldZ,
+            List<TerrainCollider> colliders)
+        {
             DeepWaterColumn column;
-            if (!DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column) ||
+            if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column) ||
                 column.Depth < WaterContactMinimumDepth ||
-                position.y > column.OceanWorldY + SwimExitClearance)
+                column.Terrain == null)
             {
-                RestoreWaterTerrainCollider();
+                TerrainCollider fallbackCollider;
+                if (TryGetFallbackWaterTerrainCollider(worldX, worldZ, out fallbackCollider) &&
+                    !ContainsCollider(colliders, fallbackCollider))
+                {
+                    colliders.Add(fallbackCollider);
+                }
                 return;
             }
 
-            TerrainCollider collider = column.Terrain != null ? column.Terrain.GetComponent<TerrainCollider>() : null;
+            TerrainCollider collider = column.Terrain.GetComponent<TerrainCollider>();
+            if (collider != null && !ContainsCollider(colliders, collider))
+                colliders.Add(collider);
+        }
+
+        private static bool TryGetFallbackWaterTerrainCollider(
+            float worldX,
+            float worldZ,
+            out TerrainCollider collider)
+        {
+            collider = null;
+
+            DaggerfallTerrain dfTerrain;
+            Terrain terrain;
+            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(worldX, worldZ, out dfTerrain, out terrain) ||
+                dfTerrain == null ||
+                terrain == null)
+            {
+                return false;
+            }
+
+            float tileWorldSize = DeepWaterWorld.TileWorldSize;
+            if (tileWorldSize <= 0f)
+                return false;
+
+            Vector3 origin = dfTerrain.transform.position;
+            float fracX = (worldX - origin.x) / tileWorldSize;
+            float fracZ = (worldZ - origin.z) / tileWorldSize;
+            if (fracX < -0.01f || fracX > 1.01f || fracZ < -0.01f || fracZ > 1.01f)
+                return false;
+
+            fracX = Mathf.Clamp01(fracX);
+            fracZ = Mathf.Clamp01(fracZ);
+            bool waterLike =
+                DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ||
+                (DeepWaterDistanceBake.HasFineWaterMask &&
+                 DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ));
+            if (!waterLike)
+                return false;
+
+            collider = terrain.GetComponent<TerrainCollider>();
+            return collider != null;
+        }
+
+        private void DisableWaterTerrainCollider(TerrainCollider collider)
+        {
             if (collider == null)
-            {
-                RestoreWaterTerrainCollider();
                 return;
-            }
 
-            if (disabledWaterTerrainCollider != null && disabledWaterTerrainCollider != collider)
-                RestoreWaterTerrainCollider();
+            if (!ContainsCollider(disabledWaterTerrainColliders, collider))
+                disabledWaterTerrainColliders.Add(collider);
 
-            if (disabledWaterTerrainCollider == collider)
+            if (collider.enabled)
             {
-                waterColliderGateActive = true;
-                if (disabledWaterTerrainCollider.enabled)
-                {
-                    disabledWaterTerrainCollider.enabled = false;
-                    if (ColliderGateDiagnostics)
-                    {
-                        Debug.Log("[DeepWaters.Swim] Re-disabled TerrainCollider for active water tile (" +
-                                  column.DaggerfallTerrain.MapPixelX + "," +
-                                  column.DaggerfallTerrain.MapPixelY + ") after external restore.");
-                    }
-                }
-                return;
-            }
-
-            disabledWaterTerrainCollider = collider;
-            waterColliderGateActive = true;
-            if (disabledWaterTerrainCollider.enabled)
-            {
-                disabledWaterTerrainCollider.enabled = false;
+                collider.enabled = false;
                 if (ColliderGateDiagnostics)
+                    Debug.Log("[DeepWaters.Swim] Disabled nearby water TerrainCollider to avoid Unity Terrain holes.");
+            }
+        }
+
+        private void RestoreWaterTerrainCollidersExcept(List<TerrainCollider> keepDisabled)
+        {
+            for (int i = disabledWaterTerrainColliders.Count - 1; i >= 0; i--)
+            {
+                TerrainCollider collider = disabledWaterTerrainColliders[i];
+                if (collider == null)
                 {
-                    Debug.Log("[DeepWaters.Swim] Disabled TerrainCollider for active water tile (" +
-                              column.DaggerfallTerrain.MapPixelX + "," +
-                              column.DaggerfallTerrain.MapPixelY + ") to avoid Unity Terrain holes.");
+                    disabledWaterTerrainColliders.RemoveAt(i);
+                    continue;
                 }
+
+                if (ContainsCollider(keepDisabled, collider))
+                    continue;
+
+                if (!collider.enabled)
+                    collider.enabled = true;
+                disabledWaterTerrainColliders.RemoveAt(i);
             }
         }
 
@@ -422,12 +538,27 @@ namespace DeepWaters
         {
             waterColliderGateActive = false;
             loggedColliderGateSwim = false;
-            if (disabledWaterTerrainCollider == null)
-                return;
 
-            if (!disabledWaterTerrainCollider.enabled)
-                disabledWaterTerrainCollider.enabled = true;
-            disabledWaterTerrainCollider = null;
+            for (int i = disabledWaterTerrainColliders.Count - 1; i >= 0; i--)
+            {
+                TerrainCollider collider = disabledWaterTerrainColliders[i];
+                if (collider != null && !collider.enabled)
+                    collider.enabled = true;
+            }
+
+            disabledWaterTerrainColliders.Clear();
+            desiredWaterTerrainColliders.Clear();
+        }
+
+        private static bool ContainsCollider(List<TerrainCollider> colliders, TerrainCollider collider)
+        {
+            for (int i = 0; i < colliders.Count; i++)
+            {
+                if (colliders[i] == collider)
+                    return true;
+            }
+
+            return false;
         }
 
         private void LogColliderGateSwim(float oceanSurfaceY)

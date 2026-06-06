@@ -19,8 +19,10 @@ namespace DeepWaters
         private const float UnderwaterVisionDistanceAtDefaultSetting = 70f;
         private const float MinimumUnderwaterVisionDistance = 22f;
         private const float MaximumUnderwaterVisionDistance = 260f;
-        private const float OpaqueWaterSurfaceAlpha = 0.55f;
-        private const float MostTransparentWaterSurfaceAlpha = 0.0f;
+        private const float TopOpaqueWaterSurfaceAlpha = 1.0f;
+        private const float TopMostTransparentWaterSurfaceAlpha = 0.08f;
+        private const float BottomOpaqueWaterSurfaceAlpha = 0.55f;
+        private const float BottomMostTransparentWaterSurfaceAlpha = 0.0f;
         private const float MinFogDistanceMultiplier = 0.25f;
         private const float MaxFogDistanceMultiplier = 6.0f;
         private const float MinSwimSpeedMultiplier = 0.25f;
@@ -53,12 +55,24 @@ namespace DeepWaters
 
         public float WaterSurfaceTopAlpha
         {
-            get { return TransparencySliderToAlpha(WaterSurfaceTopTransparency); }
+            get
+            {
+                return TransparencySliderToAlpha(
+                    WaterSurfaceTopTransparency,
+                    TopOpaqueWaterSurfaceAlpha,
+                    TopMostTransparentWaterSurfaceAlpha);
+            }
         }
 
         public float WaterSurfaceBottomAlpha
         {
-            get { return TransparencySliderToAlpha(WaterSurfaceBottomTransparency); }
+            get
+            {
+                return TransparencySliderToAlpha(
+                    WaterSurfaceBottomTransparency,
+                    BottomOpaqueWaterSurfaceAlpha,
+                    BottomMostTransparentWaterSurfaceAlpha);
+            }
         }
 
         public float UnderwaterFogDensityMax
@@ -177,9 +191,9 @@ namespace DeepWaters
             return Mathf.Clamp01(sliderValue) * (valueAtMidpoint / SliderMidpoint);
         }
 
-        private static float TransparencySliderToAlpha(float sliderValue)
+        private static float TransparencySliderToAlpha(float sliderValue, float opaqueAlpha, float transparentAlpha)
         {
-            return Mathf.Lerp(OpaqueWaterSurfaceAlpha, MostTransparentWaterSurfaceAlpha, Mathf.Clamp01(sliderValue));
+            return Mathf.Lerp(opaqueAlpha, transparentAlpha, Mathf.Clamp01(sliderValue));
         }
 
         private static float SurfaceClarity01(float sliderValue)

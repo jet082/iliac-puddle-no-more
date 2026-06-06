@@ -32,6 +32,8 @@ namespace DeepWaters
         private const float SurfaceSuppressMinimumDepth = 0.5f;
         private const float SurfaceSuppressNearbyMinDistance = 4f;
         private const float SurfaceSuppressNearbyMaxDistance = 64f;
+        private const float SurfaceSuppressTransparentTopMaxDistance = 256f;
+        private const float TransparentTopExternalSurfaceAlpha = 0.05f;
         private const int SurfaceSuppressNearbyDirections = 8;
 
         private MeshRenderer[] cachedRenderers = new MeshRenderer[0];
@@ -262,10 +264,15 @@ namespace DeepWaters
             }
 
             float nearbyDepth;
+            float maxDistance =
+                DeepWaters.Instance != null &&
+                DeepWaters.Instance.WaterSurfaceTopAlpha <= TransparentTopExternalSurfaceAlpha
+                    ? SurfaceSuppressTransparentTopMaxDistance
+                    : SurfaceSuppressNearbyMaxDistance;
             return DeepWaterWorld.HasNearbyWaterColumn(
                 worldPosition,
                 SurfaceSuppressNearbyMinDistance,
-                SurfaceSuppressNearbyMaxDistance,
+                maxDistance,
                 SurfaceSuppressNearbyDirections,
                 SurfaceSuppressMinimumDepth,
                 out nearbyDepth);

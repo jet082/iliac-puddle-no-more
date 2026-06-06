@@ -11,13 +11,15 @@ namespace DeepWaters
     /// Per-terrain visible water surface. The mesh is clipped to the same
     /// local-water classification used for seabed holes and swimming.
     ///
-    /// Water uses generated per-tile meshes and one shared custom material for
-    /// every terrain tile. The material is intentionally exposed so boat or
-    /// camera mods can coordinate stencil values without touching every tile.
+    /// Water uses generated per-tile meshes and shared custom materials for
+    /// every terrain tile. The top and underside are separate renderers so
+    /// above-water transparency cannot be overridden by underwater behavior.
     /// </summary>
     public static class WaterSurfaceManager
     {
         private const string VisualChildName = "DeepWaters_Surface";
+        private const string TopSurfaceChildName = "DeepWaters_Surface_Top";
+        private const string UndersideSurfaceChildName = "DeepWaters_Surface_Underside";
         private const string GeneratedMeshName = "DeepWaters.SurfaceMesh";
         private const int SurfaceGridResolution = 64;
 
@@ -112,41 +114,69 @@ namespace DeepWaters
             {
                 visualGO = new GameObject(VisualChildName);
                 visualGO.transform.SetParent(terrain.transform, false);
-
-                var mf = visualGO.AddComponent<MeshFilter>();
-                var mr = visualGO.AddComponent<MeshRenderer>();
-                mf.sharedMesh = surfaceMesh;
-                mr.sharedMaterial = WaterSurfaceResources.GetMaterial();
-                DeepWaterRendering.DisableShadows(mr);
-                EnsureSurfaceMarker(visualGO);
             }
             else
             {
                 visualGO = existing.gameObject;
-                var mf = visualGO.GetComponent<MeshFilter>();
-                if (mf == null)
-                    mf = visualGO.AddComponent<MeshFilter>();
-                ReplaceSurfaceMesh(mf, surfaceMesh);
-
-                var mr = visualGO.GetComponent<MeshRenderer>();
-                if (mr == null)
-                    mr = visualGO.AddComponent<MeshRenderer>();
-                if (mr != null)
-                {
-                    Material surfaceMaterial = WaterSurfaceResources.GetMaterial();
-                    if (mr.sharedMaterial != surfaceMaterial)
-                        mr.sharedMaterial = surfaceMaterial;
-
-                    DeepWaterRendering.DisableShadows(mr);
-                }
-
-                EnsureSurfaceMarker(visualGO);
             }
+
+            DisableLegacyRootRenderer(visualGO);
+            EnsureSurfaceMarker(visualGO);
+
+            MeshFilter topFilter = EnsureSurfaceRenderer(
+                visualGO.transform,
+                TopSurfaceChildName,
+                WaterSurfaceResources.GetTopMaterial(),
+                WaterSurfaceResources.IsTopSurfaceVisible());
+            MeshFilter undersideFilter = EnsureSurfaceRenderer(
+                visualGO.transform,
+                UndersideSurfaceChildName,
+                WaterSurfaceResources.GetUndersideMaterial(),
+                WaterSurfaceResources.IsUndersideSurfaceVisible());
+            ReplaceSurfaceMesh(topFilter, undersideFilter, surfaceMesh);
 
             WaterSurfaceResources.ApplyMaterialSettings();
             visualGO.transform.localPosition = new Vector3(0f, oceanY, 0f);
             visualGO.transform.localScale    = Vector3.one;
             visualGO.transform.localRotation = Quaternion.identity;
+        }
+
+        private static MeshFilter EnsureSurfaceRenderer(
+            Transform root,
+            string childName,
+            Material material,
+            bool visible)
+        {
+            Transform existing = root.Find(childName);
+            GameObject surfaceGO;
+            if (existing == null)
+            {
+                surfaceGO = new GameObject(childName);
+                surfaceGO.transform.SetParent(root, false);
+            }
+            else
+            {
+                surfaceGO = existing.gameObject;
+            }
+
+            surfaceGO.transform.localPosition = Vector3.zero;
+            surfaceGO.transform.localRotation = Quaternion.identity;
+            surfaceGO.transform.localScale = Vector3.one;
+
+            var meshFilter = surfaceGO.GetComponent<MeshFilter>();
+            if (meshFilter == null)
+                meshFilter = surfaceGO.AddComponent<MeshFilter>();
+
+            var meshRenderer = surfaceGO.GetComponent<MeshRenderer>();
+            if (meshRenderer == null)
+                meshRenderer = surfaceGO.AddComponent<MeshRenderer>();
+
+            if (meshRenderer.sharedMaterial != material)
+                meshRenderer.sharedMaterial = material;
+
+            meshRenderer.enabled = material != null && visible;
+            DeepWaterRendering.DisableShadows(meshRenderer);
+            return meshFilter;
         }
 
         private static void EnsureSurfaceMarker(GameObject visualGO)
@@ -158,6 +188,24 @@ namespace DeepWaters
             var collider = visualGO.GetComponent<BoxCollider>();
             if (collider != null)
                 Object.Destroy(collider);
+        }
+
+        private static void DisableLegacyRootRenderer(GameObject visualGO)
+        {
+            var renderer = visualGO.GetComponent<MeshRenderer>();
+            if (renderer != null)
+            {
+                renderer.enabled = false;
+                renderer.sharedMaterial = null;
+            }
+
+            var filter = visualGO.GetComponent<MeshFilter>();
+            if (filter == null)
+                return;
+
+            Mesh oldMesh = filter.sharedMesh;
+            filter.sharedMesh = null;
+            DestroyGeneratedMesh(oldMesh, null);
         }
 
         private static Mesh BuildSurfaceMesh(DaggerfallTerrain terrain, TerrainData terrainData)
@@ -240,12 +288,23 @@ namespace DeepWaters
             return mesh;
         }
 
-        private static void ReplaceSurfaceMesh(MeshFilter meshFilter, Mesh newMesh)
+        private static void ReplaceSurfaceMesh(MeshFilter topFilter, MeshFilter undersideFilter, Mesh newMesh)
         {
-            Mesh oldMesh = meshFilter.sharedMesh;
-            meshFilter.sharedMesh = newMesh;
-            if (oldMesh != null && oldMesh.name == GeneratedMeshName)
-                Object.Destroy(oldMesh);
+            Mesh oldTopMesh = topFilter.sharedMesh;
+            Mesh oldUndersideMesh = undersideFilter.sharedMesh;
+
+            topFilter.sharedMesh = newMesh;
+            undersideFilter.sharedMesh = newMesh;
+
+            DestroyGeneratedMesh(oldTopMesh, newMesh);
+            if (oldUndersideMesh != oldTopMesh)
+                DestroyGeneratedMesh(oldUndersideMesh, newMesh);
+        }
+
+        private static void DestroyGeneratedMesh(Mesh mesh, Mesh replacement)
+        {
+            if (mesh != null && mesh != replacement && mesh.name == GeneratedMeshName)
+                Object.Destroy(mesh);
         }
 
         private static void RemoveExisting(DaggerfallTerrain terrain)
@@ -253,12 +312,17 @@ namespace DeepWaters
             var visual = terrain.transform.Find(VisualChildName);
             if (visual != null)
             {
-                var meshFilter = visual.GetComponent<MeshFilter>();
-                if (meshFilter != null &&
-                    meshFilter.sharedMesh != null &&
-                    meshFilter.sharedMesh.name == GeneratedMeshName)
+                var destroyedMeshes = new HashSet<Mesh>();
+                MeshFilter[] meshFilters = visual.GetComponentsInChildren<MeshFilter>(true);
+                for (int i = 0; i < meshFilters.Length; i++)
                 {
-                    Object.Destroy(meshFilter.sharedMesh);
+                    Mesh mesh = meshFilters[i].sharedMesh;
+                    if (mesh != null &&
+                        mesh.name == GeneratedMeshName &&
+                        destroyedMeshes.Add(mesh))
+                    {
+                        Object.Destroy(mesh);
+                    }
                 }
 
                 Object.Destroy(visual.gameObject);

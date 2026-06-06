@@ -9,24 +9,28 @@ namespace DeepWaters
 {
     internal static class WaterSurfaceResources
     {
+        private const string TopSurfaceShaderName = "DeepWaters/TransparentWaterSurfaceTop";
+        private const string TopSurfaceShaderAssetName = "TransparentWaterSurfaceTop.shader";
+        private const string UndersideSurfaceShaderName = "DeepWaters/TransparentWaterSurfaceUnderside";
+        private const string UndersideSurfaceShaderAssetName = "TransparentWaterSurfaceUnderside.shader";
+        private const string TransparentRenderType = "Transparent";
+        private const float LegacyOpaqueFadeDisabledStart = 100000f;
+
         private static readonly int ColorProperty = Shader.PropertyToID("_Color");
         private static readonly int UndersideAlphaProperty = Shader.PropertyToID("_UndersideAlpha");
-        private static readonly int UndersideFogTintProperty = Shader.PropertyToID("_UndersideFogTint");
         private static readonly int UnderwaterFogColorProperty = Shader.PropertyToID("_UnderwaterFogColor");
         private static readonly int WaterColumnDepthProperty = Shader.PropertyToID("_WaterColumnDepth");
         private static readonly int WaterColumnFogDepthProperty = Shader.PropertyToID("_WaterColumnFogDepth");
         private static readonly int WaterColumnFogStrengthProperty = Shader.PropertyToID("_WaterColumnFogStrength");
-        private static readonly int SurfaceOpaqueFadeStartProperty = Shader.PropertyToID("_SurfaceOpaqueFadeStart");
-        private static readonly int SurfaceOpaqueFadeEndProperty = Shader.PropertyToID("_SurfaceOpaqueFadeEnd");
-        private const string TransparentRenderType = "Transparent";
 
         private static Mesh sharedFlatMesh;
-        private static Material sharedWaterMaterial;
+        private static Material sharedTopMaterial;
+        private static Material sharedUndersideMaterial;
         private static Texture sharedSurfaceTexture;
         private static readonly Color SurfaceTint = new Color(0.34f, 0.55f, 0.58f, 1f);
-        private static readonly Color OpaqueSurfaceColor = new Color(0.045f, 0.22f, 0.30f, 1f);
+        private static readonly Color FallbackSurfaceColor = new Color(0.045f, 0.22f, 0.30f, 1f);
+
         public const float SurfaceTextureTiling = 128f;
-        private const float LegacyOpaqueFadeDisabledStart = 100000f;
 
         public static Mesh GetFlatMesh()
         {
@@ -56,33 +60,56 @@ namespace DeepWaters
 
         public static Material GetSharedMaterial()
         {
-            ApplyMaterialSettings();
-            return sharedWaterMaterial;
+            return GetTopMaterial();
         }
 
         public static Material GetMaterial()
         {
-            if (sharedWaterMaterial != null)
+            return GetTopMaterial();
+        }
+
+        public static Material GetTopMaterial()
+        {
+            if (sharedTopMaterial == null)
             {
-                ApplyMaterialSettings();
-                return sharedWaterMaterial;
+                sharedTopMaterial = CreateMaterial(
+                    TopSurfaceShaderName,
+                    TopSurfaceShaderAssetName,
+                    "DeepWaters.WaterSurface.Top");
             }
 
-            Shader shader = LoadShader();
-            if (shader == null)
-                return null;
-
-            sharedWaterMaterial = new Material(shader) { name = "DeepWaters.WaterSurface" };
-            ApplyBaseTexture(sharedWaterMaterial);
             ApplyMaterialSettings();
-            return sharedWaterMaterial;
+            return sharedTopMaterial;
+        }
+
+        public static Material GetUndersideMaterial()
+        {
+            if (sharedUndersideMaterial == null)
+            {
+                sharedUndersideMaterial = CreateMaterial(
+                    UndersideSurfaceShaderName,
+                    UndersideSurfaceShaderAssetName,
+                    "DeepWaters.WaterSurface.Underside");
+            }
+
+            ApplyMaterialSettings();
+            return sharedUndersideMaterial;
+        }
+
+        public static bool IsTopSurfaceVisible()
+        {
+            return DeepWaters.Instance != null &&
+                   DeepWaters.Instance.WaterSurfaceTopAlpha > 0.001f;
+        }
+
+        public static bool IsUndersideSurfaceVisible()
+        {
+            return DeepWaters.Instance != null &&
+                   DeepWaters.Instance.WaterSurfaceBottomAlpha > 0.001f;
         }
 
         public static Texture GetSurfaceTexture()
         {
-            if (sharedWaterMaterial != null && sharedWaterMaterial.mainTexture != null)
-                return sharedWaterMaterial.mainTexture;
-
             if (sharedSurfaceTexture != null)
                 return sharedSurfaceTexture;
 
@@ -97,83 +124,106 @@ namespace DeepWaters
 
         public static void ApplyMaterialSettings()
         {
-            if (sharedWaterMaterial == null || DeepWaters.Instance == null)
+            if (DeepWaters.Instance == null)
                 return;
 
-            sharedWaterMaterial.SetOverrideTag("RenderType", TransparentRenderType);
-            sharedWaterMaterial.renderQueue = (int)RenderQueue.Transparent;
-
-            if (sharedWaterMaterial.HasProperty(ColorProperty))
-            {
-                Color color = sharedWaterMaterial.GetColor(ColorProperty);
-                color.r = SurfaceTint.r;
-                color.g = SurfaceTint.g;
-                color.b = SurfaceTint.b;
-                color.a = DeepWaters.Instance.WaterSurfaceTopAlpha;
-                sharedWaterMaterial.SetColor(ColorProperty, color);
-            }
-
-            if (sharedWaterMaterial.HasProperty(UndersideAlphaProperty))
-                sharedWaterMaterial.SetFloat(UndersideAlphaProperty, DeepWaters.Instance.WaterSurfaceBottomAlpha);
-
-            if (sharedWaterMaterial.HasProperty(UndersideFogTintProperty))
-                sharedWaterMaterial.SetFloat(UndersideFogTintProperty, GetUndersideFogTint());
-
-            if (sharedWaterMaterial.HasProperty(UnderwaterFogColorProperty))
-                sharedWaterMaterial.SetColor(UnderwaterFogColorProperty, DeepWaters.GetUnderwaterFogColor());
-
-            if (sharedWaterMaterial.HasProperty(WaterColumnDepthProperty))
-                sharedWaterMaterial.SetFloat(WaterColumnDepthProperty, Mathf.Max(1f, DeepWaters.Instance.WaterDepth));
-
-            if (sharedWaterMaterial.HasProperty(WaterColumnFogDepthProperty))
-                sharedWaterMaterial.SetFloat(WaterColumnFogDepthProperty, GetWaterColumnFogDepth());
-
-            if (sharedWaterMaterial.HasProperty(WaterColumnFogStrengthProperty))
-                sharedWaterMaterial.SetFloat(WaterColumnFogStrengthProperty, GetWaterColumnFogStrength());
-
-            float fadeStart;
-            float fadeEnd;
-            GetSurfaceOpaqueFadeRange(out fadeStart, out fadeEnd);
-
-            if (sharedWaterMaterial.HasProperty(SurfaceOpaqueFadeStartProperty))
-                sharedWaterMaterial.SetFloat(SurfaceOpaqueFadeStartProperty, fadeStart);
-
-            if (sharedWaterMaterial.HasProperty(SurfaceOpaqueFadeEndProperty))
-                sharedWaterMaterial.SetFloat(SurfaceOpaqueFadeEndProperty, fadeEnd);
+            ConfigureTopMaterial(sharedTopMaterial);
+            ConfigureUndersideMaterial(sharedUndersideMaterial);
         }
 
-        private static Shader LoadShader()
+        private static Material CreateMaterial(string shaderName, string shaderAssetName, string materialName)
         {
-            // In the editor/project workspace, prefer the source shader so
-            // visual iteration is not pinned to an older dfmod-bundled asset.
-            Shader shader = Shader.Find("DeepWaters/StenciledWaterSurface");
+            Shader shader = LoadShader(shaderName, shaderAssetName);
+            if (shader == null)
+                return null;
 
-            if (DeepWaters.Mod != null)
-            {
-                Shader bundled = DeepWaters.Mod.GetAsset<Shader>("StenciledWaterSurface.shader");
-                if (shader == null)
-                    shader = bundled;
-            }
+            Material material = new Material(shader) { name = materialName };
+            ConfigureTransparentMaterial(material);
+            ApplyBaseTexture(material);
+            return material;
+        }
+
+        private static Shader LoadShader(string shaderName, string shaderAssetName)
+        {
+            Shader shader = Shader.Find(shaderName);
+
+            if (shader == null && DeepWaters.Mod != null)
+                shader = DeepWaters.Mod.GetAsset<Shader>(shaderAssetName);
 
             if (shader == null)
-                Debug.LogError("[DeepWaters] DeepWaters/StenciledWaterSurface shader not found. Water surfaces will not render.");
+            {
+                Debug.LogError(
+                    "[DeepWaters] " + shaderName + " shader not found. Water surfaces will not render.");
+            }
 
             return shader;
         }
 
+        private static void ConfigureTopMaterial(Material material)
+        {
+            if (material == null || DeepWaters.Instance == null)
+                return;
+
+            ConfigureTransparentMaterial(material);
+
+            if (material.HasProperty(ColorProperty))
+            {
+                Color color = SurfaceTint;
+                color.a = DeepWaters.Instance.WaterSurfaceTopAlpha;
+                material.SetColor(ColorProperty, color);
+            }
+
+            ApplySharedWaterProperties(material);
+        }
+
+        private static void ConfigureUndersideMaterial(Material material)
+        {
+            if (material == null || DeepWaters.Instance == null)
+                return;
+
+            ConfigureTransparentMaterial(material);
+
+            if (material.HasProperty(ColorProperty))
+                material.SetColor(ColorProperty, SurfaceTint);
+
+            if (material.HasProperty(UndersideAlphaProperty))
+                material.SetFloat(UndersideAlphaProperty, DeepWaters.Instance.WaterSurfaceBottomAlpha);
+
+            ApplySharedWaterProperties(material);
+        }
+
+        private static void ApplySharedWaterProperties(Material material)
+        {
+            if (material.HasProperty(UnderwaterFogColorProperty))
+                material.SetColor(UnderwaterFogColorProperty, DeepWaters.GetUnderwaterFogColor());
+
+            if (material.HasProperty(WaterColumnDepthProperty))
+                material.SetFloat(WaterColumnDepthProperty, Mathf.Max(1f, DeepWaters.Instance.WaterDepth));
+
+            if (material.HasProperty(WaterColumnFogDepthProperty))
+                material.SetFloat(WaterColumnFogDepthProperty, GetWaterColumnFogDepth());
+
+            if (material.HasProperty(WaterColumnFogStrengthProperty))
+                material.SetFloat(WaterColumnFogStrengthProperty, GetWaterColumnFogStrength());
+        }
+
+        private static void ConfigureTransparentMaterial(Material material)
+        {
+            material.SetOverrideTag("RenderType", TransparentRenderType);
+            material.renderQueue = (int)RenderQueue.Transparent;
+        }
+
         private static void ApplyBaseTexture(Material material)
         {
-            Texture2D waterTex = LoadWaterTexture();
-            if (waterTex == null)
+            Texture surfaceTexture = GetSurfaceTexture();
+            if (surfaceTexture == null)
             {
-                material.color = OpaqueSurfaceColor;
+                material.color = FallbackSurfaceColor;
                 return;
             }
 
-            ApplyWaterTextureSettings(waterTex);
-            material.mainTexture = waterTex;
+            material.mainTexture = surfaceTexture;
             material.mainTextureScale = new Vector2(SurfaceTextureTiling, SurfaceTextureTiling);
-            sharedSurfaceTexture = waterTex;
         }
 
         private static Texture2D LoadWaterTexture()
@@ -199,7 +249,9 @@ namespace DeepWaters
 
         private static float GetWaterColumnFogDepth()
         {
-            return Mathf.Max(2f, DeepWaters.Instance.WaterDepth * DeepWaters.Instance.UnderwaterFogDistanceMultiplier);
+            return Mathf.Max(
+                2f,
+                DeepWaters.Instance.WaterDepth * DeepWaters.Instance.UnderwaterFogDistanceMultiplier);
         }
 
         private static float GetWaterColumnFogStrength()
@@ -207,18 +259,10 @@ namespace DeepWaters
             return Mathf.Clamp01(DeepWaters.Instance.UnderwaterFogStrength);
         }
 
-        private static float GetUndersideFogTint()
-        {
-            return Mathf.Clamp01(DeepWaters.Instance.UnderwaterFogStrength * 0.9f);
-        }
-
         internal static void GetSurfaceOpaqueFadeRange(out float fadeStart, out float fadeEnd)
         {
-            // Legacy bundled versions of StenciledWaterSurface used these
-            // values to lerp the top surface back to full opacity with view
-            // distance. Keep the properties effectively disabled so top
-            // transparency is controlled by _Color.a even if that older shader
-            // asset is the one Unity resolves at runtime.
+            // Retained for older integrations that still probe this helper.
+            // The split top/underside shaders do not use distance opacity.
             fadeStart = LegacyOpaqueFadeDisabledStart;
             fadeEnd = LegacyOpaqueFadeDisabledStart + 1f;
         }

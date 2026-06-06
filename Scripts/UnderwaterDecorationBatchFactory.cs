@@ -28,12 +28,12 @@ namespace DeepWaters
         // the material's authored size.
         internal const float DecorationScaleMin = 0.70f;
         internal const float DecorationScaleMax = 1.20f;
-        private const string UnderwaterDecorationShaderName = "DeepWaters/UnderwaterBillboardBatch";
         private const string TransparentCutoutRenderType = "TransparentCutout";
-        private const float UnderwaterDecorationBrightness = 1.75f;
+        private static readonly Color UnderwaterDecorationColor = new Color(1.12f, 1.12f, 1.12f, 1f);
+        private static readonly Color UnderwaterDecorationEmissionLift = new Color(0.08f, 0.08f, 0.08f, 1f);
         private static readonly int ColorProperty = Shader.PropertyToID("_Color");
         private static readonly int CutoffProperty = Shader.PropertyToID("_Cutoff");
-        private static readonly int BrightnessProperty = Shader.PropertyToID("_Brightness");
+        private static readonly int EmissionColorProperty = Uniforms.EmissionColor;
 
         public static void Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {
@@ -319,21 +319,17 @@ namespace DeepWaters
             if (material == null)
                 return;
 
-            Shader shader = Shader.Find(UnderwaterDecorationShaderName);
-            if (shader != null)
-                material.shader = shader;
-
             material.SetOverrideTag("RenderType", TransparentCutoutRenderType);
             material.renderQueue = (int)RenderQueue.AlphaTest;
 
             if (material.HasProperty(ColorProperty))
-                material.SetColor(ColorProperty, Color.white);
+                material.SetColor(ColorProperty, UnderwaterDecorationColor);
 
             if (material.HasProperty(CutoffProperty))
                 material.SetFloat(CutoffProperty, 0.5f);
 
-            if (material.HasProperty(BrightnessProperty))
-                material.SetFloat(BrightnessProperty, UnderwaterDecorationBrightness);
+            if (material.HasProperty(EmissionColorProperty))
+                material.SetColor(EmissionColorProperty, UnderwaterDecorationEmissionLift);
         }
 
         private sealed class AnimatedDecorationBatch : MonoBehaviour
@@ -420,16 +416,31 @@ namespace DeepWaters
 
             private static Material CreateBatchMaterial(Material sourceMaterial)
             {
-                Shader shader = Shader.Find(UnderwaterDecorationShaderName);
-                if (shader == null)
-                    shader = Shader.Find(MaterialReader._DaggerfallBillboardBatchNoShadowsShaderName);
+                Shader shader = Shader.Find(MaterialReader._DaggerfallBillboardBatchNoShadowsShaderName);
                 if (shader == null)
                     return null;
 
                 Material material = new Material(shader);
                 material.mainTexture = sourceMaterial.mainTexture;
+                CopyOptionalTexture(sourceMaterial, material, Uniforms.BumpMap);
+                CopyOptionalTexture(sourceMaterial, material, Uniforms.EmissionMap);
                 ConfigureUnderwaterDecorationMaterial(material);
                 return material;
+            }
+
+            private static void CopyOptionalTexture(Material sourceMaterial, Material targetMaterial, int propertyId)
+            {
+                if (sourceMaterial == null ||
+                    targetMaterial == null ||
+                    !sourceMaterial.HasProperty(propertyId) ||
+                    !targetMaterial.HasProperty(propertyId))
+                {
+                    return;
+                }
+
+                Texture texture = sourceMaterial.GetTexture(propertyId);
+                if (texture != null)
+                    targetMaterial.SetTexture(propertyId, texture);
             }
 
             private void BuildMesh(

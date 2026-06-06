@@ -13,14 +13,13 @@ namespace DeepWaters
     /// Listens to DaggerfallTerrain promotion. For ocean-connected tiles:
     ///   1. Attaches a <see cref="DeepWaterTileData"/> cache (climate +
     ///      distance-to-coast field).
-    ///   2. Computes a hole mask and ENQUEUES it via
-    ///      <see cref="DeepWaterHoleApplier"/>. The actual SetHoles call
-    ///      happens on a calm post-streaming frame — synchronous SetHoles
-    ///      during promotion native-crashes the player runtime.
+    ///   2. Computes a hole mask and enqueues it through
+    ///      <see cref="DeepWaterHoleApplier"/>. The applier writes on a later
+    ///      frame so Unity terrain holes do not race DFU's location load.
     ///   3. Spawns a <see cref="DeepWaterFloorMesh"/> child immediately. The
     ///      sub-mesh is independent of SetHoles and renders correctly even
     ///      before the hole applies; vanilla terrain may briefly occlude it
-    ///      from above until the hole punches through (~1 frame later).
+    ///      from above until the hole punches through.
     /// </summary>
     public static class DeepWaterFloorBuilder
     {
@@ -256,6 +255,7 @@ namespace DeepWaters
                                 dfTerrain, dfTerrain.MapData.heightmapSamples))
                         {
                             // State A: fully current.
+                            UpdateTerrainCapRenderer(dfTerrain);
                             return;
                         }
 
@@ -295,9 +295,9 @@ namespace DeepWaters
                 return;
             }
 
-            // Carve the vanilla terrain. The genuine promote event carves
-            // synchronously in the pre-first-render window; the forced
-            // refresh path never re-carves (the tile is already carved).
+            // Carve the vanilla terrain through the applier. Even genuine
+            // promote events can overlap coastal location creation on Unity
+            // 2019.4; the applier owns the narrow safe timing window.
             if (DiagTrace)
                 Debug.Log("[DeepWaters.DIAG] carve>> " + DiagCtx(dfTerrain, fromPromoteEvent));
             ApplyHoleMask(dfTerrain, terrainData, holes, fromPromoteEvent);
@@ -311,6 +311,7 @@ namespace DeepWaters
                 // mask back through the applier so the GPU catches up.
                 // Skip BuildOrRefreshFloor and skip the OnFloorRefreshed
                 // event so decorations stay anchored.
+                UpdateTerrainCapRenderer(dfTerrain);
                 return;
             }
 
@@ -323,6 +324,7 @@ namespace DeepWaters
                     Debug.Log("[DeepWaters.DIAG] mesh<< tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + ")");
                 // Fire the OnFloorRefreshed signal so UnderwaterDecorations
                 // (and any other newer subsystems) can queue per-tile work.
+                UpdateTerrainCapRenderer(dfTerrain);
                 RaiseFloorRefreshed(dfTerrain);
             }
             else
@@ -663,6 +665,7 @@ namespace DeepWaters
         private static void RemoveFloor(DaggerfallTerrain dfTerrain)
         {
             if (dfTerrain == null) return;
+            DeepWaterTerrainCapRenderer.Restore(dfTerrain);
             Transform existing = dfTerrain.transform.Find(FloorChildName);
             if (existing == null) return;
 
@@ -672,15 +675,13 @@ namespace DeepWaters
             Object.Destroy(existing.gameObject);
         }
 
-        // Deferred carve: enqueue the mask for the applier's drain instead of
-        // carving at the promote event. Deferred keeps the terrain LOD
-        // hole-UNAWARE, which is the ONLY way to surface near shore without the
-        // render-thread crash (immediate carve builds a hole-aware LOD that
-        // crashes when it re-subdivides on surfacing, and the LOD can't be
-        // pre-locked — setting it crashes too, v0.55.17). Deferred's remaining
-        // problem is a LOAD crash the minimal working build does NOT have, so
-        // v0.55.19 runs with DeepWaters.LeanMode on (extra subsystems off) to
-        // isolate whether that crash is a subsystem or the core carve/mesh path.
+        private static void UpdateTerrainCapRenderer(DaggerfallTerrain dfTerrain)
+        {
+            DeepWaterTerrainCapRenderer.Apply(
+                dfTerrain,
+                DeepWaterTerrainCapRenderer.ShouldHidePureOceanCap(dfTerrain));
+        }
+
         private static void ApplyHoleMask(DaggerfallTerrain dfTerrain, TerrainData terrainData, bool[,] holes, bool fromPromoteEvent)
         {
             DeepWaterHoleApplier applier = DeepWaterHoleApplier.Instance;
@@ -696,7 +697,6 @@ namespace DeepWaters
             if (!DeepWaterHoleApplier.HasTouchedTerrainData(terrainData))
                 return;
 
-            // Deferred reset, same as the carve path.
             DeepWaterHoleApplier applier = DeepWaterHoleApplier.Instance;
             if (applier != null)
                 applier.EnqueueSolidReset(dfTerrain, terrainData, reason);
