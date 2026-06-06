@@ -608,9 +608,7 @@ namespace DeepWaters
                         continue;
 
                     float fracX = (hx + 0.5f) * invHoleRes;
-                    bool localWater = DeepWaterWaterClassification.IsHoleCellWater(
-                        dfTerrain.MapData, hx, hy, holeRes);
-                    bool isWater = localWater;
+                    bool isWater = true;
                     if (isWater && useBakeMask)
                     {
                         isWater = DeepWaterDistanceBake.IsCarvedWater(

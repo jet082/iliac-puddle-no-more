@@ -6,6 +6,8 @@ using DaggerfallConnect.Arena2;
 using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Utility;
+using Unity.Collections;
+using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -26,6 +28,12 @@ namespace DeepWaters
         // the material's authored size.
         internal const float DecorationScaleMin = 0.70f;
         internal const float DecorationScaleMax = 1.20f;
+        private const string UnderwaterDecorationShaderName = "DeepWaters/UnderwaterBillboardBatch";
+        private const string TransparentCutoutRenderType = "TransparentCutout";
+        private const float UnderwaterDecorationBrightness = 1.75f;
+        private static readonly int ColorProperty = Shader.PropertyToID("_Color");
+        private static readonly int CutoffProperty = Shader.PropertyToID("_Cutoff");
+        private static readonly int BrightnessProperty = Shader.PropertyToID("_Brightness");
 
         public static void Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {
@@ -86,12 +94,10 @@ namespace DeepWaters
             batch.gameObject.name = "DeepWaters_DecorationArchiveBatch_" + archive;
             ApplyArchiveAnimationSpeed(batch, archive);
 
-#pragma warning disable 0618
-            for (int i = 0; i < positions.Count; i++)
-                batch.AddItem(positions[i]);
-#pragma warning restore 0618
+            AddArchiveItems(batch, positions);
 
             batch.Apply();
+            ApplyUnderwaterDecorationMaterial(batch.GetComponent<MeshRenderer>());
             DeepWaterRendering.DisableShadows(batch.gameObject);
         }
 
@@ -159,17 +165,10 @@ namespace DeepWaters
                 "DeepWaters_DecorationReplacementBatch_" + record.Archive + "_" + record.Record;
             batch.SetMaterial(info.Material);
 
-#pragma warning disable 0618
-            for (int i = 0; i < positions.Count; i++)
-            {
-                float sizeFactor = Random.Range(DecorationScaleMin, DecorationScaleMax);
-                float scaleValue = (sizeFactor - 1f) * BlocksFile.ScaleDivisor;
-                Vector2 scale = new Vector2(scaleValue, scaleValue);
-                batch.AddItem(info.Rect, info.BatchSize, scale, positions[i]);
-            }
-#pragma warning restore 0618
+            AddReplacementItems(batch, positions, info);
 
             batch.Apply();
+            ApplyUnderwaterDecorationMaterial(batch.GetComponent<MeshRenderer>());
             DeepWaterRendering.DisableShadows(batch.gameObject);
         }
 
@@ -249,6 +248,92 @@ namespace DeepWaters
             float framesPerSecond;
             if (UnderwaterDecorationCatalog.TryGetFramesPerSecond(archive, out framesPerSecond))
                 batch.FramesPerSecond = framesPerSecond;
+        }
+
+        private static void AddArchiveItems(
+            DaggerfallBillboardBatch batch,
+            List<DaggerfallBillboardBatch.BasicInfo> positions)
+        {
+            if (batch == null || positions == null || positions.Count == 0)
+                return;
+
+            var items = new NativeArray<DaggerfallBillboardBatch.BasicInfo>(positions.Count, Allocator.TempJob);
+            try
+            {
+                for (int i = 0; i < positions.Count; i++)
+                    items[i] = positions[i];
+
+                batch.AddItemsAsync(items).Complete();
+            }
+            finally
+            {
+                if (items.IsCreated)
+                    items.Dispose();
+            }
+        }
+
+        private static void AddReplacementItems(
+            DaggerfallBillboardBatch batch,
+            List<Vector3> positions,
+            UnderwaterDecorationReplacementInfo info)
+        {
+            if (batch == null || positions == null || positions.Count == 0)
+                return;
+
+            var items = new NativeArray<DaggerfallBillboardBatch.CustomInfo>(positions.Count, Allocator.TempJob);
+            try
+            {
+                for (int i = 0; i < positions.Count; i++)
+                {
+                    float sizeFactor = UnityEngine.Random.Range(DecorationScaleMin, DecorationScaleMax);
+                    float scaleValue = (sizeFactor - 1f) * BlocksFile.ScaleDivisor;
+                    Vector3 localPosition = positions[i];
+                    items[i] = new DaggerfallBillboardBatch.CustomInfo
+                    {
+                        rect = info.Rect,
+                        size = new float2(info.BatchSize.x, info.BatchSize.y),
+                        scale = new float2(scaleValue, scaleValue),
+                        localPosition = new float3(localPosition.x, localPosition.y, localPosition.z),
+                    };
+                }
+
+                batch.AddItemsAsync(items).Complete();
+            }
+            finally
+            {
+                if (items.IsCreated)
+                    items.Dispose();
+            }
+        }
+
+        private static void ApplyUnderwaterDecorationMaterial(Renderer renderer)
+        {
+            if (renderer == null)
+                return;
+
+            ConfigureUnderwaterDecorationMaterial(renderer.sharedMaterial);
+        }
+
+        private static void ConfigureUnderwaterDecorationMaterial(Material material)
+        {
+            if (material == null)
+                return;
+
+            Shader shader = Shader.Find(UnderwaterDecorationShaderName);
+            if (shader != null)
+                material.shader = shader;
+
+            material.SetOverrideTag("RenderType", TransparentCutoutRenderType);
+            material.renderQueue = (int)RenderQueue.AlphaTest;
+
+            if (material.HasProperty(ColorProperty))
+                material.SetColor(ColorProperty, Color.white);
+
+            if (material.HasProperty(CutoffProperty))
+                material.SetFloat(CutoffProperty, 0.5f);
+
+            if (material.HasProperty(BrightnessProperty))
+                material.SetFloat(BrightnessProperty, UnderwaterDecorationBrightness);
         }
 
         private sealed class AnimatedDecorationBatch : MonoBehaviour
@@ -335,12 +420,15 @@ namespace DeepWaters
 
             private static Material CreateBatchMaterial(Material sourceMaterial)
             {
-                Shader shader = Shader.Find(MaterialReader._DaggerfallBillboardBatchNoShadowsShaderName);
+                Shader shader = Shader.Find(UnderwaterDecorationShaderName);
+                if (shader == null)
+                    shader = Shader.Find(MaterialReader._DaggerfallBillboardBatchNoShadowsShaderName);
                 if (shader == null)
                     return null;
 
                 Material material = new Material(shader);
                 material.mainTexture = sourceMaterial.mainTexture;
+                ConfigureUnderwaterDecorationMaterial(material);
                 return material;
             }
 
@@ -380,7 +468,7 @@ namespace DeepWaters
                         cachedMaterial.recordScales[record]);
                     Vector3 origin = item.LocalPosition + new Vector3(0f, size.y * 0.5f, 0f);
                     int frameCount = Mathf.Max(1, cachedMaterial.atlasFrameCounts[record]);
-                    int startFrame = frameCount > 1 ? Random.Range(0, frameCount) : 0;
+                    int startFrame = frameCount > 1 ? UnityEngine.Random.Range(0, frameCount) : 0;
 
                     records[i] = record;
                     currentFrames[i] = startFrame;

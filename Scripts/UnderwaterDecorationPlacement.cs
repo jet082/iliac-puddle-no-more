@@ -201,6 +201,9 @@ namespace DeepWaters
             float worldZ,
             out float seafloorLocalY)
         {
+            if (floorMesh != null && floorMesh.TrySampleMeshLocalY(worldX, worldZ, out seafloorLocalY))
+                return true;
+
             if (DeepWaterWorld.TryGetRenderedSeafloorLocalY(column, worldX, worldZ, out seafloorLocalY))
                 return true;
 
@@ -236,6 +239,9 @@ namespace DeepWaters
             float oceanLocalY,
             out float seafloorLocalY)
         {
+            if (floorMesh != null && floorMesh.TrySampleMeshLocalY(worldX, worldZ, out seafloorLocalY))
+                return seafloorLocalY < oceanLocalY - MinimumSeafloorDepth;
+
             DeepWaterColumn column;
             if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
             {

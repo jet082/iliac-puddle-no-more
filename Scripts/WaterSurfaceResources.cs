@@ -26,12 +26,7 @@ namespace DeepWaters
         private static readonly Color SurfaceTint = new Color(0.34f, 0.55f, 0.58f, 1f);
         private static readonly Color OpaqueSurfaceColor = new Color(0.045f, 0.22f, 0.30f, 1f);
         public const float SurfaceTextureTiling = 128f;
-        private const float NearOpaqueFadeStart = 42f;
-        private const float FarOpaqueFadeStart = 90f;
-        private const float NearOpaqueFadeEnd = 130f;
-        private const float FarOpaqueFadeEnd = 240f;
-        private const float SlowDistanceFalloffSpanScale = 1.85f;
-        private const float FastDistanceFalloffSpanScale = 0.45f;
+        private const float LegacyOpaqueFadeDisabledStart = 100000f;
 
         public static Mesh GetFlatMesh()
         {
@@ -219,24 +214,13 @@ namespace DeepWaters
 
         internal static void GetSurfaceOpaqueFadeRange(out float fadeStart, out float fadeEnd)
         {
-            float transparency = DeepWaters.Instance != null
-                ? Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceTopTransparency)
-                : 0.5f;
-            float falloff = DeepWaters.Instance != null
-                ? Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff)
-                : 0.5f;
-
-            fadeStart = Mathf.Lerp(NearOpaqueFadeStart, FarOpaqueFadeStart, transparency);
-            float baseFadeEnd = Mathf.Lerp(NearOpaqueFadeEnd, FarOpaqueFadeEnd, transparency);
-            float baseSpan = Mathf.Max(1f, baseFadeEnd - fadeStart);
-            float spanScale = falloff <= 0.5f
-                ? Mathf.Lerp(SlowDistanceFalloffSpanScale, 1f, falloff / 0.5f)
-                : Mathf.Lerp(1f, FastDistanceFalloffSpanScale, (falloff - 0.5f) / 0.5f);
-
-            fadeEnd = fadeStart + baseSpan * spanScale;
-
-            if (fadeEnd < fadeStart + 1f)
-                fadeEnd = fadeStart + 1f;
+            // Legacy bundled versions of StenciledWaterSurface used these
+            // values to lerp the top surface back to full opacity with view
+            // distance. Keep the properties effectively disabled so top
+            // transparency is controlled by _Color.a even if that older shader
+            // asset is the one Unity resolves at runtime.
+            fadeStart = LegacyOpaqueFadeDisabledStart;
+            fadeEnd = LegacyOpaqueFadeDisabledStart + 1f;
         }
     }
 }

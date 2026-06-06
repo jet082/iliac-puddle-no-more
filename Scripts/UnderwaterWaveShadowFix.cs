@@ -354,7 +354,9 @@ namespace DeepWaters
 
             return shaderName.Equals(ComeSailAwayWaveShaderName, StringComparison.OrdinalIgnoreCase) ||
                    shaderName.IndexOf(ComeSailAwayBillboardWaterShaderName, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   shaderName.IndexOf(AnimatedWaterShaderName, StringComparison.OrdinalIgnoreCase) >= 0;
+                   shaderName.IndexOf(AnimatedWaterShaderName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   shaderName.IndexOf("Water", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   shaderName.IndexOf("Wave", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static bool IsKnownExternalWaterMaterial(string materialName)
@@ -364,7 +366,9 @@ namespace DeepWaters
 
             return materialName.Equals(AnimatedWaterMaterialName, StringComparison.OrdinalIgnoreCase) ||
                    materialName.IndexOf(AnimatedWaterMaterialName + " ", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   materialName.IndexOf("CurrentMaterial", StringComparison.OrdinalIgnoreCase) >= 0;
+                   materialName.IndexOf("CurrentMaterial", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   materialName.IndexOf("Water", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   materialName.IndexOf("Wave", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void ExpandWaveMeshBounds(MeshFilter filter)

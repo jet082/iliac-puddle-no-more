@@ -77,6 +77,7 @@
         "Assets/Game/Mods/deep-waters/Shaders/StenciledWaterSurface.shader",
         "Assets/Game/Mods/deep-waters/Shaders/UnderwaterDistanceFog.shader",
         "Assets/Game/Mods/deep-waters/Shaders/DeepWaterSeafloor.shader",
+        "Assets/Game/Mods/deep-waters/Shaders/UnderwaterBillboardBatch.shader",
         "Assets/Game/Mods/deep-waters/Scripts/PassiveFishResources.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWatersApi.cs",
         "Assets/Game/Mods/deep-waters/Resources/DistanceBake.bytes"
