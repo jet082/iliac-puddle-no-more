@@ -3,6 +3,7 @@
 
 using DaggerfallWorkshop;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace DeepWaters
 {
@@ -17,6 +18,7 @@ namespace DeepWaters
         private static readonly int WaterColumnFogStrengthProperty = Shader.PropertyToID("_WaterColumnFogStrength");
         private static readonly int SurfaceOpaqueFadeStartProperty = Shader.PropertyToID("_SurfaceOpaqueFadeStart");
         private static readonly int SurfaceOpaqueFadeEndProperty = Shader.PropertyToID("_SurfaceOpaqueFadeEnd");
+        private const string TransparentRenderType = "Transparent";
 
         private static Mesh sharedFlatMesh;
         private static Material sharedWaterMaterial;
@@ -102,6 +104,9 @@ namespace DeepWaters
         {
             if (sharedWaterMaterial == null || DeepWaters.Instance == null)
                 return;
+
+            sharedWaterMaterial.SetOverrideTag("RenderType", TransparentRenderType);
+            sharedWaterMaterial.renderQueue = (int)RenderQueue.Transparent;
 
             if (sharedWaterMaterial.HasProperty(ColorProperty))
             {

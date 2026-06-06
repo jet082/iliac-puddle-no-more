@@ -32,8 +32,6 @@ namespace DeepWaters
 
         private static readonly Dictionary<UnderwaterDecorationRecord, float> authoredVisualHeightCache =
             new Dictionary<UnderwaterDecorationRecord, float>();
-        private static readonly Dictionary<UnderwaterDecorationRecord, float> floorAnchorOffsetCache =
-            new Dictionary<UnderwaterDecorationRecord, float>();
 
         public static List<UnderwaterDecorationPlacementInfo> BuildPositions(
             DaggerfallTerrain dfTerrain,
@@ -98,8 +96,7 @@ namespace DeepWaters
                 float visualHeight;
                 if (!TryGetDecorationVisualHeight(record, out visualHeight)) continue;
 
-                float billboardBaseLocalY = seafloorLocalY + SeafloorClearance -
-                    GetDecorationFloorAnchorOffset(record, visualHeight);
+                float billboardBaseLocalY = seafloorLocalY + SeafloorClearance;
                 if (billboardBaseLocalY >= oceanLocalY) continue;
                 if (!HasDecorationSurfaceClearance(billboardBaseLocalY, visualHeight, oceanLocalY)) continue;
 
@@ -132,142 +129,12 @@ namespace DeepWaters
             float visibleBottomWorldY,
             float scaleFactor)
         {
-            UnderwaterDecorationRecord decorationRecord = new UnderwaterDecorationRecord(archive, record);
-            float visualHeight;
-            if (!TryGetDecorationVisualHeight(decorationRecord, scaleFactor, out visualHeight))
-                return visibleBottomWorldY;
-
-            return visibleBottomWorldY - GetDecorationFloorAnchorOffset(decorationRecord, visualHeight);
-        }
-
-        private static float GetDecorationFloorAnchorOffset(UnderwaterDecorationRecord record, float visualHeight)
-        {
-            float authoredHeight;
-            if (!TryGetAuthoredDecorationVisualHeight(record, out authoredHeight) || authoredHeight <= 0f)
-                return 0f;
-
-            float authoredOffset = GetAuthoredDecorationFloorAnchorOffset(record, authoredHeight);
-            return Mathf.Clamp(authoredOffset * (visualHeight / authoredHeight), 0f, visualHeight);
-        }
-
-        private static float GetAuthoredDecorationFloorAnchorOffset(
-            UnderwaterDecorationRecord record,
-            float authoredHeight)
-        {
-            float offset;
-            if (floorAnchorOffsetCache.TryGetValue(record, out offset))
-                return offset;
-
-            offset = Mathf.Max(
-                TryGetVisibleBottomPadding(record, authoredHeight),
-                TryGetMetadataYOffset(record));
-
-            if (offset <= 0f && IsBubbleDecorationRecord(record))
-                offset = authoredHeight * 0.75f;
-
-            offset = Mathf.Clamp(offset, 0f, authoredHeight);
-            floorAnchorOffsetCache[record] = offset;
-            return offset;
+            return visibleBottomWorldY;
         }
 
         private static bool IsBubbleDecorationRecord(UnderwaterDecorationRecord record)
         {
             return record.Archive == 106;
-        }
-
-        private static float TryGetVisibleBottomPadding(UnderwaterDecorationRecord record, float visualHeight)
-        {
-            CachedMaterial cachedMaterial;
-            if (!TryGetArchiveCachedMaterial(record.Archive, out cachedMaterial) ||
-                cachedMaterial.material == null ||
-                cachedMaterial.material.mainTexture == null ||
-                cachedMaterial.atlasRects == null ||
-                cachedMaterial.atlasIndices == null ||
-                record.Record < 0 ||
-                record.Record >= cachedMaterial.atlasIndices.Length)
-            {
-                return 0f;
-            }
-
-            Texture2D texture = cachedMaterial.material.mainTexture as Texture2D;
-            if (texture == null)
-                return 0f;
-
-            RecordIndex index = cachedMaterial.atlasIndices[record.Record];
-            if (index.startIndex < 0 || index.startIndex >= cachedMaterial.atlasRects.Length)
-                return 0f;
-
-            Rect rect = cachedMaterial.atlasRects[index.startIndex];
-            int xMin = Mathf.Clamp(Mathf.FloorToInt(rect.xMin * texture.width), 0, texture.width - 1);
-            int xMax = Mathf.Clamp(Mathf.CeilToInt(rect.xMax * texture.width) - 1, 0, texture.width - 1);
-            int yMin = Mathf.Clamp(Mathf.FloorToInt(rect.yMin * texture.height), 0, texture.height - 1);
-            int yMax = Mathf.Clamp(Mathf.CeilToInt(rect.yMax * texture.height) - 1, 0, texture.height - 1);
-            if (xMax < xMin || yMax < yMin)
-                return 0f;
-
-            try
-            {
-                for (int y = yMin; y <= yMax; y++)
-                {
-                    for (int x = xMin; x <= xMax; x++)
-                    {
-                        if (texture.GetPixel(x, y).a > 0.1f)
-                        {
-                            float rectHeight = Mathf.Max(1f, yMax - yMin + 1);
-                            return ((y - yMin) / rectHeight) * visualHeight;
-                        }
-                    }
-                }
-            }
-            catch (UnityException)
-            {
-                return 0f;
-            }
-
-            return 0f;
-        }
-
-        private static float TryGetMetadataYOffset(UnderwaterDecorationRecord record)
-        {
-            CachedMaterial cachedMaterial;
-            if (!TryGetArchiveCachedMaterial(record.Archive, out cachedMaterial) ||
-                cachedMaterial.recordOffsets == null ||
-                record.Record < 0 ||
-                record.Record >= cachedMaterial.recordOffsets.Length)
-            {
-                return 0f;
-            }
-
-            return Mathf.Abs(cachedMaterial.recordOffsets[record.Record].y) * MeshReader.GlobalScale;
-        }
-
-        private static bool TryGetArchiveCachedMaterial(int archive, out CachedMaterial cachedMaterial)
-        {
-            cachedMaterial = new CachedMaterial();
-            DaggerfallUnity dfUnity = DaggerfallUnity.Instance;
-            if (dfUnity == null || dfUnity.MaterialReader == null)
-                return false;
-
-            if (dfUnity.MaterialReader.GetCachedMaterialAtlas(archive, out cachedMaterial))
-                return true;
-
-            Rect[] rects;
-            RecordIndex[] indices;
-            int atlasSize = DaggerfallUnity.Settings.AssetInjection ? 4096 : 2048;
-            dfUnity.MaterialReader.GetMaterialAtlas(
-                archive,
-                0,
-                4,
-                atlasSize,
-                out rects,
-                out indices,
-                4,
-                true,
-                0,
-                false,
-                true);
-
-            return dfUnity.MaterialReader.GetCachedMaterialAtlas(archive, out cachedMaterial);
         }
 
         private static bool TryGetDecorationVisualHeight(UnderwaterDecorationRecord record, out float visualHeight)

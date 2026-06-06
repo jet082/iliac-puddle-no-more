@@ -136,13 +136,9 @@ Shader "DeepWaters/StenciledWaterSurface"
                 float fogStrength = saturate(_WaterColumnFogStrength);
                 float waterTint = saturate((1.0 - exp2(-normalizedDepth * lerp(0.35, 1.6, fogStrength))) * fogStrength);
 
-                float viewDistance = length(i.worldPos - _WorldSpaceCameraPos);
-                float farOpacity = smoothstep(_SurfaceOpaqueFadeStart, max(_SurfaceOpaqueFadeStart + 1.0, _SurfaceOpaqueFadeEnd), viewDistance);
-                float finalOpacity = lerp(surfaceOpacity, max(surfaceOpacity, 0.72), farOpacity);
-
                 fixed4 col;
                 col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, waterTint * 0.35);
-                col.a = finalOpacity;
+                col.a = surfaceOpacity;
                 return col;
             }
             ENDCG

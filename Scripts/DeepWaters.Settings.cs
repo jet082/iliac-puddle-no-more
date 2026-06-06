@@ -20,7 +20,7 @@ namespace DeepWaters
         private const float MinimumUnderwaterVisionDistance = 22f;
         private const float MaximumUnderwaterVisionDistance = 260f;
         private const float OpaqueWaterSurfaceAlpha = 0.55f;
-        private const float MostTransparentWaterSurfaceAlpha = 0.08f;
+        private const float MostTransparentWaterSurfaceAlpha = 0.0f;
         private const float MinFogDistanceMultiplier = 0.25f;
         private const float MaxFogDistanceMultiplier = 6.0f;
         private const float MinSwimSpeedMultiplier = 0.25f;

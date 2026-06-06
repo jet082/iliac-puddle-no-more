@@ -11,12 +11,13 @@ using UnityEngine.Rendering;
 namespace DeepWaters
 {
     /// <summary>
-    /// Keeps third-party wave presentation consistent underwater. DFU's exterior
+    /// Keeps third-party wave presentation consistent around deep water. DFU's exterior
     /// IndirectLight and PlayerTorch are player-following point lights with no
     /// shadows, so they can wash out underwater contrast in a perfect local
-    /// radius. Third-party wave renderers are surface effects; from below they
-    /// can appear as opaque dither bands, so known wave meshes are hidden only
-    /// while submerged.
+    /// radius. Third-party wave renderers are surface effects; from above they
+    /// can hide Deep Waters' transparent surface, and from below they can appear
+    /// as opaque dither bands, so known wave meshes are hidden while the player
+    /// is in a deep-water outdoor area.
     /// </summary>
     [DefaultExecutionOrder(31000)]
     public class UnderwaterWaveShadowFix : MonoBehaviour
@@ -28,6 +29,10 @@ namespace DeepWaters
         private const string AnimatedWaterMaterialName = "PWater";
         private const float ScanInterval = 1.0f;
         private const float MinimumWorldVerticalBounds = 256f;
+        private const float SurfaceSuppressMinimumDepth = 0.5f;
+        private const float SurfaceSuppressNearbyMinDistance = 4f;
+        private const float SurfaceSuppressNearbyMaxDistance = 64f;
+        private const int SurfaceSuppressNearbyDirections = 8;
 
         private MeshRenderer[] cachedRenderers = new MeshRenderer[0];
         private float nextScanTime;
@@ -62,14 +67,25 @@ namespace DeepWaters
 
         void LateUpdate()
         {
-            if (!ShouldFixWaveShadows())
+            bool shouldFixUnderwaterLighting = ShouldFixUnderwaterLighting();
+            bool shouldSuppressExternalSurfaces = shouldFixUnderwaterLighting || ShouldSuppressExternalSurfaceRenderers();
+
+            if (!shouldFixUnderwaterLighting)
             {
-                RestoreSuppressedLights();
+                RestoreSuppressedLightsOnly();
+            }
+            else
+            {
+                SuppressPlayerIndirectLight();
+                SuppressPlayerTorch();
+            }
+
+            if (!shouldSuppressExternalSurfaces)
+            {
+                RestoreWaveRendererShadows();
                 return;
             }
 
-            SuppressPlayerIndirectLight();
-            SuppressPlayerTorch();
             if (Time.unscaledTime >= nextScanTime)
             {
                 RefreshWaveRenderers();
@@ -129,9 +145,14 @@ namespace DeepWaters
 
         private void RestoreSuppressedLights()
         {
+            RestoreSuppressedLightsOnly();
+            RestoreWaveRendererShadows();
+        }
+
+        private void RestoreSuppressedLightsOnly()
+        {
             RestoreIndirectLight();
             RestorePlayerTorch();
-            RestoreWaveRendererShadows();
         }
 
         private void RestoreIndirectLight()
@@ -192,7 +213,7 @@ namespace DeepWaters
             cachedRenderers = waveRenderers.ToArray();
         }
 
-        private static bool ShouldFixWaveShadows()
+        private static bool ShouldFixUnderwaterLighting()
         {
             GameManager gameManager = GameManager.Instance;
             if (DeepWaters.Instance == null ||
@@ -206,6 +227,48 @@ namespace DeepWaters
 
             float oceanSurfaceY;
             return UnderwaterDistanceFog.TryGetUnderwaterPresentation(gameManager, gameManager.MainCamera, out oceanSurfaceY);
+        }
+
+        private static bool ShouldSuppressExternalSurfaceRenderers()
+        {
+            GameManager gameManager = GameManager.Instance;
+            if (DeepWaters.Instance == null ||
+                !DeepWaters.Instance.SpawnWaterSurfaces ||
+                gameManager == null ||
+                !gameManager.IsPlayingGame() ||
+                gameManager.PlayerEnterExit == null ||
+                gameManager.PlayerEnterExit.IsPlayerInside)
+            {
+                return false;
+            }
+
+            Transform playerTransform = gameManager.PlayerObject != null
+                ? gameManager.PlayerObject.transform
+                : null;
+            if (playerTransform != null && IsNearVisibleDeepWaterSurface(playerTransform.position))
+                return true;
+
+            Camera camera = gameManager.MainCamera;
+            return camera != null && IsNearVisibleDeepWaterSurface(camera.transform.position);
+        }
+
+        private static bool IsNearVisibleDeepWaterSurface(Vector3 worldPosition)
+        {
+            DeepWaterColumn column;
+            if (DeepWaterWorld.TryGetWaterColumn(worldPosition.x, worldPosition.z, out column) &&
+                column.Depth > SurfaceSuppressMinimumDepth)
+            {
+                return true;
+            }
+
+            float nearbyDepth;
+            return DeepWaterWorld.HasNearbyWaterColumn(
+                worldPosition,
+                SurfaceSuppressNearbyMinDistance,
+                SurfaceSuppressNearbyMaxDistance,
+                SurfaceSuppressNearbyDirections,
+                SurfaceSuppressMinimumDepth,
+                out nearbyDepth);
         }
 
         private void PatchKnownWaveMeshes()
