@@ -18,6 +18,8 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
         _WaterColumnDepth ("Nominal water column depth", Float) = 35.0
         _WaterColumnFogDepth ("Water column fog depth", Float) = 35.0
         _WaterColumnFogStrength ("Water column fog strength", Range(0, 1)) = 1.0
+        _WaterSurfaceVisionDistance ("Surface vision distance", Float) = 70.0
+        _WaterSurfaceFalloff ("Surface distance falloff", Range(0, 1)) = 0.5
 
         _ScrollX ("Wave scroll speed X", Float) = 0.0225
         _ScrollY ("Wave scroll speed Y", Float) = 0.0375
@@ -62,6 +64,8 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
             float _WaterColumnDepth;
             float _WaterColumnFogDepth;
             float _WaterColumnFogStrength;
+            float _WaterSurfaceVisionDistance;
+            float _WaterSurfaceFalloff;
             float _ScrollX;
             float _ScrollY;
             float _DeepWatersUnderwater;
@@ -105,38 +109,53 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 clip(_WorldSpaceCameraPos.y - i.worldPos.y + 0.02);
 
                 float surfaceOpacity = saturate(_Color.a);
-                clip(surfaceOpacity - 0.001);
 
                 fixed4 wave = tex2D(_MainTex, i.uv);
                 fixed3 legacyRgb = wave.rgb * _Color.rgb;
                 fixed3 surfaceRgb = lerp(legacyRgb, _Color.rgb * 0.32, 0.22);
 
-                float columnDepth = _WaterColumnDepth;
+                // Distance the downward view travels through the water column
+                // before it reaches the seabed. Prefer the camera depth texture;
+                // when nothing is rendered behind the surface (sky / culled
+                // distant seabed) treat the column as deep so it fogs out rather
+                // than reading as a thin clear film.
+                float fogStrength = saturate(_WaterColumnFogStrength);
+                float falloff = saturate(_WaterSurfaceFalloff);
+                // Reference distance the seabed fades over, anchored to the
+                // underwater vision distance so the bay is no clearer from above
+                // than from below. Falloff shortens it: 0 = gradual, 1 = swift.
+                float visionRef = max(1.0, _WaterSurfaceVisionDistance * lerp(1.6, 0.35, falloff));
+
                 float rawDepth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.screenPos.xy / i.screenPos.w);
-                if (!IsNoDepth(rawDepth))
+                float waterPath;
+                if (IsNoDepth(rawDepth))
+                {
+                    waterPath = visionRef * 4.0;
+                }
+                else
                 {
                     float sceneDepthLinear = LinearEyeDepth(rawDepth);
                     float surfaceDepthLinear = max(i.screenPos.w, 0.0001);
-                    float waterPath = max(0.0, sceneDepthLinear - surfaceDepthLinear);
-                    float depthRatio = sceneDepthLinear / surfaceDepthLinear;
-                    float3 sceneWorldPos = _WorldSpaceCameraPos +
-                        (i.worldPos - _WorldSpaceCameraPos) * depthRatio;
-                    float verticalDepth = max(0.0, i.worldPos.y - sceneWorldPos.y);
-                    columnDepth = max(_WaterColumnDepth, max(verticalDepth, waterPath * 0.35));
+                    waterPath = max(0.0, sceneDepthLinear - surfaceDepthLinear);
                 }
 
-                float normalizedDepth = columnDepth / max(_WaterColumnFogDepth, 0.001);
-                float fogStrength = saturate(_WaterColumnFogStrength);
-                float waterTint = saturate(
-                    (1.0 - exp2(-normalizedDepth * lerp(0.35, 1.6, fogStrength))) *
-                    fogStrength);
+                // Beer-Lambert-style occlusion of the seabed by the water column.
+                // Reaches near-opaque well before the deepest water, so the floor
+                // is hidden at depth while shallows by the shore stay clear.
+                float occlusionRate = lerp(1.2, 3.0, fogStrength);
+                float bodyOpacity = saturate(1.0 - exp2(-(waterPath / visionRef) * occlusionRate));
 
-                float transparency = 1.0 - surfaceOpacity;
-                float fogWeight = waterTint * lerp(0.35, 0.12, transparency);
+                // The surface film (configured top transparency) is the minimum
+                // opacity; the water column adds opacity on top as it deepens, so
+                // a clear film still hides a deep seabed.
+                float finalAlpha = saturate(max(surfaceOpacity, bodyOpacity));
+                clip(finalAlpha - 0.001);
 
                 fixed4 col;
-                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, fogWeight);
-                col.a = surfaceOpacity;
+                // Keep a little surface sheen even over deep water so the wave
+                // texture still reads instead of flattening to solid fog color.
+                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, bodyOpacity * 0.88);
+                col.a = finalAlpha;
                 return col;
             }
             ENDCG

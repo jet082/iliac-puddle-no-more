@@ -22,6 +22,8 @@ namespace DeepWaters
         private static readonly int WaterColumnDepthProperty = Shader.PropertyToID("_WaterColumnDepth");
         private static readonly int WaterColumnFogDepthProperty = Shader.PropertyToID("_WaterColumnFogDepth");
         private static readonly int WaterColumnFogStrengthProperty = Shader.PropertyToID("_WaterColumnFogStrength");
+        private static readonly int WaterSurfaceVisionDistanceProperty = Shader.PropertyToID("_WaterSurfaceVisionDistance");
+        private static readonly int WaterSurfaceFalloffProperty = Shader.PropertyToID("_WaterSurfaceFalloff");
         private static readonly int SrcBlendProperty = Uniforms.SrcBlend;
         private static readonly int DstBlendProperty = Uniforms.DstBlend;
         private static readonly int ZWriteProperty = Uniforms.ZWrite;
@@ -208,6 +210,16 @@ namespace DeepWaters
 
             if (material.HasProperty(WaterColumnFogStrengthProperty))
                 material.SetFloat(WaterColumnFogStrengthProperty, GetWaterColumnFogStrength());
+
+            // Above-water seabed fade. Anchored to the underwater vision distance
+            // so looking down from the surface is no clearer than looking around
+            // underwater, and shortened by the (previously unused) distance
+            // falloff slider.
+            if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
+                material.SetFloat(WaterSurfaceVisionDistanceProperty, DeepWaters.Instance.UnderwaterVisionDistance);
+
+            if (material.HasProperty(WaterSurfaceFalloffProperty))
+                material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff));
         }
 
         private static void ConfigureTransparentMaterial(Material material)

@@ -317,6 +317,34 @@ namespace DeepWaters
         }
 
         /// <summary>
+        /// Seafloor world Y at a position only when an ACTUAL carved seabed mesh
+        /// quad exists there. Unlike <see cref="TryGetWaterColumn"/> (which trusts
+        /// the bake water mask) this returns false where the carve was rejected —
+        /// e.g. a shore cell the bake marks water but whose live heightmap has
+        /// relief, so no hole/sub-mesh was built. Callers use the false result to
+        /// treat the position as solid ground rather than swimmable water.
+        /// </summary>
+        public static bool TryGetCarvedSeafloorWorldY(float worldX, float worldZ, out float seafloorWorldY)
+        {
+            seafloorWorldY = 0f;
+
+            DeepWaterColumn column;
+            if (!TryGetWaterColumn(worldX, worldZ, out column) || column.Parent == null)
+                return false;
+
+            DeepWaterFloorMesh floorMesh = GetCachedFloorMesh(column.Parent);
+            if (floorMesh == null)
+                return false;
+
+            float meshLocalY;
+            if (!floorMesh.TrySampleMeshLocalY(worldX, worldZ, out meshLocalY))
+                return false;
+
+            seafloorWorldY = column.Parent.position.y + meshLocalY;
+            return true;
+        }
+
+        /// <summary>
         /// Resolve seafloor local Y at a world position. Ocean-connected tiles
         /// route through <see cref="DeepBathymetry.SampleDepthMeters"/> so the
         /// returned Y matches the sub-mesh geometry. Other tiles (rivers,

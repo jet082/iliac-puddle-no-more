@@ -41,6 +41,7 @@ namespace DeepWaters
         private const float ColliderGateShoreProbeRadiusMax = 4.00f;
         private const float ColliderGateShoreTerrainMargin = 0.35f;
         private const float ColliderGateTransientHoldSeconds = 0.65f;
+        private const float ColliderGateEjectGuardMargin = 0.5f;
         private const float BoatBoardingSurfaceClearance = 1.10f;
         private const float BoatSnapCooldownSeconds = 0.75f;
         private const string BoatEffectBundleName = "ImOnABoat";
@@ -671,10 +672,52 @@ namespace DeepWaters
                 if (ContainsCollider(keepDisabled, collider))
                     continue;
 
+                // Don't re-enable a collider the submerged player is currently
+                // beneath. Crossing a map pixel triggers a floating-origin shift
+                // that briefly churns the desired-collider set and can drop the
+                // player's own tile from it; re-enabling that heightfield while
+                // the player is below its surface makes Unity depenetrate the
+                // CharacterController straight up to the terrain (~ocean surface)
+                // — the "crossing a map pixel shoots me up to the surface" bug.
+                // It re-enables once the player rises above it, or fully exits
+                // the water via RestoreWaterTerrainCollider.
+                if (WouldEjectSubmergedPlayer(collider))
+                    continue;
+
                 if (!collider.enabled)
                     collider.enabled = true;
                 disabledWaterTerrainColliders.RemoveAt(i);
             }
+        }
+
+        // True if re-enabling this water tile's heightfield collider would shove
+        // the player upward — i.e. the player is currently within the tile's XZ
+        // footprint and below its terrain surface (submerged). Keeps the collider
+        // gate from ejecting a swimmer to the surface during the map-pixel-cross
+        // collider churn.
+        private static bool WouldEjectSubmergedPlayer(TerrainCollider collider)
+        {
+            if (collider == null)
+                return false;
+
+            GameManager gameManager = GameManager.Instance;
+            GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+            if (player == null)
+                return false;
+
+            Terrain terrain = collider.GetComponent<Terrain>();
+            if (terrain == null || terrain.terrainData == null)
+                return false;
+
+            Vector3 position = player.transform.position;
+            Vector3 origin = terrain.transform.position;
+            Vector3 size = terrain.terrainData.size;
+            if (position.x < origin.x || position.x > origin.x + size.x ||
+                position.z < origin.z || position.z > origin.z + size.z)
+                return false;
+
+            float terrainSurfaceY = origin.y + terrain.SampleHeight(position);
+            return position.y < terrainSurfaceY + ColliderGateEjectGuardMargin;
         }
 
         private void RestoreWaterTerrainCollider()
@@ -1166,12 +1209,29 @@ namespace DeepWaters
         private const float StrokeExtraSpeedMultiplier = 2.65f;
         private const float StrokeFatigueCostFraction = 0.025f;
         private const int StrokeMinimumFatigueCost = 24;
-        private const float SurfaceUpwardStrokeMargin = 0.65f;
+        // How far above the ocean surface the camera (eyes) may rise while
+        // swimming up. DFU's LevitateMotor used to lift the player's eyes ~0.35m
+        // above the waterline before blocking; now that it's suppressed, the mod
+        // must allow the same so the player can actually surface and see above
+        // water instead of stopping with their eyes submerged.
+        private const float SurfaceUpwardCameraClearance = 0.35f;
         private const float StrokeTempoScaleExponent = 0.35f;
         private const float SeafloorSwimFloorClearance = 0.18f;
+        // Cap how far the shore clamp may lift the player per frame. A swimmer
+        // descending into the shore only penetrates a little each frame, so a
+        // small cap catches that; a large gap means a transient "not carved"
+        // read over genuine deep water, where yanking up would surface-pop them.
+        private const float MaxShoreClampCorrection = 2.5f;
+        // The mod is the sole swim mover now that DFU's LevitateMotor is
+        // suppressed (it double-moved and made speed pitch-dependent). Both
+        // movers used to run, so the prior pace was ~2x DFU swim speed; restore
+        // that so swimming and surfacing aren't half as fast.
+        private const float SoleMoverSpeedRestore = 2.0f;
 
         private PlayerSpeedChanger speedChanger;
         private PlayerGroundMotor groundMotor;
+        private LevitateMotor levitateMotor;
+        private bool suppressedDfuSwimMotor;
         private string walkSpeedModId;
         private float appliedMultiplier = 1f;
         private Vector3 strokeDirection;
@@ -1183,6 +1243,7 @@ namespace DeepWaters
         void OnDisable()
         {
             RemoveSpeedModifier();
+            RestoreDfuSwimMotor();
             strokeTimeRemaining = 0f;
             currentStrokeDuration = StrokeDuration;
             wasStrokeButtonHeld = false;
@@ -1193,6 +1254,7 @@ namespace DeepWaters
             if (!IsOutdoorSwimming())
             {
                 RemoveSpeedModifier();
+                RestoreDfuSwimMotor();
                 strokeTimeRemaining = 0f;
                 currentStrokeDuration = StrokeDuration;
                 wasStrokeButtonHeld = false;
@@ -1202,6 +1264,7 @@ namespace DeepWaters
             if (DeepWaterRuntime.IsLoadGraceActive)
             {
                 RemoveSpeedModifier();
+                RestoreDfuSwimMotor();
                 strokeTimeRemaining = 0f;
                 currentStrokeDuration = StrokeDuration;
                 wasStrokeButtonHeld = false;
@@ -1209,6 +1272,7 @@ namespace DeepWaters
             }
 
             CachePlayerMotorParts();
+            SuppressDfuSwimMotor();
             RemoveSpeedModifier();
             ApplySwimMotion();
             HandleStrokeInput();
@@ -1230,6 +1294,46 @@ namespace DeepWaters
             }
 
             groundMotor = player.GetComponent<PlayerGroundMotor>();
+            levitateMotor = player.GetComponent<LevitateMotor>();
+        }
+
+        // DFU's LevitateMotor also moves the player every frame while its
+        // IsSwimming flag is set (which OutdoorSwimDriver sets so DFU treats the
+        // player as swimming). This controller already owns swim movement —
+        // camera-relative, swim-speed-multiplier aware, and normalized so the
+        // total speed does not depend on look pitch. Leaving LevitateMotor
+        // running double-applies movement, and because its horizontal
+        // contribution is NOT normalized, swim speed ends up pitch-dependent:
+        // faster looking level (typical at the surface) and slower looking down
+        // (typical underwater) — the "different speeds at surface vs underwater"
+        // bug. Disable the component while we drive movement. PlayerMotor still
+        // reads LevitateMotor.IsSwimming (a plain field, readable while the
+        // component is disabled) so it keeps suppressing gravity. Hand movement
+        // back while levitating so the Levitate spell still works.
+        private void SuppressDfuSwimMotor()
+        {
+            if (levitateMotor == null)
+                return;
+
+            if (levitateMotor.IsLevitating)
+            {
+                RestoreDfuSwimMotor();
+                return;
+            }
+
+            if (levitateMotor.enabled)
+            {
+                levitateMotor.enabled = false;
+                suppressedDfuSwimMotor = true;
+            }
+        }
+
+        private void RestoreDfuSwimMotor()
+        {
+            if (levitateMotor != null && suppressedDfuSwimMotor && !levitateMotor.enabled)
+                levitateMotor.enabled = true;
+
+            suppressedDfuSwimMotor = false;
         }
 
         private void ApplySpeedMultiplier()
@@ -1297,7 +1401,7 @@ namespace DeepWaters
             {
                 float oceanSurfaceY;
                 if (DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) &&
-                    gameManager.MainCamera.transform.position.y > oceanSurfaceY - SurfaceUpwardStrokeMargin)
+                    gameManager.MainCamera.transform.position.y > oceanSurfaceY + SurfaceUpwardCameraClearance)
                 {
                     direction.y = 0f;
                 }
@@ -1385,15 +1489,67 @@ namespace DeepWaters
                 return;
 
             Vector3 position = player.transform.position;
-            DeepWaterColumn column;
-            if (!DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column))
-                return;
 
+            // Clamp to the seabed sub-mesh ONLY where one was actually carved.
+            // TryGetWaterColumn trusts the bake water mask, but shore cells the
+            // bake marks water — yet whose live heightmap has relief — are never
+            // carved, so there's no hole and no sub-mesh under them. Detecting
+            // the real mesh quad (vs "bake says water") is what tells swimmable
+            // water apart from solid shore.
             float seafloorWorldY;
-            if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, position.x, position.z, out seafloorWorldY))
+            if (DeepWaterWorld.TryGetCarvedSeafloorWorldY(position.x, position.z, out seafloorWorldY))
+            {
+                ClampPlayerAboveY(player, position, seafloorWorldY + SeafloorSwimFloorClearance);
+                return;
+            }
+
+            // No carved seabed here: shore / submerged land. The swim collider
+            // gate disables whole water tiles (their land cells included) so the
+            // player can descend in the tile's deep water, which otherwise lets
+            // them swim straight down through the adjacent shore. Keep them above
+            // the vanilla terrain here. (issue 2: swim down through shore tiles)
+            ClampAboveVanillaTerrain(player, position);
+        }
+
+        private static void ClampAboveVanillaTerrain(GameObject player, Vector3 position)
+        {
+            DaggerfallTerrain dfTerrain;
+            Terrain terrain;
+            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(position.x, position.z, out dfTerrain, out terrain) ||
+                dfTerrain == null ||
+                terrain == null ||
+                terrain.terrainData == null)
                 return;
 
-            float minimumY = seafloorWorldY + SeafloorSwimFloorClearance;
+            // Only act once the tile is fully initialized. A tile mid-promotion
+            // can't resolve its water column yet and would read as "not carved
+            // water" everywhere.
+            DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+            if (tile == null || !tile.HasDistanceField)
+                return;
+
+            Vector3 origin = terrain.transform.position;
+            Vector3 size = terrain.terrainData.size;
+            if (position.x < origin.x || position.x > origin.x + size.x ||
+                position.z < origin.z || position.z > origin.z + size.z)
+                return;
+
+            float minimumY = origin.y + terrain.SampleHeight(position) + SeafloorSwimFloorClearance;
+            if (position.y >= minimumY)
+                return;
+
+            // Only correct small penetrations (the player right at the shore
+            // ground). A large gap means a transient non-carved read over genuine
+            // deep water; yanking the swimmer all the way up to the heightfield
+            // would surface-pop them, so leave it to resolve next frame.
+            if (minimumY - position.y > MaxShoreClampCorrection)
+                return;
+
+            ClampPlayerAboveY(player, position, minimumY);
+        }
+
+        private static void ClampPlayerAboveY(GameObject player, Vector3 position, float minimumY)
+        {
             if (position.y >= minimumY)
                 return;
 
@@ -1407,7 +1563,7 @@ namespace DeepWaters
                 return 0f;
 
             float baseSpeed = speedChanger.GetBaseSpeed();
-            return speedChanger.GetSwimSpeed(baseSpeed) * CurrentSwimSpeedMultiplier();
+            return speedChanger.GetSwimSpeed(baseSpeed) * CurrentSwimSpeedMultiplier() * SoleMoverSpeedRestore;
         }
 
         private static float CurrentSwimSpeedMultiplier()
@@ -1457,7 +1613,7 @@ namespace DeepWaters
             float oceanSurfaceY;
             if (direction.y > 0f &&
                 DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) &&
-                cameraTransform.position.y > oceanSurfaceY - SurfaceUpwardStrokeMargin)
+                cameraTransform.position.y > oceanSurfaceY + SurfaceUpwardCameraClearance)
             {
                 direction.y = 0f;
             }
