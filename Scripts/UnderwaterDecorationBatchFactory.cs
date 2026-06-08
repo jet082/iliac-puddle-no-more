@@ -114,7 +114,13 @@ namespace DeepWaters
                 UnderwaterDecorationRecord record = item.ToRecord();
                 if (UnderwaterDecorationCatalog.UsesArchiveAnimation(record))
                 {
-                    AddAnimatedPosition(animatedPositions, item);
+                    // Asset injection (DREAM etc.): route animated flats through
+                    // DFU's native billboard batch rather than the custom atlas
+                    // batch. DFU's batch loads the replacement atlas and animates
+                    // by cycling mesh UVs, which survives our unlit-material swap,
+                    // so DREAM's animated replacements render correctly. The
+                    // custom atlas path mishandled replacement textures. (issue 11)
+                    AddArchivePosition(archivePositions, item);
                     continue;
                 }
 
@@ -307,7 +313,11 @@ namespace DeepWaters
             }
         }
 
-        private static void ApplyUnderwaterDecorationMaterial(Renderer renderer)
+        // Internal so loot/wreck billboards can reuse the same unlit, brightened
+        // material. DFU single billboards and billboard batches share the same
+        // tangent-encoded mesh + shader-driven facing, so this material renders
+        // correctly on both. (issue 12: loot/wreck flats render dark)
+        internal static void ApplyUnderwaterDecorationMaterial(Renderer renderer)
         {
             if (renderer == null)
                 return;

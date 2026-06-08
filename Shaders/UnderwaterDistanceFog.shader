@@ -166,7 +166,21 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                     // Sky / no-depth pixels: use a far value so the volume
                     // pushes them to ambient water color. At max fog this is
                     // deliberately past the visibility curtain.
-                    viewDistance = effectiveVision * lerp(2.25, 1.40, saturate(_FogStrength));
+                    float farFog = effectiveVision * lerp(2.25, 1.40, saturate(_FogStrength));
+
+                    // When looking UP from below the surface, stop the fog at the
+                    // water surface instead of treating the whole ray as infinite
+                    // water. Otherwise the rendered underside of the surface (and
+                    // the bright world above it) is buried under full ambient fog
+                    // and becomes invisible. Horizon-ward rays (rayDir.y ~ 0) keep
+                    // the far value so missing-terrain/skybox leaks still fog out.
+                    // (issue 9: can't see the underside of the water surface)
+                    float3 rayDir = normalize(rayWorldUnnorm);
+                    float belowSurface = _WaterSurfaceY - _WorldSpaceCameraPos.y;
+                    if (rayDir.y > 0.0001 && belowSurface > 0.0)
+                        viewDistance = min(farFog, belowSurface / rayDir.y);
+                    else
+                        viewDistance = farFog;
                 }
                 else
                 {

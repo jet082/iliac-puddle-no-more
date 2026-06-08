@@ -303,8 +303,11 @@ namespace DeepWaters
 
         private static bool CanPopulate()
         {
+            // Decorations belong to the underwater world, not the visible water
+            // plane, so they are gated only by SpawnUnderwaterDecorations — not
+            // SpawnWaterSurfaces. (Turning the surface off must not strip the
+            // seabed and its dressing.)
             return DeepWaters.Instance != null &&
-                   DeepWaters.Instance.SpawnWaterSurfaces &&
                    DeepWaters.Instance.SpawnUnderwaterDecorations;
         }
 

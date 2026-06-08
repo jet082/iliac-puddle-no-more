@@ -161,6 +161,28 @@ namespace DeepWaters
             return true;
         }
 
+        // Resolve the owning tile's climate biome and the water-column depth
+        // fraction (0..1 of max depth) at a candidate spawn point, so species
+        // selection can favour biome- and depth-appropriate fish.
+        private static void ResolveSpeciesContext(float worldX, float worldZ, out int climateIndex, out float depthFraction)
+        {
+            climateIndex = 0;
+            depthFraction = 0f;
+
+            DeepWaterColumn column;
+            if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
+                return;
+
+            DeepWaterTileData tile = column.DaggerfallTerrain != null
+                ? column.DaggerfallTerrain.GetComponent<DeepWaterTileData>()
+                : null;
+            if (tile != null)
+                climateIndex = tile.ClimateIndex;
+
+            float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
+            depthFraction = Mathf.Clamp01(column.Depth / maxDepth);
+        }
+
         private static int TrySpawnNearPlayer(int maxFishToSpawn)
         {
             if (maxFishToSpawn <= 0)
@@ -168,10 +190,6 @@ namespace DeepWaters
 
             var gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.PlayerObject == null)
-                return 0;
-
-            PassiveFishSpecies species = PassiveFishSpeciesCatalog.PickRandom();
-            if (species == null)
                 return 0;
 
             Vector3 playerPos = gameManager.PlayerObject.transform.position;
@@ -186,6 +204,16 @@ namespace DeepWaters
                 return 0;
 
             if (!DeepWaterWorld.IsOutsideImmediateView(worldPos, playerPos, DeepWaterWorld.EncounterSpawnViewSafetyDistance, SpawnViewportMargin))
+                return 0;
+
+            // Pick the species for THIS location's biome + depth so each region
+            // reads distinctly: reef fish in tropical shallows, abyssal fish out
+            // in the cold deep, etc. (issues 6 & 7)
+            int climateIndex;
+            float depthFraction;
+            ResolveSpeciesContext(spawnPoint.x, spawnPoint.z, out climateIndex, out depthFraction);
+            PassiveFishSpecies species = PassiveFishSpeciesCatalog.PickRandom(climateIndex, depthFraction);
+            if (species == null)
                 return 0;
 
             int schoolSize = Random.Range(species.MinSchoolSize, species.MaxSchoolSize + 1);

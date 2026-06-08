@@ -186,11 +186,16 @@ namespace DeepWaters
             if (!fromPromoteEvent && !DeepWaterRuntime.CanMutateTerrainData)
                 return;
 
-            if (DeepWaters.Instance == null || !DeepWaters.Instance.SpawnWaterSurfaces)
+            // NOTE: do NOT gate seafloor generation on SpawnWaterSurfaces.
+            // SpawnWaterSurfaces controls only the visible water-plane mesh
+            // (WaterSurfaceManager); the carved seabed, swim depth, and
+            // underwater world must still generate when the surface is hidden,
+            // otherwise turning surfaces off breaks water generation entirely.
+            if (DeepWaters.Instance == null)
             {
                 if (DiagnosticLogging)
-                    Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + ") skipped (mod disabled or surfaces off)");
-                QueueSolidResetIfTouched(dfTerrain, terrainData, "surfaces disabled", fromPromoteEvent);
+                    Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + ") skipped (mod not ready)");
+                QueueSolidResetIfTouched(dfTerrain, terrainData, "mod not ready", fromPromoteEvent);
                 RemoveFloor(dfTerrain);
                 return;
             }

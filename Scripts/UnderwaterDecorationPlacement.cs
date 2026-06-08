@@ -67,6 +67,10 @@ namespace DeepWaters
             float oceanThresholdNormalised = sampler.OceanElevation / sampler.MaxTerrainHeight;
             Vector3 origin = dfTerrain.transform.position;
 
+            // One climate per tile drives its decoration biome flavour. (issue 6)
+            DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+            int climateIndex = tile != null ? tile.ClimateIndex : 0;
+
             for (int gy = 0; gy < hDim0 - 1; gy += SampleStride)
             for (int gx = 0; gx < hDim1 - 1; gx += SampleStride)
             {
@@ -92,7 +96,7 @@ namespace DeepWaters
 
                 if (!IsGentleEnoughForDecoration(floorMesh, worldX, worldZ, oceanLocalY)) continue;
 
-                UnderwaterDecorationRecord record = UnderwaterDecorationCatalog.PickRecord();
+                UnderwaterDecorationRecord record = UnderwaterDecorationCatalog.PickRecord(climateIndex);
                 float visualHeight;
                 if (!TryGetDecorationVisualHeight(record, out visualHeight)) continue;
 

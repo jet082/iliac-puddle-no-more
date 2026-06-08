@@ -16,15 +16,43 @@ namespace DeepWaters
     /// </summary>
     public static class UnderwaterEnemySpawner
     {
-        private static readonly MobileTypes[] AquaticTypes =
+        // Depth-banded aquatic pool (issue 7). Each entry prefers a band of the
+        // water column (fraction of max depth). Shallow coves read as living
+        // water (slaughterfish, lamia sirens); the deep and abyss turn menacing
+        // as dreugh take over and the drowned dead / ice atronachs — which used
+        // to be a flat 5% everywhere — surface only down deep.
+        private struct DepthAquatic
         {
-            MobileTypes.Slaughterfish,
-            MobileTypes.Slaughterfish,
-            MobileTypes.Slaughterfish,
-            MobileTypes.Dreugh,
-            MobileTypes.Lamia,
+            public MobileTypes Type;
+            public int Weight;
+            public float MinDepthFraction;
+            public float MaxDepthFraction;
+
+            public DepthAquatic(MobileTypes type, int weight, float minDepthFraction, float maxDepthFraction)
+            {
+                Type = type;
+                Weight = weight;
+                MinDepthFraction = minDepthFraction;
+                MaxDepthFraction = maxDepthFraction;
+            }
+        }
+
+        private const float DepthEdgeSoftness = 0.18f;
+
+        private static readonly DepthAquatic[] DepthAquaticTable =
+        {
+            new DepthAquatic(MobileTypes.Slaughterfish, 60, 0.00f, 0.70f),
+            new DepthAquatic(MobileTypes.Lamia,         18, 0.00f, 0.45f),
+            new DepthAquatic(MobileTypes.Dreugh,        25, 0.15f, 1.00f),
+            new DepthAquatic(MobileTypes.Zombie,         6, 0.40f, 1.00f),
+            new DepthAquatic(MobileTypes.SkeletalWarrior,7, 0.45f, 1.00f),
+            new DepthAquatic(MobileTypes.Ghost,          7, 0.50f, 1.00f),
+            new DepthAquatic(MobileTypes.Wraith,         5, 0.60f, 1.00f),
+            new DepthAquatic(MobileTypes.IceAtronach,    4, 0.70f, 1.00f),
         };
 
+        // Treasure-cluster guards are always the dangerous deep types regardless
+        // of where the cluster sits.
         private static readonly MobileTypes[] RareTypes =
         {
             MobileTypes.Ghost,
@@ -33,8 +61,6 @@ namespace DeepWaters
             MobileTypes.Zombie,
             MobileTypes.IceAtronach,
         };
-
-        private const float RareSpawnChance = 0.05f;
         private const float SpawnViewportMargin = 0.08f;
         private const float MinEnemyPulseIntervalSeconds = 10f;
         private const float FailedEnemyRetrySeconds = 4f;
@@ -168,14 +194,14 @@ namespace DeepWaters
 
                 Vector3 resolvedPos;
                 Transform parent;
-                if (!TryResolveSpawnPosition(spawnPoint.x, spawnPoint.z, out resolvedPos, out parent))
+                float depthFraction;
+                if (!TryResolveSpawnPosition(spawnPoint.x, spawnPoint.z, out resolvedPos, out parent, out depthFraction))
                     continue;
 
                 if (!DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.EncounterSpawnViewSafetyDistance, SpawnViewportMargin))
                     continue;
 
-                MobileTypes[] pool = Random.value < RareSpawnChance ? RareTypes : AquaticTypes;
-                if (SpawnEnemy(resolvedPos, parent, pool) != null)
+                if (SpawnEnemy(resolvedPos, parent, PickAquaticForDepth(depthFraction)) != null)
                     return true;
             }
 
@@ -207,10 +233,11 @@ namespace DeepWaters
 
                 Vector3 resolvedPos;
                 Transform parent;
-                if (!TryResolveSpawnPosition(worldX, worldZ, out resolvedPos, out parent))
+                float depthFraction;
+                if (!TryResolveSpawnPosition(worldX, worldZ, out resolvedPos, out parent, out depthFraction))
                     continue;
 
-                if (SpawnEnemy(resolvedPos, parent, RareTypes) != null)
+                if (SpawnEnemy(resolvedPos, parent, PickRare()) != null)
                     spawned++;
             }
 
@@ -218,19 +245,21 @@ namespace DeepWaters
             {
                 Vector3 resolvedPos;
                 Transform parent;
-                if (TryResolveSpawnPosition(centre.x, centre.z, out resolvedPos, out parent))
+                float depthFraction;
+                if (TryResolveSpawnPosition(centre.x, centre.z, out resolvedPos, out parent, out depthFraction))
                 {
-                    spawned = SpawnEnemy(resolvedPos, parent, RareTypes) != null ? 1 : 0;
+                    spawned = SpawnEnemy(resolvedPos, parent, PickRare()) != null ? 1 : 0;
                 }
             }
 
             return spawned;
         }
 
-        private static bool TryResolveSpawnPosition(float worldX, float worldZ, out Vector3 worldPos, out Transform parent)
+        private static bool TryResolveSpawnPosition(float worldX, float worldZ, out Vector3 worldPos, out Transform parent, out float depthFraction)
         {
             worldPos = Vector3.zero;
             parent = null;
+            depthFraction = 0f;
 
             DeepWaterColumn column;
             if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
@@ -245,18 +274,70 @@ namespace DeepWaters
             if (surfaceClearY - floorClearY < MinimumColumnDepth)
                 return false;
 
+            float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
+            depthFraction = Mathf.Clamp01(column.Depth / maxDepth);
+
             float t = Random.Range(EnemyColumnFractionMin, EnemyColumnFractionMax);
             worldPos = new Vector3(worldX, Mathf.Lerp(floorClearY, surfaceClearY, t), worldZ);
             parent = column.Parent;
             return parent != null;
         }
 
-        private static GameObject SpawnEnemy(Vector3 worldPos, Transform parent, MobileTypes[] pool)
+        // Depth-weighted aquatic pick (issue 7). Each candidate's weight tapers
+        // to zero outside its depth band, so shallow water stays slaughterfish/
+        // lamia and the abyss fills with dreugh and the drowned dead.
+        private static MobileTypes PickAquaticForDepth(float depthFraction)
         {
-            if (parent == null || pool == null || pool.Length == 0)
+            depthFraction = Mathf.Clamp01(depthFraction);
+
+            float total = 0f;
+            for (int i = 0; i < DepthAquaticTable.Length; i++)
+                total += DepthBandWeight(DepthAquaticTable[i], depthFraction);
+
+            if (total <= 0f)
+                return MobileTypes.Slaughterfish;
+
+            float roll = Random.value * total;
+            for (int i = 0; i < DepthAquaticTable.Length; i++)
+            {
+                float w = DepthBandWeight(DepthAquaticTable[i], depthFraction);
+                if (roll < w)
+                    return DepthAquaticTable[i].Type;
+
+                roll -= w;
+            }
+
+            return DepthAquaticTable[0].Type;
+        }
+
+        private static float DepthBandWeight(DepthAquatic entry, float depthFraction)
+        {
+            float band01;
+            if (depthFraction >= entry.MinDepthFraction && depthFraction <= entry.MaxDepthFraction)
+            {
+                band01 = 1f;
+            }
+            else
+            {
+                float distance = depthFraction < entry.MinDepthFraction
+                    ? entry.MinDepthFraction - depthFraction
+                    : depthFraction - entry.MaxDepthFraction;
+                band01 = Mathf.Clamp01(1f - distance / DepthEdgeSoftness);
+            }
+
+            return entry.Weight * band01;
+        }
+
+        private static MobileTypes PickRare()
+        {
+            return RareTypes[Random.Range(0, RareTypes.Length)];
+        }
+
+        private static GameObject SpawnEnemy(Vector3 worldPos, Transform parent, MobileTypes type)
+        {
+            if (parent == null)
                 return null;
 
-            MobileTypes type = pool[Random.Range(0, pool.Length)];
             Vector3 localPos = worldPos - parent.position;
             GameObject enemy = GameObjectHelper.CreateEnemy(
                 type.ToString(),

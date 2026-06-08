@@ -64,14 +64,48 @@ namespace DeepWaters
         public const int Archive = 105;
         private const int GeneralPoolWeight = 120;
         private const int AnimatedGeneralPoolBonusWeight = 220;
-        private const int DebrisPoolWeight = 4;
         private const float Texture106FramesPerSecond = 5f;
 
-        private static readonly UnderwaterDecorationRecord[] WeightedRecords = BuildWeightedRecords();
+        // Flora (general) and rubble (debris) pools are kept separate so each
+        // biome can dial its flora-vs-debris mix: lush tropical/temperate reefs
+        // are nearly all plants, while cold/desert/abyssal floors read barren and
+        // rocky. (issue 6: biome identity for decorations)
+        private static readonly UnderwaterDecorationRecord[] FloraPool = BuildFloraPool();
+        private static readonly UnderwaterDecorationRecord[] DebrisPool = BuildDebrisPool();
 
         public static UnderwaterDecorationRecord PickRecord()
         {
-            return WeightedRecords[UnityEngine.Random.Range(0, WeightedRecords.Length)];
+            return PickRecordForBiome(WaterBiome.OpenOcean);
+        }
+
+        public static UnderwaterDecorationRecord PickRecord(int climateIndex)
+        {
+            return PickRecordForBiome(PassiveFishSpeciesCatalog.ClimateToBiome(climateIndex));
+        }
+
+        private static UnderwaterDecorationRecord PickRecordForBiome(WaterBiome biome)
+        {
+            bool pickDebris = DebrisPool.Length > 0 &&
+                              FloraPool.Length > 0 &&
+                              UnityEngine.Random.value < DebrisChanceForBiome(biome);
+            UnderwaterDecorationRecord[] pool =
+                pickDebris ? DebrisPool : (FloraPool.Length > 0 ? FloraPool : DebrisPool);
+            return pool[UnityEngine.Random.Range(0, pool.Length)];
+        }
+
+        // Probability a given decoration is rubble rather than flora, per biome.
+        private static float DebrisChanceForBiome(WaterBiome biome)
+        {
+            switch (biome)
+            {
+                case WaterBiome.Tropical:  return 0.05f;
+                case WaterBiome.Temperate: return 0.10f;
+                case WaterBiome.Swamp:     return 0.18f;
+                case WaterBiome.OpenOcean: return 0.22f;
+                case WaterBiome.Cold:      return 0.38f;
+                case WaterBiome.Desert:    return 0.45f;
+                default:                   return 0.15f;
+            }
         }
 
         public static bool TryGetFramesPerSecond(int archive, out float framesPerSecond)
@@ -91,7 +125,7 @@ namespace DeepWaters
             return record.Archive == 106 && record.Record >= 2 && record.Record <= 6;
         }
 
-        private static UnderwaterDecorationRecord[] BuildWeightedRecords()
+        private static UnderwaterDecorationRecord[] BuildFloraPool()
         {
             UnderwaterDecorationRecord[] general =
             {
@@ -109,17 +143,6 @@ namespace DeepWaters
                 R(502, 31),
             };
 
-            UnderwaterDecorationRecord[] debris =
-            {
-                R(105, 0), R(105, 5), R(105, 6), R(105, 7), R(105, 8), R(105, 9), R(105, 10),
-                R(106, 0), R(106, 1),
-                R(206, 0), R(206, 1), R(206, 3), R(206, 4), R(206, 5), R(206, 6),
-                R(206, 8), R(206, 29), R(206, 30), R(206, 31), R(206, 32),
-                R(253, 16), R(253, 54), R(253, 55),
-                R(305, 0), R(305, 1), R(305, 2),
-                R(306, 0),
-            };
-
             var records = new List<UnderwaterDecorationRecord>();
             for (int i = 0; i < general.Length; i++)
             {
@@ -131,13 +154,21 @@ namespace DeepWaters
                     records.Add(general[i]);
             }
 
-            for (int i = 0; i < debris.Length; i++)
-            {
-                for (int n = 0; n < DebrisPoolWeight; n++)
-                    records.Add(debris[i]);
-            }
-
             return records.ToArray();
+        }
+
+        private static UnderwaterDecorationRecord[] BuildDebrisPool()
+        {
+            return new[]
+            {
+                R(105, 0), R(105, 5), R(105, 6), R(105, 7), R(105, 8), R(105, 9), R(105, 10),
+                R(106, 0), R(106, 1),
+                R(206, 0), R(206, 1), R(206, 3), R(206, 4), R(206, 5), R(206, 6),
+                R(206, 8), R(206, 29), R(206, 30), R(206, 31), R(206, 32),
+                R(253, 16), R(253, 54), R(253, 55),
+                R(305, 0), R(305, 1), R(305, 2),
+                R(306, 0),
+            };
         }
 
         private static UnderwaterDecorationRecord R(int archive, int record)

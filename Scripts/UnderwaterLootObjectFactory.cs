@@ -30,7 +30,10 @@ namespace DeepWaters
 
             DeepWaterRendering.DisableShadows(loot != null ? loot.gameObject : null);
             if (loot != null)
+            {
+                BrightenUnderwaterBillboards(loot.gameObject);
                 DeepWaterWorld.AlignObjectBottomToWorldY(loot.gameObject, worldPos.y);
+            }
             if (tracker != null)
                 tracker.Add(loot != null ? loot.gameObject : null);
 
@@ -108,10 +111,25 @@ namespace DeepWaters
             batch.Apply();
             batch.gameObject.name = "DeepWaters_LootRubbleBatch";
             DeepWaterRendering.DisableShadows(batch.gameObject);
+            BrightenUnderwaterBillboards(batch.gameObject);
             if (tracker != null)
                 tracker.Add(batch.gameObject);
 
             return true;
+        }
+
+        // Loot piles and wreck rubble are dark underwater because DFU's billboard
+        // material is scene-lit and the bay is dim. Decorations avoid this with an
+        // unlit, brightened material; apply the same to loot/rubble so they read
+        // as clearly as the surrounding flora. (issue 12)
+        private static void BrightenUnderwaterBillboards(GameObject go)
+        {
+            if (go == null)
+                return;
+
+            MeshRenderer[] renderers = go.GetComponentsInChildren<MeshRenderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+                UnderwaterDecorationBatchFactory.ApplyUnderwaterDecorationMaterial(renderers[i]);
         }
     }
 }

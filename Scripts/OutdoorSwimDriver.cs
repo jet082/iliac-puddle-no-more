@@ -185,7 +185,15 @@ namespace DeepWaters
             Forge(pex, oceanSurfaceY, isSwimming);
 
             if (isPresentationUnderwater)
+            {
                 ApplyUnderwaterPresentation(pex, oceanSurfaceY);
+                // Sink to the swim pose only while submerged. At the surface,
+                // KeepSurfaceCameraUnsunk keeps the player unsunk; requesting the
+                // sink there too made the two alternate frame-to-frame and bob
+                // the camera. (issue 5)
+                if (isSwimming)
+                    RequestSwimAfterWaterEnter();
+            }
             else
                 RestoreAboveSurfacePresentation(pex);
 
@@ -791,8 +799,9 @@ namespace DeepWaters
 
             ApplyDfuWaterAudioState(pex, oceanSurfaceY, isSwimming);
             ApplyOutdoorSwimMotorState(pex, isSwimming);
-            if (isSwimming)
-                RequestSwimAfterWaterEnter();
+            // The swim-pose sink is requested by the caller only while the
+            // player is actually submerged, so it doesn't fight
+            // KeepSurfaceCameraUnsunk at the waterline (issue 5: surface bob).
             currentlyForged = true;
         }
 
@@ -1132,7 +1141,9 @@ namespace DeepWaters
 
             ApplyDfuWaterAudioState(pex, oceanSurfaceY, isSwimming);
             ApplyOutdoorSwimMotorState(pex, isSwimming);
-            if (isSwimming)
+            // Match the early phase: only sink while submerged, so the late
+            // phase doesn't re-introduce the surface bob (issue 5).
+            if (isSwimming && presentationUnderwater)
                 RequestSwimAfterWaterEnter();
             else if (!presentationUnderwater)
                 RequestStandAfterWaterExit();
