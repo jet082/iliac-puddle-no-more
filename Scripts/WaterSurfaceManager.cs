@@ -206,12 +206,16 @@ namespace DeepWaters
                     float fracX1 = (x + 1) / (float)n;
                     float fracXMid = (x + 0.5f) / n;
 
-                    // Carve-aligned coverage (fully submerged + bake-carved):
-                    // film over every carved cell, painted water or sand.
+                    // Carve-aligned coverage (partially submerged + bake-carved):
+                    // film over every cell whose ground dips below the
+                    // waterline. Cells fully above the surface get no film;
+                    // ground poking above the film occludes it via the depth
+                    // test, so the waterline follows the terrain/ocean
+                    // intersection without bare shore bands.
                     bool carveAligned =
                         DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, fracXMid, fracZMid) &&
                         (!useBakeMask || DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracXMid, fracZMid)) &&
-                        DeepWaterWaterClassification.IsCellFullySubmerged(terrain.MapData, x, z, n);
+                        DeepWaterWaterClassification.IsCellPartiallySubmerged(terrain.MapData, x, z, n);
 
                     // Clip-aligned coverage: on clipped (ocean-connected) tiles
                     // the film must also cover every pure-water texel whose

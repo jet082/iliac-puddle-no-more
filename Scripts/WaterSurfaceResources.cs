@@ -23,6 +23,8 @@ namespace DeepWaters
         private static readonly int WaterColumnFogStrengthProperty = Shader.PropertyToID("_WaterColumnFogStrength");
         private static readonly int WaterSurfaceVisionDistanceProperty = Shader.PropertyToID("_WaterSurfaceVisionDistance");
         private static readonly int WaterSurfaceFalloffProperty = Shader.PropertyToID("_WaterSurfaceFalloff");
+        private static readonly int SurfaceOpaqueFadeStartProperty = Shader.PropertyToID("_SurfaceOpaqueFadeStart");
+        private static readonly int SurfaceOpaqueFadeEndProperty = Shader.PropertyToID("_SurfaceOpaqueFadeEnd");
         private static readonly int SrcBlendProperty = Uniforms.SrcBlend;
         private static readonly int DstBlendProperty = Uniforms.DstBlend;
         private static readonly int ZWriteProperty = Uniforms.ZWrite;
@@ -63,16 +65,18 @@ namespace DeepWaters
             return sharedUndersideMaterial;
         }
 
+        // Both surfaces stay enabled even at full transparency: the shaders
+        // carry the opaque horizon curtain (the void fix) and clip their own
+        // invisible near-field fragments, so disabling the renderer at alpha 0
+        // would remove the curtain exactly when the film is most transparent.
         public static bool IsTopSurfaceVisible()
         {
-            return DeepWaters.Instance != null &&
-                   DeepWaters.Instance.WaterSurfaceTopAlpha > 0.001f;
+            return DeepWaters.Instance != null;
         }
 
         public static bool IsUndersideSurfaceVisible()
         {
-            return DeepWaters.Instance != null &&
-                   DeepWaters.Instance.WaterSurfaceBottomAlpha > 0.001f;
+            return DeepWaters.Instance != null;
         }
 
         public static Texture GetSurfaceTexture()
@@ -182,6 +186,16 @@ namespace DeepWaters
 
             if (material.HasProperty(WaterSurfaceFalloffProperty))
                 material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff));
+
+            // Opaque horizon curtain: the surface (both sides) is fully opaque
+            // past this range, hiding the loaded-world edge (the void) behind
+            // an opaque sea. Anchored to the underwater vision distance so the
+            // fog-distance slider scales the horizon too.
+            float curtainVision = DeepWaters.Instance.UnderwaterVisionDistance;
+            if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
+                material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * 0.55f);
+            if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
+                material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * 1.8f);
         }
 
         private static void ConfigureTransparentMaterial(Material material)

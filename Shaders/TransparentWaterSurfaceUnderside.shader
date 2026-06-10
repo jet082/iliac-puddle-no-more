@@ -16,6 +16,8 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
 
         _UndersideAlpha ("Underside transparency", Range(0, 1)) = 0.25
         _UnderwaterFogColor ("Deep water color", Color) = (0.055, 0.098, 0.082, 1.0)
+        _SurfaceOpaqueFadeStart ("Surface opaque fade start", Float) = 42.0
+        _SurfaceOpaqueFadeEnd ("Surface opaque fade end", Float) = 160.0
         _WaterColumnFogStrength ("Water column fog strength", Range(0, 1)) = 1.0
 
         _ScrollX ("Wave scroll speed X", Float) = 0.0225
@@ -58,6 +60,8 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
             fixed4 _Color;
             fixed4 _UnderwaterFogColor;
             float _UndersideAlpha;
+            float _SurfaceOpaqueFadeStart;
+            float _SurfaceOpaqueFadeEnd;
             float _WaterColumnFogStrength;
             float _ScrollX;
             float _ScrollY;
@@ -91,10 +95,18 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
                 clip(i.worldPos.y - _WorldSpaceCameraPos.y + 0.02);
 
                 float undersideOpacity = saturate(_UndersideAlpha);
+
+                // Opaque horizon curtain (see the top shader): from below, the
+                // distant underside goes fully opaque so the sky backdrop and
+                // the loaded-world edge can never be seen through the surface
+                // at range.
+                float viewDist = distance(i.worldPos, _WorldSpaceCameraPos);
+                float horizonFade = smoothstep(_SurfaceOpaqueFadeStart, max(_SurfaceOpaqueFadeStart + 1.0, _SurfaceOpaqueFadeEnd), viewDist);
+                undersideOpacity = saturate(max(undersideOpacity, horizonFade));
                 clip(undersideOpacity - 0.001);
 
                 fixed4 wave = tex2D(_MainTex, i.uv);
-                fixed3 surfaceRgb = wave.rgb * _Color.rgb;
+                fixed3 surfaceRgb = lerp(wave.rgb * _Color.rgb, _UnderwaterFogColor.rgb, horizonFade * 0.92);
 
                 fixed4 col;
                 col.rgb = lerp(

@@ -197,6 +197,8 @@ namespace DeepWaters
                     Restore();
                     RequestStandAfterWaterExit();
                 }
+
+                ClearCrouchAfterWaterExit();
                 return;
             }
 
@@ -294,24 +296,6 @@ namespace DeepWaters
             if (presentationUnderwater)
                 ApplyNeutralUnderwaterFogColor();
             KeepSurfaceCameraUnsunk(presentationUnderwater, oceanSurfaceY);
-            if (isSwimming)
-                CancelSwimCrouch();
-        }
-
-        // Crouch means "descend" while swimming, but PlayerMotor recomputes
-        // OnExteriorWater by raycast BEFORE this late phase re-forges it, so
-        // DFU's DecideHeightAction sees "not on water" for that window and
-        // treats the press as a real crouch toggle — which is why the player
-        // used to step out of the water crouched. Cancel any queued crouch
-        // while swimming; the height changer needs ~0.1s to complete one, so
-        // a per-frame cancel keeps it from ever taking hold.
-        private static void CancelSwimCrouch()
-        {
-            GameManager gameManager = GameManager.Instance;
-            GameObject player = gameManager != null ? gameManager.PlayerObject : null;
-            var heightChanger = player != null ? player.GetComponent<PlayerHeightChanger>() : null;
-            if (heightChanger != null && heightChanger.HeightAction == HeightChangeAction.DoCrouching)
-                heightChanger.HeightAction = HeightChangeAction.DoNothing;
         }
 
         #region Forge / restore
@@ -340,6 +324,33 @@ namespace DeepWaters
             pex.UnderwaterFog?.UpdateFog(NoWaterSentinel);
             currentlyForged = false;
             ResetHeadWaterState(false);
+            // Crouch ("descend") presses while swimming can latch DFU's real
+            // crouch state (PlayerMotor recomputes OnExteriorWater by raycast
+            // before the late-phase re-forge, so the press reads as a crouch
+            // toggle). Clear it for a short window after leaving the water.
+            uncrouchAfterExitUntil = Time.time + UncrouchAfterExitSeconds;
+        }
+
+        private const float UncrouchAfterExitSeconds = 1.5f;
+        private float uncrouchAfterExitUntil;
+
+        private void ClearCrouchAfterWaterExit()
+        {
+            if (Time.time >= uncrouchAfterExitUntil)
+                return;
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null || gameManager.PlayerMotor == null || !gameManager.PlayerMotor.IsCrouching)
+                return;
+
+            GameObject player = gameManager.PlayerObject;
+            var heightChanger = player != null ? player.GetComponent<PlayerHeightChanger>() : null;
+            if (heightChanger != null &&
+                heightChanger.HeightAction != HeightChangeAction.DoUnsinking &&
+                heightChanger.HeightAction != HeightChangeAction.DoStanding)
+            {
+                heightChanger.HeightAction = HeightChangeAction.DoStanding;
+            }
         }
 
         /// <summary>Teardown for save loads: clear every forged/swim flag.</summary>

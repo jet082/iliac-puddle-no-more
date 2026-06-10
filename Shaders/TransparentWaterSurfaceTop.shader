@@ -20,6 +20,8 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
         _WaterColumnFogStrength ("Water column fog strength", Range(0, 1)) = 1.0
         _WaterSurfaceVisionDistance ("Surface vision distance", Float) = 70.0
         _WaterSurfaceFalloff ("Surface distance falloff", Range(0, 1)) = 0.5
+        _SurfaceOpaqueFadeStart ("Surface opaque fade start", Float) = 42.0
+        _SurfaceOpaqueFadeEnd ("Surface opaque fade end", Float) = 160.0
 
         _ScrollX ("Wave scroll speed X", Float) = 0.0225
         _ScrollY ("Wave scroll speed Y", Float) = 0.0375
@@ -66,6 +68,8 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
             float _WaterColumnFogStrength;
             float _WaterSurfaceVisionDistance;
             float _WaterSurfaceFalloff;
+            float _SurfaceOpaqueFadeStart;
+            float _SurfaceOpaqueFadeEnd;
             float _ScrollX;
             float _ScrollY;
             float _DeepWatersUnderwater;
@@ -145,16 +149,25 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 float occlusionRate = lerp(1.2, 3.0, fogStrength);
                 float bodyOpacity = saturate(1.0 - exp2(-(waterPath / visionRef) * occlusionRate));
 
+                // Opaque horizon curtain. The surface goes FULLY opaque at
+                // distance, independent of the transparency setting, so open
+                // water forms a wall in front of the loaded-world edge — the
+                // outdoor equivalent of the dungeon walls that hide DFU's
+                // void. Without it the void is visible across open sea
+                // whenever the film is transparent.
+                float viewDist = distance(i.worldPos, _WorldSpaceCameraPos);
+                float horizonFade = smoothstep(_SurfaceOpaqueFadeStart, max(_SurfaceOpaqueFadeStart + 1.0, _SurfaceOpaqueFadeEnd), viewDist);
+
                 // The surface film (configured top transparency) is the minimum
                 // opacity; the water column adds opacity on top as it deepens, so
                 // a clear film still hides a deep seabed.
-                float finalAlpha = saturate(max(surfaceOpacity, bodyOpacity));
+                float finalAlpha = saturate(max(max(surfaceOpacity, bodyOpacity), horizonFade));
                 clip(finalAlpha - 0.001);
 
                 fixed4 col;
                 // Keep a little surface sheen even over deep water so the wave
                 // texture still reads instead of flattening to solid fog color.
-                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, bodyOpacity * 0.88);
+                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, max(bodyOpacity * 0.88, horizonFade * 0.92));
                 col.a = finalAlpha;
                 return col;
             }
