@@ -61,12 +61,6 @@ namespace DeepWaters
         // The user runs the game with this and shares the Player.log so we
         // can verify shore wall geometry is actually being generated.
         public static bool DiagnosticLogging = false;
-        // v0.55.51 shore-drop DIRECTION diagnostic.
-        // Logs, per coastal tile, the baked distance + resulting floor depth at
-        // the carve shore for each land-facing direction, so walls can be
-        // correlated with compass facing.
-        public static bool ShoreDropDiagnostics = false;
-        private static int shoreDiagLinesLogged = 0;
         public static int DiagnosticTilesBuilt = 0;
         private int diagWithinTileWalls;
         private int diagBoundaryWalls;
@@ -221,11 +215,7 @@ namespace DeepWaters
             mesh.RecalculateBounds();
 
             EnsureMaterial();
-            if (DeepWaterFloorBuilder.DiagTrace)
-                Debug.Log("[DeepWaters.DIAG] meshCollider>> tile=(" + BuiltMapPixelX + "," + BuiltMapPixelY + ") verts=" + mesh.vertexCount);
             EnsureCollider();
-            if (DeepWaterFloorBuilder.DiagTrace)
-                Debug.Log("[DeepWaters.DIAG] meshCollider<< tile=(" + BuiltMapPixelX + "," + BuiltMapPixelY + ")");
 
             if (DiagnosticLogging)
             {
@@ -250,116 +240,6 @@ namespace DeepWaters
                     " meshTris=" + (mesh.triangles.Length / 3));
             }
 
-            LogShoreDropDiagnostics(owner, tile, holes, terrainOrigin, tileWorldSize);
-        }
-
-        // v0.55.51 DIAGNOSTIC: confirm the north-vs-other-direction wall pattern.
-        // holes[z,x]==false is a CARVED (water) cell; z increases NORTH (z=0 is
-        // the tile's south edge), x increases EAST. A solid (==true) cardinal
-        // neighbour is LAND. For each land-facing direction we keep the carve-
-        // perimeter cell with the LARGEST baked distance-to-edge — the deeper
-        // the bake reads at the carved shore, the taller the skirt wall there.
-        // Comparing edge/depth across landN/landS/landE/landW per tile tells us
-        // whether the walls track a specific compass facing (a systematic bake
-        // vs carve misalignment) or are random.
-        private void LogShoreDropDiagnostics(
-            DaggerfallTerrain owner, DeepWaterTileData tile, bool[,] holes,
-            Vector3 terrainOrigin, float tileWorldSize)
-        {
-            if (!ShoreDropDiagnostics || tile == null || holes == null || shoreDiagLinesLogged >= 1000)
-                return;
-            int rows = holes.GetLength(0);
-            int cols = holes.GetLength(1);
-            if (rows < 3 || cols < 3)
-                return;
-            float cellW = tileWorldSize / cols;
-            float cellH = tileWorldSize / rows;
-
-            // Detect "underwater land": uncarved cells whose terrain is below sea
-            // level (submerged ground the carve skipped — you swim over a thin
-            // film but can't dive). Counting these per tile tests the hypothesis
-            // that the walls sit at carved-floor vs uncarved-submerged boundaries.
-            float[,] heights = owner != null ? owner.MapData.heightmapSamples : null;
-            var dfu = DaggerfallUnity.Instance;
-            float oceanThreshold = (dfu != null && dfu.TerrainSampler != null)
-                ? dfu.TerrainSampler.OceanElevation / dfu.TerrainSampler.MaxTerrainHeight
-                : 0.5f;
-            bool canCheckSubmerged = heights != null &&
-                heights.GetLength(0) >= rows && heights.GetLength(1) >= cols;
-            int underwaterLandCells = 0;
-            float maxTerrainHeight = (dfu != null && dfu.TerrainSampler != null)
-                ? dfu.TerrainSampler.MaxTerrainHeight : 5000f;
-            float maxCarvedItDepth = 0f;   // deepest IT seabed (m) under a carved cell
-
-            var maxEdge = new float[4];  // 0=landN 1=landS 2=landE 3=landW
-            var atCoast = new float[4];
-            var atDepth = new float[4];
-            var atWX = new float[4];
-            var atWZ = new float[4];
-            var seen = new bool[4];
-
-            for (int z = 1; z < rows - 1; z++)
-            {
-                for (int x = 1; x < cols - 1; x++)
-                {
-                    if (holes[z, x])
-                    {
-                        if (canCheckSubmerged &&
-                            heights[z, x] <= oceanThreshold && heights[z, x + 1] <= oceanThreshold &&
-                            heights[z + 1, x] <= oceanThreshold && heights[z + 1, x + 1] <= oceanThreshold)
-                            underwaterLandCells++;
-                        continue;                         // uncarved cell
-                    }
-                    if (canCheckSubmerged)
-                    {
-                        float itd = (oceanThreshold - heights[z, x]) * maxTerrainHeight;
-                        if (itd > maxCarvedItDepth) maxCarvedItDepth = itd;
-                    }
-                    int dir;
-                    if (holes[z + 1, x]) dir = 0;         // land to the north
-                    else if (holes[z - 1, x]) dir = 1;    // land to the south
-                    else if (holes[z, x + 1]) dir = 2;    // land to the east
-                    else if (holes[z, x - 1]) dir = 3;    // land to the west
-                    else continue;                        // interior water
-
-                    float wx = terrainOrigin.x + (x + 0.5f) * cellW;
-                    float wz = terrainOrigin.z + (z + 0.5f) * cellH;
-                    float ed = tile.GetDistanceToEdgeMeters(wx, wz);
-                    if (seen[dir] && ed <= maxEdge[dir]) continue;
-
-                    seen[dir] = true;
-                    maxEdge[dir] = ed;
-                    atCoast[dir] = tile.GetDistanceToCoastMeters(wx, wz);
-                    atWX[dir] = wx;
-                    atWZ[dir] = wz;
-                    float climateBase, band;
-                    tile.GetBlendedClimate(wx, wz, out climateBase, out band);
-                    float nX, nZ;
-                    tile.GetNoiseWorldCoords(wx, wz, out nX, out nZ);
-                    atDepth[dir] = DeepBathymetry.SampleDepthMeters(nX, nZ, climateBase, ed);
-                }
-            }
-
-            if (!seen[0] && !seen[1] && !seen[2] && !seen[3])
-                return;                                   // open-ocean tile, no carved shore
-
-            string[] names = { "landN", "landS", "landE", "landW" };
-            var sb = new System.Text.StringBuilder();
-            sb.Append("[DeepWaters.ShoreDiag] tile=(").Append(owner.MapPixelX)
-              .Append(",").Append(owner.MapPixelY).Append(") uwLand=")
-              .Append(underwaterLandCells).Append(" itSeabedMax=")
-              .Append(maxCarvedItDepth.ToString("F0")).Append("m  ");
-            for (int i = 0; i < 4; i++)
-            {
-                if (!seen[i]) continue;
-                sb.Append(names[i]).Append(" edge=").Append(maxEdge[i].ToString("F0"))
-                  .Append(" coast=").Append(atCoast[i].ToString("F0"))
-                  .Append(" depth=").Append(atDepth[i].ToString("F0"))
-                  .Append(" @(").Append(atWX[i].ToString("F0")).Append(",")
-                  .Append(atWZ[i].ToString("F0")).Append(")   ");
-            }
-            Debug.Log(sb.ToString());
-            shoreDiagLinesLogged++;
         }
 
         public void TearDown()

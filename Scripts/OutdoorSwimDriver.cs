@@ -134,6 +134,7 @@ namespace DeepWaters
 
         void OnDisable()
         {
+            ReleaseSwimMotorFrameSpikeGuard();
             RestoreWaterTerrainCollider(force: true);
         }
 
@@ -155,6 +156,7 @@ namespace DeepWaters
 
             if (pex.IsPlayerInside)
             {
+                ReleaseSwimMotorFrameSpikeGuard();
                 RestoreWaterTerrainCollider();
                 if (currentlyForged)
                     Restore();
@@ -174,6 +176,8 @@ namespace DeepWaters
             bool standingOnShore = !waterColliderGateActive && IsStandingOnShoreGround(oceanSurfaceY);
             bool isSwimming = !standingOnShore && IsPlayerAtSwimmingDepth(oceanSurfaceY);
             bool isPresentationUnderwater = !standingOnShore && IsPresentationUnderwater(oceanSurfaceY);
+
+            GuardSwimMotorFrameSpike(isSwimming);
 
             if (standingOnShore)
                 ResetHeadWaterState(false);
@@ -323,6 +327,7 @@ namespace DeepWaters
                 return;
 
             ResetHeadWaterState(false);
+            ReleaseSwimMotorFrameSpikeGuard();
             if (currentlyForged)
             {
                 Restore();
@@ -658,10 +663,64 @@ namespace DeepWaters
                    bundleName == ComeSailAwayBoatEffectBundleName;
         }
 
+        // LevitateMotor moves the player by speed * Time.deltaTime, and the
+        // catch-up frame after a map-pixel terrain stall arrives with a huge
+        // deltaTime (~1-2s) — one frame of held input lurches the swimmer
+        // 8-16m, far outside the collider gate's disabled ring and into an
+        // enabled heightfield, which depenetrates them straight up to the
+        // surface (the "shoot up when crossing map pixels" eject). Skip DFU's
+        // swim movement on those frames by disabling the component before its
+        // Update runs (this driver runs at order -32000); the next normal
+        // frame re-enables it. Re-enabling here also heals a motor left
+        // disabled by older builds.
+        private const float MaxSwimFrameDeltaSeconds = 0.1f;
+        private bool suppressedSwimMotorForFrameSpike;
+
+        private void GuardSwimMotorFrameSpike(bool isSwimming)
+        {
+            GameManager gameManager = GameManager.Instance;
+            GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+            LevitateMotor levitateMotor = player != null ? player.GetComponent<LevitateMotor>() : null;
+            if (levitateMotor == null)
+                return;
+
+            bool spike = isSwimming &&
+                         !levitateMotor.IsLevitating &&
+                         Time.deltaTime > MaxSwimFrameDeltaSeconds;
+            if (spike)
+            {
+                if (levitateMotor.enabled)
+                {
+                    levitateMotor.enabled = false;
+                    suppressedSwimMotorForFrameSpike = true;
+                }
+            }
+            else if (!levitateMotor.enabled)
+            {
+                levitateMotor.enabled = true;
+                suppressedSwimMotorForFrameSpike = false;
+            }
+        }
+
+        private void ReleaseSwimMotorFrameSpikeGuard()
+        {
+            if (!suppressedSwimMotorForFrameSpike)
+                return;
+
+            GameManager gameManager = GameManager.Instance;
+            GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+            LevitateMotor levitateMotor = player != null ? player.GetComponent<LevitateMotor>() : null;
+            if (levitateMotor != null && !levitateMotor.enabled)
+                levitateMotor.enabled = true;
+
+            suppressedSwimMotorForFrameSpike = false;
+        }
+
         private void SuppressOutdoorSwimming(bool allowSnap)
         {
             bool justEnteredBoat = !wasPlayerOnBoat;
             ResetHeadWaterState(false);
+            ReleaseSwimMotorFrameSpikeGuard();
             RestoreWaterTerrainCollider();
             if (currentlyForged)
                 Restore();
@@ -749,13 +808,6 @@ namespace DeepWaters
         /// </summary>
         private void UpdateWaterTerrainColliderGate(float oceanSurfaceY)
         {
-            if (!DeepWaterHoleApplier.DisableRuntimeTerrainHoles)
-            {
-                // Holes mode (debug): real holes exist, the colliders must stay.
-                RestoreWaterTerrainCollider();
-                return;
-            }
-
             GameManager gameManager = GameManager.Instance;
             GameObject player = gameManager != null ? gameManager.PlayerObject : null;
             if (player == null || gameManager.PlayerEnterExit == null || gameManager.PlayerEnterExit.IsPlayerInside)
@@ -1170,7 +1222,6 @@ namespace DeepWaters
 
         private PlayerSpeedChanger speedChanger;
         private PlayerGroundMotor groundMotor;
-        private LevitateMotor levitateMotor;
         private string walkSpeedModId;
         private float appliedMultiplier = 1f;
         private Vector3 strokeDirection;
@@ -1195,7 +1246,6 @@ namespace DeepWaters
             }
 
             CachePlayerMotorParts();
-            HealSuppressedSwimMotor();
             ApplySpeedMultiplier();
             HandleStrokeInput();
             ApplyStrokeMotion();
@@ -1216,16 +1266,6 @@ namespace DeepWaters
             }
 
             groundMotor = player.GetComponent<PlayerGroundMotor>();
-            levitateMotor = player.GetComponent<LevitateMotor>();
-        }
-
-        // Earlier mod versions disabled LevitateMotor to drive swim movement
-        // themselves; if any such state lingers (mod reload mid-game), hand
-        // movement back to DFU.
-        private void HealSuppressedSwimMotor()
-        {
-            if (levitateMotor != null && !levitateMotor.enabled)
-                levitateMotor.enabled = true;
         }
 
         private void ApplySpeedMultiplier()

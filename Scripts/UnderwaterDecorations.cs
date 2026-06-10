@@ -110,26 +110,6 @@ namespace DeepWaters
             installed = true;
         }
 
-        public static void Uninstall()
-        {
-            if (!installed)
-                return;
-
-            DaggerfallTerrain.OnPromoteTerrainData -= HandlePromote;
-            DeepWaterFloorBuilder.OnFloorRefreshed -= HandleFloorRefreshed;
-            PlayerGPS.OnMapPixelChanged -= HandleMapPixelChanged;
-            DeepWaterRuntime.OnTransientReset -= ResetRuntimeState;
-
-            if (workerObject != null)
-            {
-                Object.Destroy(workerObject);
-                workerObject = null;
-            }
-
-            ResetRuntimeState();
-
-            installed = false;
-        }
 
         public static void RefreshPlayerArea()
         {

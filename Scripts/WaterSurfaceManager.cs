@@ -34,22 +34,8 @@ namespace DeepWaters
             installed = true;
         }
 
-        public static void Uninstall()
-        {
-            if (!installed)
-                return;
-
-            DaggerfallTerrain.OnPromoteTerrainData -= HandlePromote;
-            installed = false;
-        }
-
         public static void RefreshLoadedSurfaces()
         {
-            // Lean-mode isolation build installs no water surfaces; skip the
-            // post-load refresh too so none get created behind its back.
-            if (DeepWaters.LeanMode)
-                return;
-
             DaggerfallTerrain[] terrains = Object.FindObjectsOfType<DaggerfallTerrain>();
             for (int i = 0; i < terrains.Length; i++)
             {
@@ -120,7 +106,6 @@ namespace DeepWaters
                 visualGO = existing.gameObject;
             }
 
-            DisableLegacyRootRenderer(visualGO);
             EnsureSurfaceMarker(visualGO);
 
             MeshFilter topFilter = EnsureSurfaceRenderer(
@@ -184,28 +169,6 @@ namespace DeepWaters
             var marker = visualGO.GetComponent<DeepWatersWaterSurface>();
             if (marker == null)
                 visualGO.AddComponent<DeepWatersWaterSurface>();
-
-            var collider = visualGO.GetComponent<BoxCollider>();
-            if (collider != null)
-                Object.Destroy(collider);
-        }
-
-        private static void DisableLegacyRootRenderer(GameObject visualGO)
-        {
-            var renderer = visualGO.GetComponent<MeshRenderer>();
-            if (renderer != null)
-            {
-                renderer.enabled = false;
-                renderer.sharedMaterial = null;
-            }
-
-            var filter = visualGO.GetComponent<MeshFilter>();
-            if (filter == null)
-                return;
-
-            Mesh oldMesh = filter.sharedMesh;
-            filter.sharedMesh = null;
-            DestroyGeneratedMesh(oldMesh, null);
         }
 
         private static Mesh BuildSurfaceMesh(DaggerfallTerrain terrain, TerrainData terrainData)
@@ -327,31 +290,8 @@ namespace DeepWaters
 
                 Object.Destroy(visual.gameObject);
             }
-
-            // Legacy cleanup: remove any v0.1/v0.2 BoxCollider + marker.
-            var marker = terrain.GetComponent<DeepWatersSurfaceMarker>();
-            if (marker != null)
-            {
-                if (marker.Surface != null)
-                    Object.Destroy(marker.Surface);
-                Object.Destroy(marker);
-            }
         }
 
-        public static Material GetSharedWaterMaterial()
-        {
-            return WaterSurfaceResources.GetSharedMaterial();
-        }
-    }
-
-    /// <summary>
-    /// Legacy marker from v0.1/v0.2 (collider-based surface). Retained so
-    /// we can clean up leftover colliders on terrain GOs recycled across
-    /// mod versions.
-    /// </summary>
-    public class DeepWatersSurfaceMarker : MonoBehaviour
-    {
-        public BoxCollider Surface;
     }
 
     /// <summary>

@@ -14,7 +14,6 @@ namespace DeepWaters
         private const string UndersideSurfaceShaderName = "DeepWaters/TransparentWaterSurfaceUnderside";
         private const string UndersideSurfaceShaderAssetName = "TransparentWaterSurfaceUnderside.shader";
         private const string TransparentRenderType = "Transparent";
-        private const float LegacyOpaqueFadeDisabledStart = 100000f;
 
         private static readonly int ColorProperty = Shader.PropertyToID("_Color");
         private static readonly int UndersideAlphaProperty = Shader.PropertyToID("_UndersideAlpha");
@@ -28,7 +27,6 @@ namespace DeepWaters
         private static readonly int DstBlendProperty = Uniforms.DstBlend;
         private static readonly int ZWriteProperty = Uniforms.ZWrite;
 
-        private static Mesh sharedFlatMesh;
         private static Material sharedTopMaterial;
         private static Material sharedUndersideMaterial;
         private static Texture sharedSurfaceTexture;
@@ -36,42 +34,6 @@ namespace DeepWaters
         private static readonly Color FallbackSurfaceColor = new Color(0.075f, 0.24f, 0.38f, 1f);
 
         public const float SurfaceTextureTiling = 128f;
-
-        public static Mesh GetFlatMesh()
-        {
-            if (sharedFlatMesh != null)
-                return sharedFlatMesh;
-
-            sharedFlatMesh = new Mesh { name = "DeepWaters.TopOnlyQuad" };
-            sharedFlatMesh.vertices = new[]
-            {
-                new Vector3(0f, 0f, 0f),
-                new Vector3(1f, 0f, 0f),
-                new Vector3(1f, 0f, 1f),
-                new Vector3(0f, 0f, 1f),
-            };
-            sharedFlatMesh.triangles = new[] { 0, 2, 1, 0, 3, 2 };
-            sharedFlatMesh.normals = new[] { Vector3.up, Vector3.up, Vector3.up, Vector3.up };
-            sharedFlatMesh.uv = new[]
-            {
-                new Vector2(0f, 0f),
-                new Vector2(1f, 0f),
-                new Vector2(1f, 1f),
-                new Vector2(0f, 1f),
-            };
-            sharedFlatMesh.RecalculateBounds();
-            return sharedFlatMesh;
-        }
-
-        public static Material GetSharedMaterial()
-        {
-            return GetTopMaterial();
-        }
-
-        public static Material GetMaterial()
-        {
-            return GetTopMaterial();
-        }
 
         public static Material GetTopMaterial()
         {
@@ -287,12 +249,5 @@ namespace DeepWaters
             return Mathf.Clamp01(DeepWaters.Instance.UnderwaterFogStrength);
         }
 
-        internal static void GetSurfaceOpaqueFadeRange(out float fadeStart, out float fadeEnd)
-        {
-            // Retained for older integrations that still probe this helper.
-            // The split top/underside shaders do not use distance opacity.
-            fadeStart = LegacyOpaqueFadeDisabledStart;
-            fadeEnd = LegacyOpaqueFadeDisabledStart + 1f;
-        }
     }
 }

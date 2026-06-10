@@ -13,13 +13,14 @@ namespace DeepWaters
     /// Listens to DaggerfallTerrain promotion. For ocean-connected tiles:
     ///   1. Attaches a <see cref="DeepWaterTileData"/> cache (climate +
     ///      distance-to-coast field).
-    ///   2. Computes a hole mask and enqueues it through
-    ///      <see cref="DeepWaterHoleApplier"/>. The applier writes on a later
-    ///      frame so Unity terrain holes do not race DFU's location load.
-    ///   3. Spawns a <see cref="DeepWaterFloorMesh"/> child immediately. The
-    ///      sub-mesh is independent of SetHoles and renders correctly even
-    ///      before the hole applies; vanilla terrain may briefly occlude it
-    ///      from above until the hole punches through.
+    ///   2. Computes the per-cell carve mask (which cells are deep water).
+    ///   3. Builds a <see cref="DeepWaterFloorMesh"/> child from that mask.
+    ///
+    /// The vanilla terrain is never modified: real Unity terrain holes
+    /// native-crash Unity 2019.4 (TerrainRenderer::ForceSplitParent when a
+    /// holed patch subdivides), so the heightfield stays intact and the
+    /// outdoor swim collider gate disables its collider locally to let the
+    /// player descend to the seafloor mesh.
     /// </summary>
     public static class DeepWaterFloorBuilder
     {
@@ -44,25 +45,6 @@ namespace DeepWaters
         // enough buffer to avoid the heightmap-interpolation seam where
         // IT's beach sand starts to fade up from sea level.
         internal const float HoleBufferMeters = 0.5f;
-        // Diagnostic kill-switch from the v0.40 crash bisection. When true,
-        // holes still get enqueued and applied, but no seafloor sub-mesh
-        // is built — leaving voids beneath the water surface. The
-        // Stable post-stream hole applier made multi-tile sub-meshes safe
-        // again, so this defaults to false in production.
-        public static bool SkipFloorMesh = false;
-
-        // Option B (v0.55.9) DISABLED: skipping holes near locations + the
-        // per-tile location check shifted the coastal-town load timing and
-        // *lost* the fragile SetHoles-vs-building-collider race that v0.55.8
-        // narrowly wins — i.e. it made the on-load crash WORSE, not better.
-        // Left here (off) for reference; flipping it back on reintroduces the
-        // v0.55.9 load crash.
-        public static bool SkipHolesNearLocations = false;
-
-        // Per-operation trace around carving and seafloor-mesh building.
-        // Useful for crash bisection, but far too noisy for normal play because
-        // terrain streaming can promote dozens of tiles in a short burst.
-        public static bool DiagTrace = false;
 
         // Event raised after a tile's seafloor mesh has been built or
         // refreshed. UnderwaterDecorations subscribes to this so it can
@@ -82,13 +64,6 @@ namespace DeepWaters
             if (installed) return;
             DaggerfallTerrain.OnPromoteTerrainData += HandlePromote;
             installed = true;
-        }
-
-        public static void Uninstall()
-        {
-            if (!installed) return;
-            DaggerfallTerrain.OnPromoteTerrainData -= HandlePromote;
-            installed = false;
         }
 
         // Force=true bypasses HandlePromoteCore's IsCurrentBuild guard so
@@ -195,51 +170,18 @@ namespace DeepWaters
             {
                 if (DiagnosticLogging)
                     Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + ") skipped (mod not ready)");
-                QueueSolidResetIfTouched(dfTerrain, terrainData, "mod not ready", fromPromoteEvent);
                 RemoveFloor(dfTerrain);
                 return;
             }
 
-            // Option B: never carve holes on a location tile or its immediate
-            // neighbours. DFU adds a town's building colliders during location
-            // layout; a hole's SetHolesDelayLOD/SyncTexture racing that collider
-            // setup native-crashes Unity 2019.4 (the "crash right after Location
-            // GameObject Created" at coastal towns like Fonthope End). Leaving
-            // these tiles vanilla keeps the water shallow right around a town but
-            // crash-free; real depth resumes a tile or two offshore.
-            if (SkipHolesNearLocations && IsNearLocation(dfTerrain))
-            {
-                if (DiagnosticLogging)
-                    Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY +
-                              ") near a location — leaving vanilla (no holes).");
-                QueueSolidResetIfTouched(dfTerrain, terrainData, "near location", fromPromoteEvent);
-                RemoveFloor(dfTerrain);
-                return;
-            }
-
-            // IsCurrentBuild guard. The mesh side and the applier side
-            // can fall out of sync — DFU's promote pipeline allocates a
-            // fresh float[,] heightmapSamples on every real promote, so
-            // reference equality reliably tells us when the mesh needs
-            // a rebuild, but it can't tell us whether the most recent
-            // mask write actually reached the GPU. ClearQueue() on save
-            // load / teleport drops in-flight applies; if that happens
-            // between the mesh build and the SyncTexture, the mesh ends
-            // up "current" while TerrainData (and the GPU) never got
-            // the hole mask. The player sees vanilla terrain under the
-            // water plane until DFU happens to re-promote — which is
-            // exactly the "fixes itself when I leave and re-enter the
-            // map pixel" recovery the user described.
-            //
-            // The guard now distinguishes three states:
-            //   A. Mesh current AND applier confirms sync for this
-            //      heightmap → fully current → skip everything.
-            //   B. Mesh current but sync NOT confirmed → re-enqueue the
-            //      mask (cheap) but skip the expensive mesh rebuild +
-            //      OnFloorRefreshed (decorations stay put).
-            //   C. Mesh stale (different heightmap ref / coords / no
-            //      mesh) → full work below.
-            bool meshCurrent = false;
+            // IsCurrentBuild guard. DFU's promote pipeline allocates a fresh
+            // float[,] heightmapSamples on every real promote, so reference
+            // equality reliably tells us whether the existing mesh was built
+            // from the heightmap the tile is presently wearing. Skipping
+            // current tiles matters: RefreshPlayerArea re-promotes the whole
+            // loaded ring every streaming pulse, and a spurious rebuild bumps
+            // BuildVersion, which tears down and respawns the tile's
+            // decorations.
             if (!force)
             {
                 Transform existingFloorChild = dfTerrain.transform.Find(FloorChildName);
@@ -255,20 +197,8 @@ namespace DeepWaters
                             dfTerrain.MapData.heightmapSamples))
                     {
                         existingMesh.EnsureRuntimeCollider();
-
-                        if (DeepWaterHoleApplier.IsHeightmapSynced(
-                                dfTerrain, dfTerrain.MapData.heightmapSamples))
-                        {
-                            // State A: fully current.
-                            UpdateTerrainCapRenderer(dfTerrain);
-                            return;
-                        }
-
-                        // State B: mesh current, sync pending or lost.
-                        // Fall through to the cheap path (compute mask +
-                        // enqueue) but flag meshCurrent so we skip the
-                        // mesh rebuild block below.
-                        meshCurrent = true;
+                        UpdateTerrainCapRenderer(dfTerrain);
+                        return;
                     }
                 }
             }
@@ -283,7 +213,6 @@ namespace DeepWaters
                     Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY +
                               ") NOT ocean-connected (connected=" + tile.IsOceanConnected +
                               " distField=" + tile.HasDistanceField + ") — no seafloor mesh");
-                QueueSolidResetIfTouched(dfTerrain, terrainData, "not ocean-connected", fromPromoteEvent);
                 RemoveFloor(dfTerrain);
                 return;
             }
@@ -294,140 +223,16 @@ namespace DeepWaters
             {
                 if (DiagnosticLogging)
                     Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY +
-                              ") ocean-connected but no holes (entirely buffered shoreline?) — no seafloor mesh");
-                QueueSolidResetIfTouched(dfTerrain, terrainData, "no holes", fromPromoteEvent);
+                              ") ocean-connected but no carved cells (entirely buffered shoreline?) — no seafloor mesh");
                 RemoveFloor(dfTerrain);
                 return;
             }
 
-            // Carve the vanilla terrain through the applier. Even genuine
-            // promote events can overlap coastal location creation on Unity
-            // 2019.4; the applier owns the narrow safe timing window.
-            if (DiagTrace)
-                Debug.Log("[DeepWaters.DIAG] carve>> " + DiagCtx(dfTerrain, fromPromoteEvent));
-            ApplyHoleMask(dfTerrain, terrainData, holes, fromPromoteEvent);
-            if (DiagTrace)
-                Debug.Log("[DeepWaters.DIAG] carve<< tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + ")");
-
-            if (meshCurrent)
-            {
-                // State B: nothing more to do. The mesh is already
-                // correct for this heightmap; we only needed to push the
-                // mask back through the applier so the GPU catches up.
-                // Skip BuildOrRefreshFloor and skip the OnFloorRefreshed
-                // event so decorations stay anchored.
-                UpdateTerrainCapRenderer(dfTerrain);
-                return;
-            }
-
-            if (!SkipFloorMesh)
-            {
-                if (DiagTrace)
-                    Debug.Log("[DeepWaters.DIAG] mesh>> " + DiagCtx(dfTerrain, fromPromoteEvent));
-                BuildOrRefreshFloor(dfTerrain, terrainData, tile, holes);
-                if (DiagTrace)
-                    Debug.Log("[DeepWaters.DIAG] mesh<< tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + ")");
-                // Fire the OnFloorRefreshed signal so UnderwaterDecorations
-                // (and any other newer subsystems) can queue per-tile work.
-                UpdateTerrainCapRenderer(dfTerrain);
-                RaiseFloorRefreshed(dfTerrain);
-            }
-            else
-                RemoveFloor(dfTerrain);
-
-            // Neighbor refresh DISABLED in this build. The working backup
-            // ran a deferred refresh of each newly-promoted tile's four
-            // neighbors so the per-tile BFS distance field could smooth
-            // across shared edges. With the global pre-baked distance
-            // field (DeepWaterDistanceBake) loaded at startup, that
-            // smoothing happens at bake time — adjacent tiles already
-            // agree at their shared boundary, so the refresh is
-            // redundant work.
-            //
-            // EnqueueNeighborsForRefresh additionally called
-            // FindObjectsOfType<DaggerfallTerrain> per promotion. During
-            // streaming with ~70 tiles in the loaded ring that's ~70
-            // FindObjectsOfType calls in rapid succession, each
-            // allocating a ~70-entry array, then 4× iterating to find
-            // neighbors by world-position match. The cost was a major
-            // chunk of the frame stalls the user reported. Killing the
-            // call entirely removes both the allocation flood and the
-            // O(n²) neighbor lookup.
-            // if (!suppressNeighborRefresh)
-            //     EnqueueNeighborsForRefresh(dfTerrain);
-        }
-
-        private static bool suppressNeighborRefresh;
-        private static readonly Queue<DaggerfallTerrain> neighborRefreshQueue = new Queue<DaggerfallTerrain>();
-        private static readonly HashSet<DaggerfallTerrain> neighborRefreshSet = new HashSet<DaggerfallTerrain>();
-        private const int RefreshesPerFrame = 2;
-
-        private static void EnqueueNeighborsForRefresh(DaggerfallTerrain dfTerrain)
-        {
-            if (dfTerrain == null) return;
-
-            float tileWS = MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale;
-            Vector3 origin = dfTerrain.transform.position;
-
-            Vector3[] targets = new Vector3[]
-            {
-                origin + new Vector3(tileWS, 0, 0),
-                origin - new Vector3(tileWS, 0, 0),
-                origin + new Vector3(0, 0, tileWS),
-                origin - new Vector3(0, 0, tileWS),
-            };
-
-            const float epsilon = 0.5f;
-            DaggerfallTerrain[] terrains = UnityEngine.Object.FindObjectsOfType<DaggerfallTerrain>();
-            for (int i = 0; i < terrains.Length; i++)
-            {
-                DaggerfallTerrain t = terrains[i];
-                if (t == dfTerrain) continue;
-
-                Vector3 pos = t.transform.position;
-                for (int k = 0; k < targets.Length; k++)
-                {
-                    if (Mathf.Abs(pos.x - targets[k].x) < epsilon &&
-                        Mathf.Abs(pos.z - targets[k].z) < epsilon)
-                    {
-                        if (neighborRefreshSet.Add(t))
-                            neighborRefreshQueue.Enqueue(t);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Called from a MonoBehaviour driver each frame. Processes a bounded
-        // number of queued refreshes per call so the cascade spreads over
-        // many frames instead of stalling promotion. The suppress flag is
-        // set during the actual rebuild so a refreshed tile doesn't immediately
-        // re-enqueue all its own neighbors.
-        public static void PumpDeferredRefreshes()
-        {
-            int budget = RefreshesPerFrame;
-            while (budget > 0 && neighborRefreshQueue.Count > 0)
-            {
-                DaggerfallTerrain t = neighborRefreshQueue.Dequeue();
-                neighborRefreshSet.Remove(t);
-                if (t == null) continue;
-
-                Terrain unityTerrain = t.GetComponent<Terrain>();
-                if (unityTerrain == null || unityTerrain.terrainData == null) continue;
-
-                suppressNeighborRefresh = true;
-                try
-                {
-                    // Already-loaded, already-rendered tile: treat as a
-                    // refresh (no live re-carve), not a promote event.
-                    HandlePromote(t, unityTerrain.terrainData, false);
-                }
-                finally
-                {
-                    suppressNeighborRefresh = false;
-                }
-                budget--;
-            }
+            BuildOrRefreshFloor(dfTerrain, terrainData, tile, holes);
+            UpdateTerrainCapRenderer(dfTerrain);
+            // Fire the OnFloorRefreshed signal so UnderwaterDecorations
+            // (and any other subscribers) can queue per-tile work.
+            RaiseFloorRefreshed(dfTerrain);
         }
 
         private static int ResolveClimateIndex(DaggerfallTerrain dfTerrain)
@@ -437,95 +242,6 @@ namespace DeepWaters
                 return (int)MapsFile.Climates.Ocean;
 
             return dfu.ContentReader.MapFileReader.GetClimateIndex(dfTerrain.MapPixelX, dfTerrain.MapPixelY);
-        }
-
-        // True if this tile, or any of its 8 immediate neighbours, contains a
-        // Daggerfall location (town/city/etc.). Carving holes anywhere in this
-        // 3x3 footprint can race a town's building-collider setup and native-
-        // crash Unity 2019.4, so Option B leaves the whole footprint vanilla.
-        private static bool IsNearLocation(DaggerfallTerrain dfTerrain)
-        {
-            // The tile itself — already resolved at promote; cheapest check.
-            if (dfTerrain.MapData.hasLocation)
-                return true;
-
-            DaggerfallUnity dfu = DaggerfallUnity.Instance;
-            if (dfu == null || dfu.ContentReader == null)
-                return false;
-
-            int mx = dfTerrain.MapPixelX;
-            int my = dfTerrain.MapPixelY;
-            for (int dy = -1; dy <= 1; dy++)
-            {
-                for (int dx = -1; dx <= 1; dx++)
-                {
-                    if (dx == 0 && dy == 0)
-                        continue;
-
-                    int nx = mx + dx;
-                    int ny = my + dy;
-                    if (nx < 0 || ny < 0 || nx >= MapsFile.MaxMapPixelX || ny >= MapsFile.MaxMapPixelY)
-                        continue;
-
-                    if (dfu.ContentReader.HasLocation(nx, ny))
-                        return true;
-                }
-            }
-
-            return false;
-        }
-
-        // Compact diagnostic context for the v0.55.11 trace logs.
-        private static string DiagCtx(DaggerfallTerrain dfTerrain, bool fromPromoteEvent)
-        {
-            int px = -1, py = -1;
-            GameManager gm = GameManager.Instance;
-            if (gm != null && gm.PlayerGPS != null)
-            {
-                px = gm.PlayerGPS.CurrentMapPixel.X;
-                py = gm.PlayerGPS.CurrentMapPixel.Y;
-            }
-            return "tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + ")" +
-                   " src=" + (fromPromoteEvent ? "promote" : "refresh") +
-                   " shore=" + IsShorelineTile(dfTerrain) +
-                   " locTile=" + dfTerrain.MapData.hasLocation +
-                   " locNear=" + IsNearLocation(dfTerrain) +
-                   " terrainUpd=" + DeepWaterRuntime.IsTerrainUpdateActive +
-                   " locLoading=" + DeepWaterLocationLoadGate.IsAnyLocationLoading +
-                   " player=(" + px + "," + py + ")";
-        }
-
-        // True if this tile's heightmap has BOTH land (above ocean) and water
-        // (at/below ocean) cells — a coastline tile, the kind whose late carve
-        // we suspect races the shore's terrain/collider setup.
-        private static bool IsShorelineTile(DaggerfallTerrain dfTerrain)
-        {
-            float[,] h = dfTerrain.MapData.heightmapSamples;
-            if (h == null)
-                return false;
-
-            DaggerfallUnity dfu = DaggerfallUnity.Instance;
-            if (dfu == null || dfu.TerrainSampler == null)
-                return false;
-
-            float oceanThreshold = dfu.TerrainSampler.OceanElevation / dfu.TerrainSampler.MaxTerrainHeight;
-            int rows = h.GetLength(0);
-            int cols = h.GetLength(1);
-            bool hasLand = false;
-            bool hasWater = false;
-            for (int y = 0; y < rows; y++)
-            {
-                for (int x = 0; x < cols; x++)
-                {
-                    if (h[y, x] > oceanThreshold + 1e-5f)
-                        hasLand = true;
-                    else
-                        hasWater = true;
-                    if (hasLand && hasWater)
-                        return true;
-                }
-            }
-            return false;
         }
 
         private static DeepWaterTileData EnsureTileData(DaggerfallTerrain dfTerrain)
@@ -682,29 +398,13 @@ namespace DeepWaters
 
         private static void UpdateTerrainCapRenderer(DaggerfallTerrain dfTerrain)
         {
-            DeepWaterTerrainCapRenderer.Apply(
-                dfTerrain,
-                DeepWaterTerrainCapRenderer.ShouldHidePureOceanCap(dfTerrain));
-        }
-
-        private static void ApplyHoleMask(DaggerfallTerrain dfTerrain, TerrainData terrainData, bool[,] holes, bool fromPromoteEvent)
-        {
-            DeepWaterHoleApplier applier = DeepWaterHoleApplier.Instance;
-            if (applier != null)
-                applier.Enqueue(dfTerrain, holes);
-        }
-
-        private static void QueueSolidResetIfTouched(DaggerfallTerrain dfTerrain, TerrainData terrainData, string reason, bool fromPromoteEvent)
-        {
-            if (dfTerrain == null || terrainData == null)
-                return;
-
-            if (!DeepWaterHoleApplier.HasTouchedTerrainData(terrainData))
-                return;
-
-            DeepWaterHoleApplier applier = DeepWaterHoleApplier.Instance;
-            if (applier != null)
-                applier.EnqueueSolidReset(dfTerrain, terrainData, reason);
+            bool hidePureOceanCap = DeepWaterTerrainCapRenderer.ShouldHidePureOceanCap(dfTerrain);
+            DeepWaterTerrainCapRenderer.Apply(dfTerrain, hidePureOceanCap);
+            // Mixed land/water tiles can't hide the whole heightmap renderer,
+            // so clip just the painted water texels instead. Only reached for
+            // tiles with a carved seafloor (callers gate on the floor build),
+            // so there is real underwater world to reveal beneath.
+            DeepWaterTerrainCapRenderer.ApplyWaterTexelClip(dfTerrain, !hidePureOceanCap);
         }
     }
 }

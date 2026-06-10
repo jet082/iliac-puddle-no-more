@@ -88,22 +88,6 @@ namespace DeepWaters
             installed = true;
         }
 
-        public static void Uninstall()
-        {
-            if (!installed)
-                return;
-
-            DeepWaterRuntime.OnTransientReset -= OnTransientReset;
-
-            if (pulseDriverObject != null)
-            {
-                Object.Destroy(pulseDriverObject);
-                pulseDriverObject = null;
-            }
-
-            ResetRuntimeState();
-            installed = false;
-        }
 
         private static void OnTransientReset()
         {

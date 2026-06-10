@@ -49,21 +49,6 @@ namespace DeepWaters
             installed = true;
         }
 
-        public static void Uninstall()
-        {
-            if (!installed)
-                return;
-
-            DeepWaterRuntime.OnTransientReset -= OnTransientReset;
-            if (iconBridgeObject != null)
-            {
-                Object.Destroy(iconBridgeObject);
-                iconBridgeObject = null;
-            }
-
-            ResetRuntimeState(true);
-            installed = false;
-        }
 
         public static DaggerfallUnityItem CreateLongnoseButterflyfishItem()
         {

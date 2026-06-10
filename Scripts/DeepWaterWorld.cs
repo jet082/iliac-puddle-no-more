@@ -77,16 +77,6 @@ namespace DeepWaters
             return true;
         }
 
-        public static bool IsPlayerOutdoors()
-        {
-            var gameManager = GameManager.Instance;
-            return gameManager != null &&
-                   gameManager.IsPlayingGame() &&
-                   gameManager.PlayerObject != null &&
-                   gameManager.PlayerEnterExit != null &&
-                   !gameManager.PlayerEnterExit.IsPlayerInside;
-        }
-
         public static bool IsPlayerInExteriorWaterContext()
         {
             var gameManager = GameManager.Instance;
@@ -167,12 +157,6 @@ namespace DeepWaters
                    viewport.y > 1f + viewportMargin;
         }
 
-        public static float OceanSurfaceWorldY()
-        {
-            float oceanY;
-            return TryGetOceanSurfaceWorldY(out oceanY) ? oceanY : 0f;
-        }
-
         // Last successfully-computed ocean surface Y, used to bridge transient
         // resolution failures (see below).
         private static bool hasCachedOceanSurfaceY;
@@ -230,6 +214,9 @@ namespace DeepWaters
             Terrain terrain;
             if (!DeepWaterTerrainLookup.TryGetByWorldPosition(worldX, worldZ, out dfTerrain, out terrain))
             {
+                // Scan missed (tile mid-recycle / probe just past the active
+                // ring): fall back to map-pixel arithmetic anchored on the
+                // player's own tile through DFU's pixel registry.
                 DaggerfallTerrain playerDfTerrain;
                 Terrain playerTerrain;
                 if (!DeepWaterTerrainLookup.TryGet(streamingWorld, playerGPS.CurrentMapPixel.X, playerGPS.CurrentMapPixel.Y, out playerDfTerrain, out playerTerrain))
@@ -271,7 +258,7 @@ namespace DeepWaters
 
             var sampler = DaggerfallUnity.Instance.TerrainSampler;
             float oceanLocalY = (sampler.OceanElevation / sampler.MaxTerrainHeight) * terrain.terrainData.size.y;
-            float seafloorLocalY = ResolveSeafloorLocalY(dfTerrain, terrain.terrainData, worldX, worldZ, oceanLocalY, heights[sy, sx]);
+            float seafloorLocalY = ResolveSeafloorLocalY(tile, terrain.terrainData, worldX, worldZ, oceanLocalY, heights[sy, sx]);
 
             column.DaggerfallTerrain = dfTerrain;
             column.Terrain = terrain;
@@ -319,6 +306,11 @@ namespace DeepWaters
             DeepWaterFloorMesh floorMesh;
             if (floorMeshCache.TryGetValue(parent, out floorMesh) && floorMesh != null)
                 return floorMesh;
+
+            // Bound the cache: keys are tile Transforms that streaming destroys,
+            // so dead entries would otherwise accumulate for the whole session.
+            if (floorMeshCache.Count >= 64)
+                floorMeshCache.Clear();
 
             floorMesh = parent.GetComponentInChildren<DeepWaterFloorMesh>();
             floorMeshCache[parent] = floorMesh;
@@ -378,14 +370,13 @@ namespace DeepWaters
         /// letting consumer code reject those positions naturally.
         /// </summary>
         private static float ResolveSeafloorLocalY(
-            DaggerfallTerrain dfTerrain,
+            DeepWaterTileData tile,
             TerrainData terrainData,
             float worldX,
             float worldZ,
             float oceanLocalY,
             float vanillaSample)
         {
-            var tile = dfTerrain.GetComponent<DeepWaterTileData>();
             if (tile != null && tile.IsOceanConnected && tile.HasDistanceField)
             {
                 float shoreDistance = tile.GetDistanceToEdgeMeters(worldX, worldZ);
@@ -398,37 +389,6 @@ namespace DeepWaters
 
             return vanillaSample * terrainData.size.y;
         }
-
-        public static bool TryResolveSeafloorPosition(
-            float worldX,
-            float worldZ,
-            float minimumDepth,
-            float seafloorLift,
-            out Vector3 worldPos,
-            out Transform parent)
-        {
-            worldPos = Vector3.zero;
-            parent = null;
-
-            DeepWaterColumn column;
-            if (!TryGetWaterColumn(worldX, worldZ, out column))
-                return false;
-
-            if (column.Depth < minimumDepth)
-                return false;
-
-            float seafloorWorldY;
-            if (!TryGetRenderedSeafloorWorldY(column, worldX, worldZ, out seafloorWorldY))
-                return false;
-
-            if (column.OceanWorldY - seafloorWorldY < minimumDepth)
-                return false;
-
-            worldPos = new Vector3(worldX, seafloorWorldY + seafloorLift, worldZ);
-            parent = column.Parent;
-            return true;
-        }
-
         public static bool AlignObjectBottomToWorldY(GameObject gameObject, float bottomWorldY)
         {
             if (gameObject == null)

@@ -1,6 +1,7 @@
 // Project:         Iliac Puddle No More
 // License:         MIT
 
+using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Game.Utility.ModSupport;
 using UnityEngine;
@@ -12,8 +13,8 @@ namespace DeepWaters
     /// </summary>
     public partial class DeepWaters : MonoBehaviour
     {
-        internal const string Version = "v0.55.58-diag";
-        internal const string BuildStamp = "2026-06-04 near-shore-steepen";
+        internal const string Version = "v0.56.0";
+        internal const string BuildStamp = "2026-06-09 structural-rewrite";
 
         public static DeepWaters Instance { get; private set; }
         public static Mod Mod { get; private set; }
@@ -57,11 +58,38 @@ namespace DeepWaters
                 return;
             }
 
-            TextAsset bakeAsset = Mod.GetAsset<TextAsset>(DeepWaterDistanceBake.BakeAssetName);
+            // Pick the bake that matches the active terrain heightmap. Stock
+            // DefaultTerrainSampler means no terrain overhaul (Interesting
+            // Terrains / WoD replace the sampler with their own type), so the
+            // vanilla bake lines the carve/shore data up with vanilla coasts.
+            string assetName = DeepWaterDistanceBake.BakeAssetName;
+            bool vanillaTerrain = DaggerfallUnity.Instance != null &&
+                                  DaggerfallUnity.Instance.TerrainSampler is DefaultTerrainSampler;
+            if (vanillaTerrain)
+            {
+                if (Mod.HasAsset(DeepWaterDistanceBake.VanillaBakeAssetName))
+                {
+                    assetName = DeepWaterDistanceBake.VanillaBakeAssetName;
+                }
+                else
+                {
+                    Debug.LogWarning("[DeepWaters] Vanilla terrain is active but no '" +
+                                     DeepWaterDistanceBake.VanillaBakeAssetName +
+                                     "' asset is bundled — falling back to the terrain-overhaul bake. " +
+                                     "Shore depths may not match vanilla coastlines. Run Tools > Deep " +
+                                     "Waters > Bake Distance Field (Vanilla Terrain) and rebuild the mod.");
+                }
+            }
+
+            Debug.Log("[DeepWaters] Loading distance bake '" + assetName + "' (terrain sampler: " +
+                      (DaggerfallUnity.Instance != null && DaggerfallUnity.Instance.TerrainSampler != null
+                          ? DaggerfallUnity.Instance.TerrainSampler.GetType().Name
+                          : "none") + ").");
+
+            TextAsset bakeAsset = Mod.GetAsset<TextAsset>(assetName);
             if (bakeAsset == null || bakeAsset.bytes == null || bakeAsset.bytes.Length == 0)
             {
-                Debug.LogError("[DeepWaters] Distance bake asset '" +
-                               DeepWaterDistanceBake.BakeAssetName +
+                Debug.LogError("[DeepWaters] Distance bake asset '" + assetName +
                                "' not found in mod bundle. Run Tools > Deep Waters > Bake " +
                                "Distance Field in the Unity editor, then rebuild the mod.");
                 return;
@@ -71,14 +99,9 @@ namespace DeepWaters
                 Debug.LogError("[DeepWaters] Distance bake parse failed — seafloor will not build.");
         }
 
-        // Drives the deferred neighbor-refresh queue (cross-tile BFS
-        // re-propagation). Running on Update keeps the critical streaming
-        // path responsive — refresh work spreads over many frames rather
-        // than stalling the save-load and tile-promotion paths.
         void Update()
         {
             DeepWaterRuntime.PumpPostTransitionRefresh();
-            DeepWaterFloorBuilder.PumpDeferredRefreshes();
         }
     }
 

@@ -70,7 +70,6 @@ namespace DeepWaters
         {
             return DeepWaters.Instance != null &&
                    DeepWaters.Instance.SpawnWaterSurfaces &&
-                   !DeepWaterHoleApplier.IsTerrainHoleMutationSettling &&
                    gameManager.IsPlayingGame() &&
                    gameManager.PlayerEnterExit != null &&
                    !gameManager.PlayerEnterExit.IsPlayerInside;
@@ -87,9 +86,6 @@ namespace DeepWaters
             {
                 return false;
             }
-
-            if (DeepWaterHoleApplier.IsTerrainHoleMutationSettling)
-                return false;
 
             bool hasOceanSurface = DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY);
             float localOceanSurfaceY;
@@ -256,7 +252,6 @@ namespace DeepWaters
                 " headY=" + (hasHead ? headPosition.y.ToString("F2") : "none") +
                 " oceanY=" + oceanSurfaceY.ToString("F2") +
                 " cameraColumn=" + hasCameraColumn +
-                " terrainHolesSettling=" + DeepWaterHoleApplier.IsTerrainHoleMutationSettling +
                 " depthMode=" + (camera != null ? camera.depthTextureMode.ToString() : "none") +
                 " renderFog=" + RenderSettings.fog +
                 " fogMode=" + RenderSettings.fogMode +
@@ -288,28 +283,11 @@ namespace DeepWaters
         private static readonly int RayTopLeftProperty = Shader.PropertyToID("_DeepWatersRayTL");
         private static readonly int RayTopRightProperty = Shader.PropertyToID("_DeepWatersRayTR");
 
-        // Upgraded shader properties.
+        // Volumetric regrade shader properties.
         private static readonly int AbsorptionColorProperty = Shader.PropertyToID("_AbsorptionColor");
         private static readonly int ScatterColorProperty = Shader.PropertyToID("_ScatterColor");
         private static readonly int ScatterStrengthProperty = Shader.PropertyToID("_ScatterStrength");
         private static readonly int DeepWaterColorProperty = Shader.PropertyToID("_DeepWaterColor");
-        private static readonly int CausticIntensityProperty = Shader.PropertyToID("_CausticIntensity");
-        private static readonly int CausticColorProperty = Shader.PropertyToID("_CausticColor");
-        private static readonly int CausticScaleProperty = Shader.PropertyToID("_CausticScale");
-        private static readonly int CausticSpeedProperty = Shader.PropertyToID("_CausticSpeed");
-        private static readonly int CausticDepthFadeProperty = Shader.PropertyToID("_CausticDepthFade");
-        private static readonly int CausticViewFadeProperty = Shader.PropertyToID("_CausticViewFade");
-        private static readonly int GodRayColorProperty = Shader.PropertyToID("_GodRayColor");
-        private static readonly int GodRayIntensityProperty = Shader.PropertyToID("_GodRayIntensity");
-        private static readonly int GodRaySharpnessProperty = Shader.PropertyToID("_GodRaySharpness");
-        private static readonly int GodRaySurfaceFadeProperty = Shader.PropertyToID("_GodRaySurfaceFade");
-        private static readonly int SunDirectionProperty = Shader.PropertyToID("_SunDirection");
-        private static readonly int DustColorProperty = Shader.PropertyToID("_DustColor");
-        private static readonly int DustIntensityProperty = Shader.PropertyToID("_DustIntensity");
-        private static readonly int DustSpeedProperty = Shader.PropertyToID("_DustSpeed");
-        private static readonly int RefractionStrengthProperty = Shader.PropertyToID("_RefractionStrength");
-        private static readonly int RefractionSpeedProperty = Shader.PropertyToID("_RefractionSpeed");
-        private static readonly int RefractionScaleProperty = Shader.PropertyToID("_RefractionScale");
 
         // Vision distance: how far you can see through clear water at the
         // surface before the scene fades to ambient water color. Below the
@@ -339,9 +317,6 @@ namespace DeepWaters
         private static readonly Color DefaultAbsorption = new Color(1.80f, 1.25f, 1.05f, 1f);
         private static readonly Color DefaultScatter = new Color(0.090f, 0.165f, 0.155f, 1f);
         private static readonly Color DefaultDeepWaterColor = new Color(0.012f, 0.022f, 0.026f, 1f);
-        private static readonly Color DefaultCausticTint = new Color(1.00f, 0.95f, 0.78f, 1f);
-        private static readonly Color DefaultGodRayTint = new Color(1.00f, 0.96f, 0.78f, 1f);
-        private static readonly Color DefaultDustColor = new Color(0.92f, 0.98f, 1.0f, 1f);
 
         private Camera targetCamera;
         private Material material;
@@ -462,10 +437,6 @@ namespace DeepWaters
                 fogMaterial.SetTexture(WaterSurfaceTextureProperty, surfaceTexture);
 
             ConfigureVolumetricRegrade(fogMaterial, presentationFogStrength);
-            // Caustics/god-rays/dust/refraction are removed from the shader
-            // pending the base look being approved. Leaving the Configure*
-            // helpers below so we can re-enable them with a single line.
-
             SetCameraRays(fogMaterial);
         }
 
@@ -484,61 +455,6 @@ namespace DeepWaters
             mat.SetColor(ScatterColorProperty, scatter);
             mat.SetFloat(ScatterStrengthProperty, Mathf.Lerp(0.85f, 1.30f, fogStrength));
             mat.SetColor(DeepWaterColorProperty, DefaultDeepWaterColor);
-        }
-
-        private static void ConfigureCaustics(Material mat, float fogStrength)
-        {
-            // Caustics dim down as fog thickens — turbid water swallows the
-            // ripple highlights, exactly as Subnautica's deep biomes do.
-            float intensity = Mathf.Lerp(1.20f, 0.55f, fogStrength);
-            mat.SetColor(CausticColorProperty, DefaultCausticTint);
-            mat.SetFloat(CausticIntensityProperty, intensity);
-            mat.SetFloat(CausticScaleProperty, 0.18f);
-            mat.SetFloat(CausticSpeedProperty, 0.35f);
-            mat.SetFloat(CausticDepthFadeProperty, 0.022f);
-            mat.SetFloat(CausticViewFadeProperty, 0.013f);
-        }
-
-        private static void ConfigureGodRays(Material mat, float fogStrength)
-        {
-            mat.SetColor(GodRayColorProperty, DefaultGodRayTint);
-            // Heavier fog → softer shafts (they hit the water column sooner).
-            mat.SetFloat(GodRayIntensityProperty, Mathf.Lerp(1.10f, 0.55f, fogStrength));
-            mat.SetFloat(GodRaySharpnessProperty, Mathf.Lerp(4.5f, 8.5f, fogStrength));
-            mat.SetFloat(GodRaySurfaceFadeProperty, 0.012f);
-
-            Vector3 sunDir = ResolveSunDirection();
-            mat.SetVector(SunDirectionProperty, new Vector4(sunDir.x, sunDir.y, sunDir.z, 0f));
-        }
-
-        private static Vector3 ResolveSunDirection()
-        {
-            Light sun = RenderSettings.sun;
-            if (sun != null && sun.transform != null)
-            {
-                Vector3 dir = -sun.transform.forward;
-                if (dir.sqrMagnitude > 1e-4f)
-                    return dir.normalized;
-            }
-
-            // Sensible fallback: roughly noon sun in the SE quadrant.
-            return new Vector3(0.30f, 0.92f, 0.25f).normalized;
-        }
-
-        private static void ConfigureDust(Material mat, float fogStrength)
-        {
-            mat.SetColor(DustColorProperty, DefaultDustColor);
-            mat.SetFloat(DustIntensityProperty, Mathf.Lerp(0.10f, 0.18f, fogStrength));
-            mat.SetFloat(DustSpeedProperty, 0.6f);
-        }
-
-        private static void ConfigureRefraction(Material mat, float fogStrength)
-        {
-            // Subtle UV jitter — same magnitude regardless of fog strength;
-            // it represents the water column itself, not the murkiness.
-            mat.SetFloat(RefractionStrengthProperty, 0.0035f);
-            mat.SetFloat(RefractionSpeedProperty, 0.55f);
-            mat.SetFloat(RefractionScaleProperty, 6.0f);
         }
 
         // Send NON-NORMALIZED world-space rays such that

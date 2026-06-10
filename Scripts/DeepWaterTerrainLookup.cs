@@ -26,15 +26,15 @@ namespace DeepWaters
             }
         }
 
-        // Empties the by-pixel lookup cache. Called from
-        // DeepWaterStreamingBuffer / UnderwaterDecorations when DFU's
-        // streaming end-of-pass signal arrives, so cached terrain refs
-        // for tiles that may have been recycled don't outlive the
-        // streaming event. Working backup didn't expose this — the
-        // current StreamingBuffer needs it to keep its lookups fresh.
+        // Empties the lookup caches. Called when DFU's streaming end-of-pass
+        // signal arrives, so cached terrain refs for tiles that may have been
+        // recycled don't outlive the streaming event.
         public static void Clear()
         {
             cache.Clear();
+            frameSnapshot.Clear();
+            frameSnapshotFrame = -1;
+            lastHitIndex = -1;
         }
 
         public static bool TryGet(
@@ -76,26 +76,36 @@ namespace DeepWaters
             return true;
         }
 
-        // Resolves a (worldX, worldZ) to the DaggerfallTerrain whose
-        // origin contains that world position. Added on top of the
-        // working backup (which only exposed the by-pixel TryGet) because
-        // DeepWaterWorld.TryGetWaterColumn and several LateUpdate
-        // consumers query by world position when computing the local
-        // water column.
+        // Resolves a (worldX, worldZ) to the ACTIVE DaggerfallTerrain whose
+        // current footprint contains that world position.
         //
-        // Per-frame snapshot caching: FindObjectsOfType is expensive
-        // (~0.1 ms with allocation of a ~70-entry array per call). With
-        // 3+ LateUpdate consumers calling this every frame plus the
-        // image effect's OnRenderImage path, that's a thousand+
-        // FindObjectsOfType calls per second and tanks the frame rate.
-        // Cache by Time.frameCount so we do FindObjectsOfType at most
-        // once per rendered frame, then iterate the cached snapshot.
-        // Each iteration wraps Unity member access in try/catch so a
-        // stale-reference race within the frame is skipped gracefully
-        // — the next frame re-snaps fresh, so staleness can never
-        // persist past one frame.
-        private static DaggerfallTerrain[] cachedFrameSnapshot;
-        private static int cachedFrameSnapshotFrame = -1;
+        // Deliberately a bounds scan over live, active terrains rather than
+        // map-pixel arithmetic through DFU's pixel registry: during a
+        // map-pixel crossing, PlayerGPS's pixel, the registry, and the
+        // recycled tiles' transforms/heightmaps are briefly mutually
+        // inconsistent, and pixel math through that window resolved wrong or
+        // mid-recycle tiles (player flung to the surface on crossings; jittery
+        // shore exits). Matching by actual current origin — and only among
+        // ACTIVE objects, which excludes tiles mid-recycle — stays correct
+        // through the whole transition.
+        //
+        // FindObjectsOfType is expensive (~0.1 ms + array allocation), so the
+        // live set is snapshotted at most once per rendered frame, with each
+        // entry's Terrain component and origin prebaked behind a try/catch
+        // for the destroy race. Each query is then a tight bounds scan over
+        // plain structs, with the previous hit checked first (consecutive
+        // probes are player-centric and almost always land on the same tile).
+        private struct TerrainSnapshotEntry
+        {
+            public DaggerfallTerrain DfTerrain;
+            public Terrain Terrain;
+            public float OriginX;
+            public float OriginZ;
+        }
+
+        private static readonly List<TerrainSnapshotEntry> frameSnapshot = new List<TerrainSnapshotEntry>(80);
+        private static int frameSnapshotFrame = -1;
+        private static int lastHitIndex = -1;
 
         public static bool TryGetByWorldPosition(
             float worldX,
@@ -116,66 +126,87 @@ namespace DeepWaters
             if (tileWorldSize <= 0f)
                 return false;
 
-            const float edgeEpsilon = 0.25f;
+            List<TerrainSnapshotEntry> snapshot = GetFrameSnapshot();
 
-            DaggerfallTerrain[] terrains = GetFrameSnapshot();
-            if (terrains == null) return false;
-
-            for (int i = 0; i < terrains.Length; i++)
+            if (lastHitIndex >= 0 && lastHitIndex < snapshot.Count &&
+                SnapshotEntryContains(snapshot[lastHitIndex], worldX, worldZ, tileWorldSize))
             {
-                DaggerfallTerrain candidate = terrains[i];
-                if (candidate == null) continue;
+                dfTerrain = snapshot[lastHitIndex].DfTerrain;
+                terrain = snapshot[lastHitIndex].Terrain;
+                return true;
+            }
 
-                Terrain candidateTerrain;
-                Vector3 origin;
-                try
-                {
-                    candidateTerrain = candidate.GetComponent<Terrain>();
-                    if (candidateTerrain == null || candidateTerrain.terrainData == null)
-                        continue;
-                    Transform t = candidate.transform;
-                    if (t == null) continue;
-                    origin = t.position;
-                }
-                catch
-                {
-                    // Race: candidate destroyed between snapshot capture
-                    // and our member access. Skip and try the next one.
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                if (!SnapshotEntryContains(snapshot[i], worldX, worldZ, tileWorldSize))
                     continue;
-                }
 
-                if (worldX < origin.x - edgeEpsilon ||
-                    worldX > origin.x + tileWorldSize + edgeEpsilon ||
-                    worldZ < origin.z - edgeEpsilon ||
-                    worldZ > origin.z + tileWorldSize + edgeEpsilon)
-                {
-                    continue;
-                }
-
-                dfTerrain = candidate;
-                terrain = candidateTerrain;
+                lastHitIndex = i;
+                dfTerrain = snapshot[i].DfTerrain;
+                terrain = snapshot[i].Terrain;
                 return true;
             }
 
             return false;
         }
 
-        private static DaggerfallTerrain[] GetFrameSnapshot()
+        private static bool SnapshotEntryContains(TerrainSnapshotEntry entry, float worldX, float worldZ, float tileWorldSize)
+        {
+            const float edgeEpsilon = 0.25f;
+            return worldX >= entry.OriginX - edgeEpsilon &&
+                   worldX <= entry.OriginX + tileWorldSize + edgeEpsilon &&
+                   worldZ >= entry.OriginZ - edgeEpsilon &&
+                   worldZ <= entry.OriginZ + tileWorldSize + edgeEpsilon;
+        }
+
+        private static List<TerrainSnapshotEntry> GetFrameSnapshot()
         {
             int frame = Time.frameCount;
-            if (cachedFrameSnapshot != null && cachedFrameSnapshotFrame == frame)
-                return cachedFrameSnapshot;
+            if (frameSnapshotFrame == frame)
+                return frameSnapshot;
 
+            frameSnapshot.Clear();
+            lastHitIndex = -1;
+            frameSnapshotFrame = frame;
+
+            DaggerfallTerrain[] terrains;
             try
             {
-                cachedFrameSnapshot = UnityEngine.Object.FindObjectsOfType<DaggerfallTerrain>();
+                terrains = UnityEngine.Object.FindObjectsOfType<DaggerfallTerrain>();
             }
             catch (System.Exception)
             {
-                cachedFrameSnapshot = null;
+                return frameSnapshot;
             }
-            cachedFrameSnapshotFrame = frame;
-            return cachedFrameSnapshot;
+
+            for (int i = 0; i < terrains.Length; i++)
+            {
+                DaggerfallTerrain candidate = terrains[i];
+                if (candidate == null)
+                    continue;
+
+                try
+                {
+                    Terrain candidateTerrain = candidate.GetComponent<Terrain>();
+                    if (candidateTerrain == null || candidateTerrain.terrainData == null)
+                        continue;
+
+                    Vector3 origin = candidate.transform.position;
+                    TerrainSnapshotEntry entry;
+                    entry.DfTerrain = candidate;
+                    entry.Terrain = candidateTerrain;
+                    entry.OriginX = origin.x;
+                    entry.OriginZ = origin.z;
+                    frameSnapshot.Add(entry);
+                }
+                catch
+                {
+                    // Race: candidate destroyed between FindObjectsOfType and
+                    // our member access. Skip it; next frame re-snaps fresh.
+                }
+            }
+
+            return frameSnapshot;
         }
     }
 }

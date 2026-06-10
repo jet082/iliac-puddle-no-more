@@ -115,6 +115,8 @@ namespace DeepWaters.Editor
         // bundled into the .dfmod, so ship the bake just by rebuilding.
         private const string OutputPath =
             "Assets/Game/Mods/deep-waters/Resources/DistanceBake.bytes";
+        private const string VanillaOutputPath =
+            "Assets/Game/Mods/deep-waters/Resources/DistanceBakeVanilla.bytes";
 
         [MenuItem("Tools/Deep Waters/Bake Distance Field")]
         public static void BakeMenuItem()
@@ -122,6 +124,25 @@ namespace DeepWaters.Editor
             try
             {
                 Bake();
+            }
+            catch (System.Exception ex)
+            {
+                EditorUtility.ClearProgressBar();
+                Debug.LogError("[DeepWaters.Bake] Build failed: " + ex.Message + "\n" + ex.StackTrace);
+                EditorUtility.DisplayDialog("Bake failed", ex.Message, "OK");
+            }
+        }
+
+        // Bakes against DFU's stock DefaultTerrainSampler regardless of which
+        // sampler is currently active, so the mod can ship a second bake that
+        // matches vanilla terrain. At runtime the mod loads this one when no
+        // terrain-overhaul sampler (Interesting Terrains / WoD) is detected.
+        [MenuItem("Tools/Deep Waters/Bake Distance Field (Vanilla Terrain)")]
+        public static void BakeVanillaMenuItem()
+        {
+            try
+            {
+                Bake(SubCellsPerPixelFine, new DefaultTerrainSampler(), VanillaOutputPath);
             }
             catch (System.Exception ex)
             {
@@ -151,7 +172,7 @@ namespace DeepWaters.Editor
             Bake(SubCellsPerPixelFine);
         }
 
-        private static void Bake(int fineSubCellsPerPixel)
+        private static void Bake(int fineSubCellsPerPixel, ITerrainSampler forcedSampler = null, string outputPath = OutputPath)
         {
             var dfu = DaggerfallUnity.Instance;
             if (dfu == null || dfu.ContentReader == null)
@@ -165,8 +186,9 @@ namespace DeepWaters.Editor
             // DaggerfallUnity.TerrainSampler returns ITerrainSampler — leave
             // it at the interface so any third-party sampler (Interesting
             // Terrains' compute-shader sampler, Wilderness Overhaul, custom
-            // mods) plugs in directly without an unsafe cast.
-            ITerrainSampler runtimeSampler = dfu.TerrainSampler;
+            // mods) plugs in directly without an unsafe cast. A forced sampler
+            // (the vanilla bake) bypasses the active one entirely.
+            ITerrainSampler runtimeSampler = forcedSampler ?? dfu.TerrainSampler;
             if (runtimeSampler == null)
                 throw new System.Exception("DaggerfallUnity.TerrainSampler is null.");
             bool useInterestingTerrainHeightBuffer =
@@ -278,8 +300,8 @@ namespace DeepWaters.Editor
 
             // 5) Write file.
             EditorUtility.DisplayProgressBar("Bake distance field",
-                "Writing " + OutputPath + "...", 0.95f);
-            WriteBakeFile(OutputPath, distanceBytes, packedCoarseMask, packedFineMask, edgeBytes,
+                "Writing " + outputPath + "...", 0.95f);
+            WriteBakeFile(outputPath, distanceBytes, packedCoarseMask, packedFineMask, edgeBytes,
                 SubCellsPerPixel, SubCellsPerPixel,
                 fineSubCellsPerPixel,
                 mapPixelsX, mapPixelsY,
@@ -290,7 +312,7 @@ namespace DeepWaters.Editor
             Debug.Log("[DeepWaters.Bake] Wrote " + distanceBytes.Length + " distance bytes + " +
                       packedCoarseMask.Length + " coarse-mask bytes + " +
                       packedFineMask.Length + " fine-mask bytes + " +
-                       edgeBytes.Length + " shore-edge bytes to " + OutputPath +
+                       edgeBytes.Length + " shore-edge bytes to " + outputPath +
                        " (coarse cell " + cellWidth.ToString("F1") + " m, fine cell " +
                        (tileWorldSize / fineSubCellsPerPixel).ToString("F1") + " m).");
         }

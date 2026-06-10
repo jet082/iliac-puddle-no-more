@@ -49,22 +49,6 @@ namespace DeepWaters
             installed = true;
         }
 
-        public static void Uninstall()
-        {
-            if (!installed)
-                return;
-
-            DeepWaterRuntime.OnTransientReset -= ResetPulseState;
-
-            if (driverObject != null)
-            {
-                Object.Destroy(driverObject);
-                driverObject = null;
-            }
-
-            ResetPulseState();
-            installed = false;
-        }
 
         private class EncounterPulseDriver : MonoBehaviour
         {

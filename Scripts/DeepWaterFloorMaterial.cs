@@ -28,11 +28,6 @@ namespace DeepWaters
         private static readonly int TextureWorldScaleProperty = Shader.PropertyToID("_TextureWorldScale");
         private static readonly Dictionary<int, Material> materials = new Dictionary<int, Material>();
 
-        public static Material GetMaterial()
-        {
-            return GetMaterial(MapsFile.DefaultClimate);
-        }
-
         public static Material GetMaterial(int worldClimate)
         {
             int groundArchive = ResolveGroundArchive(worldClimate);

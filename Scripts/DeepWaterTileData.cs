@@ -113,25 +113,6 @@ namespace DeepWaters
             return DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracX, fracZ);
         }
 
-        public int GetClimateIndex(float worldX, float worldZ)
-        {
-            DaggerfallUnity dfu = DaggerfallUnity.Instance;
-            if (dfu == null || dfu.ContentReader == null || dfu.ContentReader.MapFileReader == null)
-                return ClimateIndex;
-
-            // Resolve climate from global map coordinates, not from the
-            // owning tile, so both sides of a shared edge pick the same
-            // climate when sampling the same world position. DFU terrain
-            // local Z grows north while map pixel Y grows south, so the
-            // helper returns a flipped fracZ for the selected map pixel.
-            int mapX;
-            int mapY;
-            float fracX;
-            float fracZ;
-            GetGlobalMapFractions(worldX, worldZ, out mapX, out mapY, out fracX, out fracZ);
-            return dfu.ContentReader.MapFileReader.GetClimateIndex(mapX, mapY);
-        }
-
         // Floating-origin-INDEPENDENT coordinate for the bathymetry noise.
         // Anchored to the global map-pixel grid, NOT the Unity origin (which
         // DFU's floating origin shifts as the player swims). Two tiles sampling

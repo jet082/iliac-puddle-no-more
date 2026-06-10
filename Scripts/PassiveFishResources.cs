@@ -218,11 +218,6 @@ namespace DeepWaters
             }
         }
 
-        private static Texture2D TryLoadTextureFromArchive(PassiveFishSpecies species)
-        {
-            var textureReader = DaggerfallUnity.Instance.MaterialReader.TextureReader;
-            return textureReader.GetTexture2D(species.TextureArchive, species.TextureRecord, 0);
-        }
 
         private static Texture2D TryLoadTexture(string assetName)
         {

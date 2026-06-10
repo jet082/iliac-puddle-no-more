@@ -103,26 +103,6 @@ namespace DeepWaters
             }
         }
 
-        internal static string TerrainMutationBlockReason
-        {
-            get
-            {
-                if (!CanRunLightRuntimeWork)
-                    return "game not ready or save load active";
-
-                if (Time.realtimeSinceStartup < heavyWorkResumeTime)
-                    return "post-load grace";
-
-                if (DeepWaterLocationLoadGate.IsAnyLocationLoading)
-                    return "location loading";
-
-                if (IsTerrainUpdateActive)
-                    return "terrain streaming";
-
-                return null;
-            }
-        }
-
         public static bool CanMutateTerrainData
         {
             get
@@ -143,19 +123,6 @@ namespace DeepWaters
             SaveLoadManager.OnLoad += OnLoad;
             StreamingWorld.OnTeleportToCoordinates += OnTeleportToCoordinates;
             installed = true;
-        }
-
-        public static void Uninstall()
-        {
-            if (!installed)
-                return;
-
-            StreamingWorld.OnUpdateTerrainsStart -= OnUpdateTerrainsStart;
-            StreamingWorld.OnUpdateTerrainsEnd -= OnUpdateTerrainsEnd;
-            SaveLoadManager.OnStartLoad -= OnStartLoad;
-            SaveLoadManager.OnLoad -= OnLoad;
-            StreamingWorld.OnTeleportToCoordinates -= OnTeleportToCoordinates;
-            installed = false;
         }
 
         private static void OnUpdateTerrainsStart()
@@ -183,10 +150,6 @@ namespace DeepWaters
 
         private static void OnStartLoad(SaveData_v1 saveData)
         {
-            DeepWaterHoleApplier applier = DeepWaterHoleApplier.Instance;
-            if (applier != null)
-                applier.ClearQueue();
-
             // Suspend heavy work until OnLoad re-arms the grace timer.
             heavyWorkResumeTime = float.PositiveInfinity;
             postTransitionRefreshPending = false;
@@ -201,10 +164,6 @@ namespace DeepWaters
 
         private static void OnTeleportToCoordinates(DFPosition worldPos)
         {
-            DeepWaterHoleApplier applier = DeepWaterHoleApplier.Instance;
-            if (applier != null)
-                applier.ClearQueue();
-
             heavyWorkResumeTime = Time.realtimeSinceStartup + PostLoadHeavyWorkGraceSeconds;
             postTransitionRefreshPending = true;
             ResetTransientState();
@@ -226,11 +185,10 @@ namespace DeepWaters
 
             postTransitionRefreshPending = false;
             WaterSurfaceManager.RefreshLoadedSurfaces();
-            // After a save load / teleport, repair any loaded tile whose hole
-            // mask was dropped while the applier queue was cleared, but keep
-            // current floor meshes and colliders intact. Settings changes still
-            // call RefreshLoadedTiles(force: true); the transition path does not
-            // need to recook the whole loaded ocean ring.
+            // After a save load / teleport, rebuild any loaded tile whose
+            // seafloor mesh is stale, keeping current meshes and colliders
+            // intact (the IsCurrentBuild guard skips them). Settings changes
+            // still call RefreshLoadedTiles(force: true).
             DeepWaterFloorBuilder.RefreshLoadedTiles(force: false);
             Debug.Log("[DeepWaters.Runtime] Post-transition water terrain refresh complete.");
         }

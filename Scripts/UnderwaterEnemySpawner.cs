@@ -95,15 +95,6 @@ namespace DeepWaters
             installed = true;
         }
 
-        public static void Uninstall()
-        {
-            if (!installed)
-                return;
-
-            DeepWaterRuntime.OnTransientReset -= OnTransientReset;
-            ResetRuntimeState(true);
-            installed = false;
-        }
 
         private static void OnTransientReset()
         {

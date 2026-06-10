@@ -42,8 +42,12 @@ namespace DeepWaters
         // fine carve edge and walls/voids it.
         private const ushort CurrentVersion = 5;
 
-        // Asset name (without extension) inside the mod's Resources folder.
+        // Asset names (without extension) inside the mod's Resources folder.
+        // The primary bake is built against the terrain-overhaul heightmap
+        // (Interesting Terrains / WoD); the vanilla bake matches DFU's stock
+        // DefaultTerrainSampler and is preferred when no overhaul is active.
         public const string BakeAssetName = "DistanceBake";
+        public const string VanillaBakeAssetName = "DistanceBakeVanilla";
 
         private static bool loaded;
         private static byte[] data;
@@ -58,7 +62,6 @@ namespace DeepWaters
         private static int subCellsPerPixelY;
         private static int subCellsPerPixelFine;
         private static float distanceScaleMeters;
-        private static float saturatedMeters;
         private static bool hasWaterMask;
         private static bool hasFineWaterMask;
         private static bool hasEdgeField;
@@ -68,7 +71,6 @@ namespace DeepWaters
         public static int SubCellsPerPixel { get { return subCellsPerPixelX; } }
         public static int SubCellsPerPixelFine { get { return subCellsPerPixelFine; } }
         public static bool HasFineWaterMask { get { return hasFineWaterMask; } }
-        public static bool HasEdgeField { get { return hasEdgeField; } }
 
         /// <summary>
         /// Parse a bake file's bytes. Returns true if the load succeeded —
@@ -208,7 +210,6 @@ namespace DeepWaters
                 subCellsPerPixelY = sY;
                 subCellsPerPixelFine = fineSubCells;
                 distanceScaleMeters = scaleMeters;
-                saturatedMeters = 255f * scaleMeters;
                 data = cells;
                 waterMaskBits = mask;
                 fineWaterMaskBits = fineMask;
@@ -267,32 +268,7 @@ namespace DeepWaters
         {
             if (!loaded || data == null) return float.MaxValue;
 
-            // Convert tile-local fractions to global sub-cell coordinates.
-            // DFU local Z grows north, while map pixel Y grows south. The
-            // baked grid stores rows in map-pixel order (north-to-south), so
-            // v3 bakes flip fracZ here. Older bakes used the unflipped value
-            // and are retained only for compatibility while warning loudly.
-            // The half-cell offset puts global integer indices at sub-cell
-            // CENTERS, so the interpolation between neighbors is symmetric
-            // around the cell midpoint and matches the bake-time placement.
-            float gx = mapPixelX * subCellsPerPixelX + Mathf.Clamp01(fracX) * subCellsPerPixelX - 0.5f;
-            float gy = mapPixelY * subCellsPerPixelY + BakedSouthFraction(fracZ) * subCellsPerPixelY - 0.5f;
-
-            int x0 = Mathf.Clamp(Mathf.FloorToInt(gx), 0, widthCells - 1);
-            int y0 = Mathf.Clamp(Mathf.FloorToInt(gy), 0, heightCells - 1);
-            int x1 = Mathf.Min(x0 + 1, widthCells - 1);
-            int y1 = Mathf.Min(y0 + 1, heightCells - 1);
-            float tx = Mathf.Clamp01(gx - x0);
-            float ty = Mathf.Clamp01(gy - y0);
-
-            float d00 = data[y0 * widthCells + x0] * distanceScaleMeters;
-            float d10 = data[y0 * widthCells + x1] * distanceScaleMeters;
-            float d01 = data[y1 * widthCells + x0] * distanceScaleMeters;
-            float d11 = data[y1 * widthCells + x1] * distanceScaleMeters;
-
-            float dx0 = Mathf.Lerp(d00, d10, tx);
-            float dx1 = Mathf.Lerp(d01, d11, tx);
-            return Mathf.Lerp(dx0, dx1, ty);
+            return BilinearSampleMeters(data, mapPixelX, mapPixelY, fracX, fracZ);
         }
 
         /// <summary>
@@ -306,6 +282,19 @@ namespace DeepWaters
             if (!loaded || !hasEdgeField || edgeData == null)
                 return SampleDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
 
+            return BilinearSampleMeters(edgeData, mapPixelX, mapPixelY, fracX, fracZ);
+        }
+
+        // Convert tile-local fractions to global sub-cell coordinates.
+        // DFU local Z grows north, while map pixel Y grows south. The
+        // baked grid stores rows in map-pixel order (north-to-south), so
+        // v3 bakes flip fracZ here. Older bakes used the unflipped value
+        // and are retained only for compatibility while warning loudly.
+        // The half-cell offset puts global integer indices at sub-cell
+        // CENTERS, so the interpolation between neighbors is symmetric
+        // around the cell midpoint and matches the bake-time placement.
+        private static float BilinearSampleMeters(byte[] grid, int mapPixelX, int mapPixelY, float fracX, float fracZ)
+        {
             float gx = mapPixelX * subCellsPerPixelX + Mathf.Clamp01(fracX) * subCellsPerPixelX - 0.5f;
             float gy = mapPixelY * subCellsPerPixelY + BakedSouthFraction(fracZ) * subCellsPerPixelY - 0.5f;
 
@@ -316,10 +305,10 @@ namespace DeepWaters
             float tx = Mathf.Clamp01(gx - x0);
             float ty = Mathf.Clamp01(gy - y0);
 
-            float d00 = edgeData[y0 * widthCells + x0] * distanceScaleMeters;
-            float d10 = edgeData[y0 * widthCells + x1] * distanceScaleMeters;
-            float d01 = edgeData[y1 * widthCells + x0] * distanceScaleMeters;
-            float d11 = edgeData[y1 * widthCells + x1] * distanceScaleMeters;
+            float d00 = grid[y0 * widthCells + x0] * distanceScaleMeters;
+            float d10 = grid[y0 * widthCells + x1] * distanceScaleMeters;
+            float d01 = grid[y1 * widthCells + x0] * distanceScaleMeters;
+            float d11 = grid[y1 * widthCells + x1] * distanceScaleMeters;
 
             float dx0 = Mathf.Lerp(d00, d10, tx);
             float dx1 = Mathf.Lerp(d01, d11, tx);
@@ -415,7 +404,6 @@ namespace DeepWaters
             int baseY = mapPixelY * subCellsPerPixelY;
             for (int sy = 0; sy < subCellsPerPixelY; sy++)
             {
-                int row = (baseY + sy) * widthCells;
                 for (int sx = 0; sx < subCellsPerPixelX; sx++)
                 {
                     if (CellHasWater(baseX + sx, baseY + sy)) return true;
@@ -455,7 +443,6 @@ namespace DeepWaters
             int baseY = mapPixelY * subCellsPerPixelY;
             for (int sy = 0; sy < subCellsPerPixelY; sy++)
             {
-                int row = (baseY + sy) * widthCells;
                 for (int sx = 0; sx < subCellsPerPixelX; sx++)
                 {
                     if (!CellHasWater(baseX + sx, baseY + sy)) return true;
@@ -536,26 +523,9 @@ namespace DeepWaters
         /// Number of header bytes the bake file format reserves. Layout is
         /// uint32 magic (4) + uint16 version (2) + uint16 subCellsX/Y (4) +
         /// uint16 mapPixelsX/Y (4) + uint16 distanceScale (2) +
-        /// uint16 reserved (2) = 18 bytes. Keep this in sync with WriteHeader().
+        /// uint16 reserved (2) = 18 bytes. Keep this in sync with WriteHeaderV4().
         /// </summary>
         public const int HeaderByteSize = 18;
-
-        public static void WriteHeader(BinaryWriter bw,
-            int subCellsX, int subCellsY,
-            int mapPixelsX, int mapPixelsY,
-            ushort distanceScaleMetersToWrite)
-        {
-            // Legacy header writer (v3 layout). Kept for any external tools
-            // that target the old format. New bakes go through WriteHeaderV4.
-            bw.Write(MagicBytes);
-            bw.Write((ushort)3); // explicit v3
-            bw.Write((ushort)subCellsX);
-            bw.Write((ushort)subCellsY);
-            bw.Write((ushort)mapPixelsX);
-            bw.Write((ushort)mapPixelsY);
-            bw.Write(distanceScaleMetersToWrite);
-            bw.Write((ushort)0); // reserved
-        }
 
         public static void WriteHeaderV4(BinaryWriter bw,
             int subCellsX, int subCellsY,
