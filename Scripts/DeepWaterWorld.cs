@@ -244,9 +244,7 @@ namespace DeepWaters
             if (tile == null || !tile.IsOceanConnected || !tile.HasDistanceField)
                 return false;
 
-            // Painted-water authority: a column exists only where the tilemap
-            // paints pure water (matches the carve, the clip, and the film).
-            if (!DeepWaterWaterClassification.IsLocalPointPureWater(dfTerrain.MapData, fracX, fracZ))
+            if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ))
                 return false;
 
             if (DeepWaterDistanceBake.HasFineWaterMask && !tile.IsCarvedWater(worldX, worldZ))

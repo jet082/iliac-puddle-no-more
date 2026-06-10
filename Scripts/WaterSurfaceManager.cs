@@ -206,31 +206,22 @@ namespace DeepWaters
                     float fracX1 = (x + 1) / (float)n;
                     float fracXMid = (x + 0.5f) / n;
 
-                    if (matchWaterTexelClip)
-                    {
-                        if (!DeepWaterWaterClassification.CellContainsPureWaterTile(terrain.MapData, x, z, n))
-                            continue;
-                    }
-                    else
-                    {
-                        if (!DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, fracXMid, fracZMid))
-                            continue;
+                    // Carve-aligned coverage (fully submerged + bake-carved):
+                    // film over every carved cell, painted water or sand.
+                    bool carveAligned =
+                        DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, fracXMid, fracZMid) &&
+                        (!useBakeMask || DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracXMid, fracZMid)) &&
+                        DeepWaterWaterClassification.IsCellFullySubmerged(terrain.MapData, x, z, n);
 
-                        if (useBakeMask &&
-                            !DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracXMid, fracZMid))
-                        {
-                            continue;
-                        }
+                    // Clip-aligned coverage: on clipped (ocean-connected) tiles
+                    // the film must also cover every pure-water texel whose
+                    // painted vanilla water the clip shader removed, or a bare
+                    // band appears along the shoreline.
+                    bool clipAligned = matchWaterTexelClip &&
+                        DeepWaterWaterClassification.CellContainsPureWaterTile(terrain.MapData, x, z, n);
 
-                        // Only place the water surface where the WHOLE cell is
-                        // submerged — the same gate the carve uses. The midpoint /
-                        // shore-tile classification above is permissive (0.25 m
-                        // headroom, shore tiles count as water), which otherwise lays
-                        // a sea-level water film over shoreline cells that have no
-                        // carved hole under them: the "0-depth water above land".
-                        if (!DeepWaterWaterClassification.IsCellFullySubmerged(terrain.MapData, x, z, n))
-                            continue;
-                    }
+                    if (!carveAligned && !clipAligned)
+                        continue;
 
                     float x0 = fracX0 * sizeX;
                     float x1 = fracX1 * sizeX;

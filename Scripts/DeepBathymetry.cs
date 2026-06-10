@@ -97,9 +97,13 @@ namespace DeepWaters
         // unswimmable wading bowl — water you're "in" but can neither swim
         // nor stand clear of. 1.6m guarantees swimmability everywhere there
         // is carved water; the vertical step this creates at the carve edge
-        // is bridged by the seafloor mesh's shore skirt.
-        // (Was 0.25 — "no visible step" — which produced the bowls.)
-        public const float ShelfMinDepth      = 1.6f;
+        // is bridged by the seafloor mesh's shore skirt. 2.7m = 1.5x player
+        // height, so the player can always fully submerge and swim — and at
+        // grazing view angles the water column is long enough that the
+        // surface shader's depth occlusion goes opaque instead of showing a
+        // pale seabed strip at the horizon.
+        // (Was 0.25 — "no visible step" — which produced unswimmable bowls.)
+        public const float ShelfMinDepth      = 2.7f;
         public const float ShelfBreakDistance = 360f;  // shelf/slope split (geography classify only)
         public const float ShelfRampMeters    = 2700f; // distance at which full climate-base depth is reached
         // Fraction of straight-line descent blended into the smoothstep shelf

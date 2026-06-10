@@ -294,6 +294,24 @@ namespace DeepWaters
             if (presentationUnderwater)
                 ApplyNeutralUnderwaterFogColor();
             KeepSurfaceCameraUnsunk(presentationUnderwater, oceanSurfaceY);
+            if (isSwimming)
+                CancelSwimCrouch();
+        }
+
+        // Crouch means "descend" while swimming, but PlayerMotor recomputes
+        // OnExteriorWater by raycast BEFORE this late phase re-forges it, so
+        // DFU's DecideHeightAction sees "not on water" for that window and
+        // treats the press as a real crouch toggle — which is why the player
+        // used to step out of the water crouched. Cancel any queued crouch
+        // while swimming; the height changer needs ~0.1s to complete one, so
+        // a per-frame cancel keeps it from ever taking hold.
+        private static void CancelSwimCrouch()
+        {
+            GameManager gameManager = GameManager.Instance;
+            GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+            var heightChanger = player != null ? player.GetComponent<PlayerHeightChanger>() : null;
+            if (heightChanger != null && heightChanger.HeightAction == HeightChangeAction.DoCrouching)
+                heightChanger.HeightAction = HeightChangeAction.DoNothing;
         }
 
         #region Forge / restore
@@ -838,28 +856,14 @@ namespace DeepWaters
             if (!DeepWaterTerrainLookup.TryGetByWorldPosition(position.x, position.z, out playerDfTerrain, out playerTerrain))
                 return;
 
-            // Painted-ground check: if the tilemap under the player is NOT the
-            // pure water tile, this is walkable land (including the slightly
-            // submerged sand shelves terrain overhauls paint as beach). Keep
-            // every collider solid so the player stands/wades instead of
-            // sinking into water dug under the visual ground. The eject guard
-            // still holds anything a genuinely submerged player is beneath.
-            if (!IsPureWaterAt(playerDfTerrain, position))
-            {
-                RestoreWaterTerrainCollider();
-                return;
-            }
-
-            // Swimmable-water check: pure paint alone is not enough — shallow
-            // shore strips are painted water but the carve (all corners below
-            // ocean + bake) skipped them, so there is no water VOLUME there,
-            // just vanilla ground at ankle depth. Engaging the gate over them
-            // drops the player into the heightfield ("swimming in land" on
-            // shore tiles). Only open the gate where a carved seafloor quad
-            // actually exists beneath the player; everywhere else the terrain
-            // stays solid and the strip is plain wading ground. (A transient
-            // lookup failure here restores colliders, but the padded eject
-            // guard holds anything a genuinely submerged player is beneath.)
+            // Swimmable-water check: only open the gate where a carved
+            // seafloor quad actually exists beneath the player (real water
+            // VOLUME, depth >= the swimmable minimum). Everywhere else —
+            // beaches, shore fringes the carve rejected — the terrain stays
+            // solid and is plain walkable/wading ground ("swimming in land"
+            // guard). A transient failure here restores colliders, but the
+            // padded eject guard holds anything a genuinely submerged player
+            // is beneath.
             float carvedSeafloorY;
             if (!DeepWaterWorld.TryGetCarvedSeafloorWorldY(position.x, position.z, out carvedSeafloorY))
             {
@@ -910,18 +914,6 @@ namespace DeepWaters
             float dx = Mathf.Max(Mathf.Max(tileOrigin.x - playerPosition.x, playerPosition.x - (tileOrigin.x + tileWorldSize)), 0f);
             float dz = Mathf.Max(Mathf.Max(tileOrigin.z - playerPosition.z, playerPosition.z - (tileOrigin.z + tileWorldSize)), 0f);
             return dx * dx + dz * dz <= radius * radius;
-        }
-
-        private static bool IsPureWaterAt(DaggerfallTerrain dfTerrain, Vector3 position)
-        {
-            float tileWorldSize = DeepWaterWorld.TileWorldSize;
-            if (tileWorldSize <= 0f)
-                return false;
-
-            Vector3 origin = dfTerrain.transform.position;
-            float fracX = (position.x - origin.x) / tileWorldSize;
-            float fracZ = (position.z - origin.z) / tileWorldSize;
-            return DeepWaterWaterClassification.IsLocalPointPureWater(dfTerrain.MapData, fracX, fracZ);
         }
 
         // The capsule bottom. Invariant under sink/unsink (those shift the
@@ -1019,7 +1011,10 @@ namespace DeepWaters
             if (terrainWorldY < oceanSurfaceY - ColliderGateShoreTerrainMargin)
                 return false;
 
-            bool waterLike = DeepWaterWaterClassification.IsLocalPointPureWater(dfTerrain.MapData, fracX, fracZ);
+            bool waterLike =
+                DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ||
+                (DeepWaterDistanceBake.HasFineWaterMask &&
+                 DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ));
 
             return !waterLike || terrainWorldY > oceanSurfaceY + ColliderGateShoreTerrainMargin;
         }
