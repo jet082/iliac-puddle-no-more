@@ -150,6 +150,23 @@ namespace DeepWaters
             return false;
         }
 
+        // Fills the parallel lists with this frame's live, active terrains
+        // (the same snapshot TryGetByWorldPosition scans). Used by the swim
+        // collider gate to enumerate candidate tiles by distance without any
+        // per-tile world queries.
+        public static void GetLoadedTerrains(List<DaggerfallTerrain> dfTerrains, List<Terrain> terrains)
+        {
+            dfTerrains.Clear();
+            terrains.Clear();
+
+            List<TerrainSnapshotEntry> snapshot = GetFrameSnapshot();
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                dfTerrains.Add(snapshot[i].DfTerrain);
+                terrains.Add(snapshot[i].Terrain);
+            }
+        }
+
         private static bool SnapshotEntryContains(TerrainSnapshotEntry entry, float worldX, float worldZ, float tileWorldSize)
         {
             const float edgeEpsilon = 0.25f;

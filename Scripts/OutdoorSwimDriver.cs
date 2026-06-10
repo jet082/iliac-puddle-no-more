@@ -76,13 +76,17 @@ namespace DeepWaters
         // a surface floater can't sit exactly on the threshold.
         private const float ColliderGateOpenFeetMargin = 0.25f;
         private const float ColliderGateCloseFeetMargin = 1.00f;
-        private const float ColliderGateProbeRadiusMin = 1.25f;
-        private const float ColliderGateProbeRadiusMax = 2.25f;
         private const float ColliderGateShoreProbeRadiusMin = 2.50f;
         private const float ColliderGateShoreProbeRadiusMax = 4.00f;
         private const float ColliderGateShoreTerrainMargin = 0.35f;
-        private const float ColliderGateTransientHoldSeconds = 0.65f;
+        // The gate is a DISTANCE RING: every loaded ocean-water tile whose
+        // footprint lies within this of the submerged player is disabled.
+        // Pure transform/flag math, so the set cannot collapse during the
+        // map-pixel streaming stalls that starve per-frame water lookups, and
+        // no swim speed (multiplier + strokes) can outrun it between frames.
+        private const float ColliderGateTileProximityMeters = 250f;
         private const float ColliderGateEjectGuardMargin = 0.5f;
+        private const float ColliderGateEjectGuardPaddingMeters = 300f;
 
         // Boats.
         private const float BoatBoardingSurfaceClearance = 1.10f;
@@ -100,8 +104,9 @@ namespace DeepWaters
 
         private readonly List<TerrainCollider> disabledWaterTerrainColliders = new List<TerrainCollider>(12);
         private readonly List<TerrainCollider> desiredWaterTerrainColliders = new List<TerrainCollider>(12);
+        private readonly List<DaggerfallTerrain> gateDfTerrainScratch = new List<DaggerfallTerrain>(80);
+        private readonly List<Terrain> gateTerrainScratch = new List<Terrain>(80);
         private bool waterColliderGateActive;
-        private float colliderGateHoldUntil;
 
         public static OutdoorSwimDriver Install(GameObject host)
         {
@@ -823,23 +828,72 @@ namespace DeepWaters
                 return;
             }
 
+            // Unknown world state (terrain lookup starved during a map-pixel
+            // crossing): FREEZE the gate exactly as it is. Restoring on missing
+            // data is what used to eject swimmers mid-crossing; with a frozen
+            // set the colliders the player relies on simply stay disabled until
+            // the world is readable again.
+            DaggerfallTerrain playerDfTerrain;
+            Terrain playerTerrain;
+            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(position.x, position.z, out playerDfTerrain, out playerTerrain))
+                return;
+
+            // Painted-ground check: if the tilemap under the player is NOT the
+            // pure water tile, this is walkable land (including the slightly
+            // submerged sand shelves terrain overhauls paint as beach). Keep
+            // every collider solid so the player stands/wades instead of
+            // sinking into water dug under the visual ground. The eject guard
+            // still holds anything a genuinely submerged player is beneath.
+            if (!IsPureWaterAt(playerDfTerrain, position))
+            {
+                RestoreWaterTerrainCollider();
+                return;
+            }
+
+            // Swimmable-water check: pure paint alone is not enough — shallow
+            // shore strips are painted water but the carve (all corners below
+            // ocean + bake) skipped them, so there is no water VOLUME there,
+            // just vanilla ground at ankle depth. Engaging the gate over them
+            // drops the player into the heightfield ("swimming in land" on
+            // shore tiles). Only open the gate where a carved seafloor quad
+            // actually exists beneath the player; everywhere else the terrain
+            // stays solid and the strip is plain wading ground. (A transient
+            // lookup failure here restores colliders, but the padded eject
+            // guard holds anything a genuinely submerged player is beneath.)
+            float carvedSeafloorY;
+            if (!DeepWaterWorld.TryGetCarvedSeafloorWorldY(position.x, position.z, out carvedSeafloorY))
+            {
+                RestoreWaterTerrainCollider();
+                return;
+            }
+
             if (IsNearColliderGateShore(position, oceanSurfaceY))
             {
                 RestoreWaterTerrainCollider();
                 return;
             }
 
-            CollectNearbyWaterTerrainColliders(position, desiredWaterTerrainColliders);
-            if (desiredWaterTerrainColliders.Count == 0)
+            // Distance ring over this frame's live terrain snapshot.
+            desiredWaterTerrainColliders.Clear();
+            DeepWaterTerrainLookup.GetLoadedTerrains(gateDfTerrainScratch, gateTerrainScratch);
+            float tileWorldSize = DeepWaterWorld.TileWorldSize;
+            for (int i = 0; i < gateDfTerrainScratch.Count; i++)
             {
-                // The water-column lookup fails transiently during map-pixel
-                // streaming stalls; hold the current gate briefly instead of
-                // re-enabling the collider under a submerged player.
-                if (disabledWaterTerrainColliders.Count > 0 && Time.time < colliderGateHoldUntil)
-                    waterColliderGateActive = true;
-                else
-                    RestoreWaterTerrainCollider();
-                return;
+                DaggerfallTerrain dfTerrain = gateDfTerrainScratch[i];
+                Terrain terrain = gateTerrainScratch[i];
+                if (dfTerrain == null || terrain == null)
+                    continue;
+
+                DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+                if (tile == null || !tile.IsOceanConnected || !tile.HasDistanceField)
+                    continue;
+
+                if (!TileFootprintWithinRadius(dfTerrain.transform.position, tileWorldSize, position, ColliderGateTileProximityMeters))
+                    continue;
+
+                TerrainCollider collider = terrain.GetComponent<TerrainCollider>();
+                if (collider != null && !ContainsCollider(desiredWaterTerrainColliders, collider))
+                    desiredWaterTerrainColliders.Add(collider);
             }
 
             for (int i = 0; i < desiredWaterTerrainColliders.Count; i++)
@@ -847,8 +901,27 @@ namespace DeepWaters
 
             RestoreWaterTerrainCollidersExcept(desiredWaterTerrainColliders);
             waterColliderGateActive = disabledWaterTerrainColliders.Count > 0;
-            if (waterColliderGateActive)
-                colliderGateHoldUntil = Time.time + ColliderGateTransientHoldSeconds;
+        }
+
+        // XZ distance from the player to the tile's footprint (AABB), squared
+        // comparison against the ring radius.
+        private static bool TileFootprintWithinRadius(Vector3 tileOrigin, float tileWorldSize, Vector3 playerPosition, float radius)
+        {
+            float dx = Mathf.Max(Mathf.Max(tileOrigin.x - playerPosition.x, playerPosition.x - (tileOrigin.x + tileWorldSize)), 0f);
+            float dz = Mathf.Max(Mathf.Max(tileOrigin.z - playerPosition.z, playerPosition.z - (tileOrigin.z + tileWorldSize)), 0f);
+            return dx * dx + dz * dz <= radius * radius;
+        }
+
+        private static bool IsPureWaterAt(DaggerfallTerrain dfTerrain, Vector3 position)
+        {
+            float tileWorldSize = DeepWaterWorld.TileWorldSize;
+            if (tileWorldSize <= 0f)
+                return false;
+
+            Vector3 origin = dfTerrain.transform.position;
+            float fracX = (position.x - origin.x) / tileWorldSize;
+            float fracZ = (position.z - origin.z) / tileWorldSize;
+            return DeepWaterWaterClassification.IsLocalPointPureWater(dfTerrain.MapData, fracX, fracZ);
         }
 
         // The capsule bottom. Invariant under sink/unsink (those shift the
@@ -865,25 +938,6 @@ namespace DeepWaters
         private float CurrentGateFeetMargin()
         {
             return waterColliderGateActive ? ColliderGateCloseFeetMargin : ColliderGateOpenFeetMargin;
-        }
-
-        private void CollectNearbyWaterTerrainColliders(Vector3 position, List<TerrainCollider> colliders)
-        {
-            colliders.Clear();
-
-            AddWaterTerrainColliderAt(position.x, position.z, colliders);
-
-            float radius = GetGateProbeRadius(ColliderGateProbeRadiusMin, ColliderGateProbeRadiusMax, 3f);
-            AddWaterTerrainColliderAt(position.x + radius, position.z, colliders);
-            AddWaterTerrainColliderAt(position.x - radius, position.z, colliders);
-            AddWaterTerrainColliderAt(position.x, position.z + radius, colliders);
-            AddWaterTerrainColliderAt(position.x, position.z - radius, colliders);
-
-            float diagonal = radius * 0.70710678f;
-            AddWaterTerrainColliderAt(position.x + diagonal, position.z + diagonal, colliders);
-            AddWaterTerrainColliderAt(position.x + diagonal, position.z - diagonal, colliders);
-            AddWaterTerrainColliderAt(position.x - diagonal, position.z + diagonal, colliders);
-            AddWaterTerrainColliderAt(position.x - diagonal, position.z - diagonal, colliders);
         }
 
         private static float GetGateProbeRadius(float min, float max, float radiusScale)
@@ -965,10 +1019,7 @@ namespace DeepWaters
             if (terrainWorldY < oceanSurfaceY - ColliderGateShoreTerrainMargin)
                 return false;
 
-            bool waterLike =
-                DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ||
-                (DeepWaterDistanceBake.HasFineWaterMask &&
-                 DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ));
+            bool waterLike = DeepWaterWaterClassification.IsLocalPointPureWater(dfTerrain.MapData, fracX, fracZ);
 
             return !waterLike || terrainWorldY > oceanSurfaceY + ColliderGateShoreTerrainMargin;
         }
@@ -1007,66 +1058,6 @@ namespace DeepWaters
 
             worldY = terrain.transform.position.y + normalizedHeight * terrain.terrainData.size.y;
             return true;
-        }
-
-        private static void AddWaterTerrainColliderAt(float worldX, float worldZ, List<TerrainCollider> colliders)
-        {
-            DeepWaterColumn column;
-            if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column) ||
-                column.Depth < WaterContactMinimumDepth ||
-                column.Terrain == null)
-            {
-                TerrainCollider fallbackCollider;
-                if (TryGetFallbackWaterTerrainCollider(worldX, worldZ, out fallbackCollider) &&
-                    !ContainsCollider(colliders, fallbackCollider))
-                {
-                    colliders.Add(fallbackCollider);
-                }
-                return;
-            }
-
-            TerrainCollider collider = column.Terrain.GetComponent<TerrainCollider>();
-            if (collider != null && !ContainsCollider(colliders, collider))
-                colliders.Add(collider);
-        }
-
-        // The water-column lookup needs the tile fully promoted; mid-promotion
-        // tiles still need their collider gated (the bake mask knows they're
-        // water) or the player would pop onto the heightfield while it loads.
-        private static bool TryGetFallbackWaterTerrainCollider(float worldX, float worldZ, out TerrainCollider collider)
-        {
-            collider = null;
-
-            DaggerfallTerrain dfTerrain;
-            Terrain terrain;
-            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(worldX, worldZ, out dfTerrain, out terrain) ||
-                dfTerrain == null ||
-                terrain == null)
-            {
-                return false;
-            }
-
-            float tileWorldSize = DeepWaterWorld.TileWorldSize;
-            if (tileWorldSize <= 0f)
-                return false;
-
-            Vector3 origin = dfTerrain.transform.position;
-            float fracX = (worldX - origin.x) / tileWorldSize;
-            float fracZ = (worldZ - origin.z) / tileWorldSize;
-            if (fracX < -0.01f || fracX > 1.01f || fracZ < -0.01f || fracZ > 1.01f)
-                return false;
-
-            fracX = Mathf.Clamp01(fracX);
-            fracZ = Mathf.Clamp01(fracZ);
-            bool waterLike =
-                DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ||
-                (DeepWaterDistanceBake.HasFineWaterMask &&
-                 DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ));
-            if (!waterLike)
-                return false;
-
-            collider = terrain.GetComponent<TerrainCollider>();
-            return collider != null;
         }
 
         private void DisableWaterTerrainCollider(TerrainCollider collider)
@@ -1125,11 +1116,24 @@ namespace DeepWaters
             if (terrain == null || terrain.terrainData == null)
                 return false;
 
+            // Padded footprint: protect not just the tile the player is over,
+            // but any tile they could swim INTO before the gate next succeeds.
+            // During a map-pixel crossing the water-column lookups fail for
+            // longer than the transient hold, the desired-collider set
+            // collapses, and an unpadded guard releases the NEIGHBOR tile —
+            // the player then swims across the boundary into its re-enabled
+            // sea-level heightfield and gets depenetrated to the surface
+            // ("shoot up when crossing map pixels"). The padding covers the
+            // distance reachable during a worst-case stall (~2s of stroke
+            // swimming). SampleHeight clamps to the tile edge for positions
+            // outside the footprint, which is the right reference height.
             Vector3 position = player.transform.position;
             Vector3 origin = terrain.transform.position;
             Vector3 size = terrain.terrainData.size;
-            if (position.x < origin.x || position.x > origin.x + size.x ||
-                position.z < origin.z || position.z > origin.z + size.z)
+            if (position.x < origin.x - ColliderGateEjectGuardPaddingMeters ||
+                position.x > origin.x + size.x + ColliderGateEjectGuardPaddingMeters ||
+                position.z < origin.z - ColliderGateEjectGuardPaddingMeters ||
+                position.z > origin.z + size.z + ColliderGateEjectGuardPaddingMeters)
                 return false;
 
             float terrainSurfaceY = origin.y + terrain.SampleHeight(position);

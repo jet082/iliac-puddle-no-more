@@ -185,6 +185,16 @@ namespace DeepWaters
             int mapPixelY = terrain.MapPixelY;
             bool useBakeMask = DeepWaterDistanceBake.HasFineWaterMask;
 
+            // Ocean-connected tiles get the terrain water-texel clip (the
+            // painted sea-level water is discarded by the clip shader), so the
+            // surface film must cover every cell containing a pure-water tile —
+            // the exact area the clip uncovered. Anything narrower shows a bare
+            // seabed band between the film's edge and the shoreline. Other
+            // tiles (inland lakes/rivers, never clipped) keep the conservative
+            // legacy criteria so their painted vanilla water stays untouched.
+            DeepWaterTileData tile = terrain.GetComponent<DeepWaterTileData>();
+            bool matchWaterTexelClip = tile != null && tile.IsOceanConnected && tile.HasDistanceField;
+
             for (int z = 0; z < n; z++)
             {
                 float fracZ0 = z / (float)n;
@@ -196,23 +206,31 @@ namespace DeepWaters
                     float fracX1 = (x + 1) / (float)n;
                     float fracXMid = (x + 0.5f) / n;
 
-                    if (!DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, fracXMid, fracZMid))
-                        continue;
-
-                    if (useBakeMask &&
-                        !DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracXMid, fracZMid))
+                    if (matchWaterTexelClip)
                     {
-                        continue;
+                        if (!DeepWaterWaterClassification.CellContainsPureWaterTile(terrain.MapData, x, z, n))
+                            continue;
                     }
+                    else
+                    {
+                        if (!DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, fracXMid, fracZMid))
+                            continue;
 
-                    // Only place the water surface where the WHOLE cell is
-                    // submerged — the same gate the carve uses. The midpoint /
-                    // shore-tile classification above is permissive (0.25 m
-                    // headroom, shore tiles count as water), which otherwise lays
-                    // a sea-level water film over shoreline cells that have no
-                    // carved hole under them: the "0-depth water above land".
-                    if (!DeepWaterWaterClassification.IsCellFullySubmerged(terrain.MapData, x, z, n))
-                        continue;
+                        if (useBakeMask &&
+                            !DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracXMid, fracZMid))
+                        {
+                            continue;
+                        }
+
+                        // Only place the water surface where the WHOLE cell is
+                        // submerged — the same gate the carve uses. The midpoint /
+                        // shore-tile classification above is permissive (0.25 m
+                        // headroom, shore tiles count as water), which otherwise lays
+                        // a sea-level water film over shoreline cells that have no
+                        // carved hole under them: the "0-depth water above land".
+                        if (!DeepWaterWaterClassification.IsCellFullySubmerged(terrain.MapData, x, z, n))
+                            continue;
+                    }
 
                     float x0 = fracX0 * sizeX;
                     float x1 = fracX1 * sizeX;

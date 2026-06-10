@@ -90,10 +90,16 @@ namespace DeepWaters
         // (no rebake). Only shorten the bake's DistanceScaleMeters if you also
         // shorten this to match (ramp <= 255 * scale).
         //
-        // ShelfMinDepth is intentionally tiny — at the shoreline the seafloor
-        // mesh meets the water surface within a few cm, so there's no visible
-        // vertical "step" between vanilla shore terrain and our seafloor.
-        public const float ShelfMinDepth      = 0.25f;
+        // Minimum depth of ANY carved water, including right at the carve
+        // edge. Entering the swim state from standing needs a column deeper
+        // than ~1.1m (the swim check point = transform + 0.30 must dip below
+        // ocean + 0.10 with a standing controller); anything shallower is an
+        // unswimmable wading bowl — water you're "in" but can neither swim
+        // nor stand clear of. 1.6m guarantees swimmability everywhere there
+        // is carved water; the vertical step this creates at the carve edge
+        // is bridged by the seafloor mesh's shore skirt.
+        // (Was 0.25 — "no visible step" — which produced the bowls.)
+        public const float ShelfMinDepth      = 1.6f;
         public const float ShelfBreakDistance = 360f;  // shelf/slope split (geography classify only)
         public const float ShelfRampMeters    = 2700f; // distance at which full climate-base depth is reached
         // Fraction of straight-line descent blended into the smoothstep shelf

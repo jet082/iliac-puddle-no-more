@@ -36,6 +36,70 @@ namespace DeepWaters
             return HeightmapPointBelowThreshold(mapData.heightmapSamples, fracX, fracZ, carveWaterThreshold);
         }
 
+        // THE runtime water authority: true only where the promoted tilemap
+        // paints the PURE water tile (record 0; rotation variants in the high
+        // bits). This is what the player actually sees as water, what the
+        // terrain clip shader discards, and therefore what the carve, the
+        // water columns, the surface film, and the collider gate must agree
+        // on. Terrain overhauls (Interesting Terrains / WoD) paint their
+        // shallow shelves as SAND even where heights dip below sea level —
+        // height-based water tests dig swimmable water under visual beach
+        // there, which is exactly the "swimming on land" failure. Falls back
+        // to the heightmap threshold only when no tilemap exists yet.
+        public static bool IsLocalPointPureWater(MapPixelData mapData, float fracX, float fracZ)
+        {
+            byte[,] tilemap = mapData.tilemapSamples;
+            if (tilemap == null)
+            {
+                float carveWaterThreshold;
+                return TryGetCarveWaterThreshold(out carveWaterThreshold) &&
+                       HeightmapPointBelowThreshold(mapData.heightmapSamples, fracX, fracZ, carveWaterThreshold);
+            }
+
+            int rows = tilemap.GetLength(0);
+            int cols = tilemap.GetLength(1);
+            if (rows <= 0 || cols <= 0)
+                return false;
+
+            int x = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracX) * cols), 0, cols - 1);
+            int y = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracZ) * rows), 0, rows - 1);
+            return (tilemap[y, x] & 0x3F) == 0;
+        }
+
+        // True if any tilemap sample inside this cell is the PURE water tile
+        // (record 0 in the low 6 bits; rotation variants in the high bits) —
+        // the exact texel set the terrain water-texel clip shader discards.
+        // The water surface mesh uses this on clipped tiles so the visible
+        // film covers precisely the area whose painted vanilla water was
+        // removed; anything narrower leaves a bare seabed band along shores.
+        public static bool CellContainsPureWaterTile(MapPixelData mapData, int cellX, int cellY, int cellResolution)
+        {
+            byte[,] tilemap = mapData.tilemapSamples;
+            if (tilemap == null || cellResolution <= 0)
+                return false;
+
+            int rows = tilemap.GetLength(0);
+            int cols = tilemap.GetLength(1);
+            if (rows <= 0 || cols <= 0)
+                return false;
+
+            int x0 = Mathf.Clamp(cellX * cols / cellResolution, 0, cols - 1);
+            int x1 = Mathf.Clamp(((cellX + 1) * cols - 1) / cellResolution, 0, cols - 1);
+            int y0 = Mathf.Clamp(cellY * rows / cellResolution, 0, rows - 1);
+            int y1 = Mathf.Clamp(((cellY + 1) * rows - 1) / cellResolution, 0, rows - 1);
+
+            for (int y = y0; y <= y1; y++)
+            {
+                for (int x = x0; x <= x1; x++)
+                {
+                    if ((tilemap[y, x] & 0x3F) == 0)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
         // True only if EVERY heightmap sample in this cell is at/below ocean
         // level — i.e. the whole cell is submerged, so a sea-level water plane
         // sits ABOVE the terrain everywhere in it. The stenciled water surface

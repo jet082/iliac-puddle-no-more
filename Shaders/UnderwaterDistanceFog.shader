@@ -104,6 +104,17 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                     max(fadeStart + 0.10, fadeEnd),
                     dist) * smoothstep(0.15, 1.0, fogStrength);
 
+                // Absolute far limit, independent of fog strength: past this
+                // distance the curtain is FULLY opaque, so the loaded-world
+                // edge (the void) and far terrain silhouettes can never bleed
+                // through. The strength-scaled curtain above only softens what
+                // happens before this hard horizon.
+                float hardCurtain = smoothstep(
+                    effectiveVision * 2.4,
+                    effectiveVision * 3.2,
+                    dist);
+                curtain = max(curtain, hardCurtain);
+
                 fixed3 ambientWater = lerp(
                     _ScatterColor.rgb,
                     _DeepWaterColor.rgb,
@@ -164,9 +175,10 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                 if (noDepth)
                 {
                     // Sky / no-depth pixels: use a far value so the volume
-                    // pushes them to ambient water color. At max fog this is
-                    // deliberately past the visibility curtain.
-                    float farFog = effectiveVision * lerp(2.25, 1.40, saturate(_FogStrength));
+                    // pushes them to ambient water color. Must sit PAST the
+                    // hard far curtain (3.2x vision) so the void fully fogs
+                    // out at every fog strength.
+                    float farFog = effectiveVision * lerp(3.6, 1.40, saturate(_FogStrength));
 
                     // When looking UP from below the surface, stop the fog at the
                     // water surface instead of treating the whole ray as infinite

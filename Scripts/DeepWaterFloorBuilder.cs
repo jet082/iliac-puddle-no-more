@@ -314,6 +314,17 @@ namespace DeepWaters
             var sampler = DaggerfallUnity.Instance.TerrainSampler;
             float oceanThreshold = sampler.OceanElevation / sampler.MaxTerrainHeight;
             const float oceanThresholdEps = 1e-5f;
+
+            // Painted-water authority. Terrain overhauls (Interesting Terrains /
+            // WoD) paint their shallow shelves as SAND even where heights dip
+            // below sea level; carving by heights/bake alone digs swimmable
+            // water under that visual beach ("swimming on land"). Only cells the
+            // tilemap paints as PURE water (record 0 — the same texels the clip
+            // shader discards and the surface film covers) may carve.
+            byte[,] tilemap = dfTerrain.MapData.tilemapSamples;
+            int tileRows = tilemap != null ? tilemap.GetLength(0) : 0;
+            int tileCols = tilemap != null ? tilemap.GetLength(1) : 0;
+
             for (int hy = 0; hy < holeRes; hy++)
             {
                 float fracZ = (hy + 0.5f) * invHoleRes;
@@ -331,6 +342,15 @@ namespace DeepWaters
                         continue;
 
                     float fracX = (hx + 0.5f) * invHoleRes;
+
+                    if (tilemap != null && tileRows > 0 && tileCols > 0)
+                    {
+                        int tx = Mathf.Clamp((int)(fracX * tileCols), 0, tileCols - 1);
+                        int ty = Mathf.Clamp((int)(fracZ * tileRows), 0, tileRows - 1);
+                        if ((tilemap[ty, tx] & 0x3F) != 0)
+                            continue;
+                    }
+
                     bool isWater = true;
                     if (isWater && useBakeMask)
                     {

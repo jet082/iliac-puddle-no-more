@@ -19,9 +19,11 @@ namespace DeepWaters
         private const float UnderwaterVisionDistanceAtDefaultSetting = 70f;
         private const float MinimumUnderwaterVisionDistance = 22f;
         private const float MaximumUnderwaterVisionDistance = 260f;
+        // Both surfaces map the slider linearly: alpha = 1 - transparency, so
+        // 0.1 transparency = 90% opaque and 1.0 transparency = fully invisible.
         private const float TopOpaqueWaterSurfaceAlpha = 1.0f;
         private const float TopMostTransparentWaterSurfaceAlpha = 0.0f;
-        private const float BottomOpaqueWaterSurfaceAlpha = 0.55f;
+        private const float BottomOpaqueWaterSurfaceAlpha = 1.0f;
         private const float BottomMostTransparentWaterSurfaceAlpha = 0.0f;
         private const float MinFogDistanceMultiplier = 0.25f;
         private const float MaxFogDistanceMultiplier = 6.0f;
@@ -193,7 +195,13 @@ namespace DeepWaters
 
         private static float TransparencySliderToAlpha(float sliderValue, float opaqueAlpha, float transparentAlpha)
         {
-            return Mathf.Lerp(opaqueAlpha, transparentAlpha, Mathf.Clamp01(sliderValue));
+            // Piecewise mapping: low settings stay nearly opaque (0.1 -> 98%
+            // opaque), then opacity falls linearly to fully invisible at 1.0.
+            float slider = Mathf.Clamp01(sliderValue);
+            float opacity01 = slider <= 0.1f
+                ? Mathf.Lerp(1f, 0.98f, slider / 0.1f)
+                : Mathf.Lerp(0.98f, 0f, (slider - 0.1f) / 0.9f);
+            return Mathf.Lerp(transparentAlpha, opaqueAlpha, opacity01);
         }
 
         private static float SurfaceClarity01(float sliderValue)
