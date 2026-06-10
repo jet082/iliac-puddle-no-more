@@ -173,17 +173,42 @@ namespace DeepWaters
             return TryGetOceanSurfaceWorldY(out oceanY) ? oceanY : 0f;
         }
 
+        // Last successfully-computed ocean surface Y, used to bridge transient
+        // resolution failures (see below).
+        private static bool hasCachedOceanSurfaceY;
+        private static float cachedOceanSurfaceY;
+
         public static bool TryGetOceanSurfaceWorldY(out float oceanY)
         {
             oceanY = 0f;
 
             var gameManager = GameManager.Instance;
             if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.StreamingWorld == null || DaggerfallUnity.Instance == null)
+            {
+                // During a map-pixel crossing the terrain update can stall for
+                // ~1s, and these references / IsPlayingGame() briefly report
+                // unavailable for individual frames. Returning false here makes
+                // the swim driver read oceanY=0, decide the player isn't in
+                // water, drop swim state, re-enable gravity for that frame, and
+                // fling the swimmer — the repeated up/down surface bob. The
+                // ocean surface is effectively constant (it only moves on a
+                // vertical floating-origin shift, which is reflected the next
+                // successful call), so bridge the gap with the last good value
+                // instead of spuriously reporting "no ocean". (issue 5)
+                if (hasCachedOceanSurfaceY)
+                {
+                    oceanY = cachedOceanSurfaceY;
+                    return true;
+                }
+
                 return false;
+            }
 
             var sampler = DaggerfallUnity.Instance.TerrainSampler;
             oceanY = sampler.OceanElevation * gameManager.StreamingWorld.TerrainScale
                    + gameManager.StreamingWorld.WorldCompensation.y;
+            cachedOceanSurfaceY = oceanY;
+            hasCachedOceanSurfaceY = true;
             return true;
         }
 
