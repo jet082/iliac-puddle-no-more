@@ -48,6 +48,13 @@ namespace DeepWaters
             if (hookedEffect != null)
                 hookedEffect.enabled = underwaterPresentation;
 
+            // Keep the water-surface underside's horizon curtain converging to
+            // the SAME far color as the fog volume, every frame (it tracks the
+            // camera's depth darkening).
+            if (underwaterPresentation)
+                WaterSurfaceResources.SetHorizonColor(
+                    UnderwaterDistanceFogEffect.ComputeHorizonAmbientColor(oceanSurfaceY));
+
             LogVisibilityState(gameManager, gameManager.MainCamera, underwaterPresentation, oceanSurfaceY);
         }
 
@@ -317,6 +324,42 @@ namespace DeepWaters
         private static readonly Color DefaultAbsorption = new Color(1.80f, 1.25f, 1.05f, 1f);
         private static readonly Color DefaultScatter = new Color(0.090f, 0.165f, 0.155f, 1f);
         private static readonly Color DefaultDeepWaterColor = new Color(0.012f, 0.022f, 0.026f, 1f);
+
+        /// <summary>
+        /// The exact ambient color the fog shader's far curtain converges to,
+        /// mirrored in C# so other far-painting surfaces (the water surface
+        /// underside's horizon curtain) can use the SAME color. Any mismatch
+        /// shows as a band where the distant surface meets the fogged void.
+        /// Keep in sync with ApplyDistanceLimit in UnderwaterDistanceFog.shader
+        /// and ConfigureVolumetricRegrade below.
+        /// </summary>
+        internal static Color ComputeHorizonAmbientColor(float oceanSurfaceY)
+        {
+            float fogStrength = DeepWaters.Instance != null
+                ? Mathf.Clamp01(DeepWaters.Instance.UnderwaterFogStrength)
+                : 0.5f;
+
+            Color dfuWater = DeepWaters.GetUnderwaterFogColor();
+            float dfuLuma = dfuWater.r * 0.299f + dfuWater.g * 0.587f + dfuWater.b * 0.114f;
+            Color dfuTeal = new Color(dfuLuma * 0.60f, dfuLuma * 0.95f, dfuLuma * 0.85f, 1f);
+            Color scatter = Color.Lerp(DefaultScatter, dfuTeal, 0.25f);
+
+            // Mirror the shader's camera depth darkening.
+            float cameraY = GameManager.Instance != null && GameManager.Instance.MainCamera != null
+                ? GameManager.Instance.MainCamera.transform.position.y
+                : oceanSurfaceY;
+            float cameraDepthBelow = Mathf.Max(0f, oceanSurfaceY - cameraY);
+            float depthDarkeningEnd = Mathf.Clamp(
+                (DeepWaters.Instance != null ? DeepWaters.Instance.WaterDepth : 200f) * 0.75f,
+                DepthDarkeningEndMin,
+                DepthDarkeningEndMax);
+            float t = Mathf.Clamp01((cameraDepthBelow - DepthDarkeningStart) /
+                                    Mathf.Max(0.001f, depthDarkeningEnd - DepthDarkeningStart));
+            float depthDarkening = t * t * (3f - 2f * t);
+
+            return Color.Lerp(scatter, DefaultDeepWaterColor,
+                Mathf.Clamp01(depthDarkening * 0.85f + fogStrength * 0.18f));
+        }
 
         private Camera targetCamera;
         private Material material;

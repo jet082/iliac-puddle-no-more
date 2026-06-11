@@ -25,6 +25,7 @@ namespace DeepWaters
         private static readonly int WaterSurfaceFalloffProperty = Shader.PropertyToID("_WaterSurfaceFalloff");
         private static readonly int SurfaceOpaqueFadeStartProperty = Shader.PropertyToID("_SurfaceOpaqueFadeStart");
         private static readonly int SurfaceOpaqueFadeEndProperty = Shader.PropertyToID("_SurfaceOpaqueFadeEnd");
+        private static readonly int HorizonColorProperty = Shader.PropertyToID("_HorizonColor");
         private static readonly int SrcBlendProperty = Uniforms.SrcBlend;
         private static readonly int DstBlendProperty = Uniforms.DstBlend;
         private static readonly int ZWriteProperty = Uniforms.ZWrite;
@@ -77,6 +78,16 @@ namespace DeepWaters
         public static bool IsUndersideSurfaceVisible()
         {
             return DeepWaters.Instance != null;
+        }
+
+        // Called per frame (while underwater) so the underside's opaque
+        // horizon matches the fog volume's far ambient exactly — any
+        // difference reads as a band where the distant surface meets the
+        // fogged void.
+        public static void SetHorizonColor(Color color)
+        {
+            if (sharedUndersideMaterial != null && sharedUndersideMaterial.HasProperty(HorizonColorProperty))
+                sharedUndersideMaterial.SetColor(HorizonColorProperty, color);
         }
 
         public static Texture GetSurfaceTexture()
@@ -195,7 +206,12 @@ namespace DeepWaters
             if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
                 material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * 0.55f);
             if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
-                material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * 1.8f);
+                material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * 1.45f);
+
+            // Fallback horizon color; UnderwaterDistanceFog refreshes it per
+            // frame while underwater so it tracks camera depth darkening.
+            if (material.HasProperty(HorizonColorProperty))
+                material.SetColor(HorizonColorProperty, DeepWaters.GetUnderwaterFogColor());
         }
 
         private static void ConfigureTransparentMaterial(Material material)

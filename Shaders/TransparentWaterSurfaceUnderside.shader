@@ -16,6 +16,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
 
         _UndersideAlpha ("Underside transparency", Range(0, 1)) = 0.25
         _UnderwaterFogColor ("Deep water color", Color) = (0.055, 0.098, 0.082, 1.0)
+        _HorizonColor ("Horizon curtain color", Color) = (0.055, 0.098, 0.082, 1.0)
         _SurfaceOpaqueFadeStart ("Surface opaque fade start", Float) = 42.0
         _SurfaceOpaqueFadeEnd ("Surface opaque fade end", Float) = 160.0
         _WaterColumnFogStrength ("Water column fog strength", Range(0, 1)) = 1.0
@@ -60,6 +61,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
             fixed4 _Color;
             fixed4 _UnderwaterFogColor;
             float _UndersideAlpha;
+            fixed4 _HorizonColor;
             float _SurfaceOpaqueFadeStart;
             float _SurfaceOpaqueFadeEnd;
             float _WaterColumnFogStrength;
@@ -106,7 +108,10 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
                 clip(undersideOpacity - 0.001);
 
                 fixed4 wave = tex2D(_MainTex, i.uv);
-                fixed3 surfaceRgb = lerp(wave.rgb * _Color.rgb, _UnderwaterFogColor.rgb, horizonFade * 0.92);
+                // Converge to the SAME ambient the fog volume saturates to
+                // (_HorizonColor, pushed per frame), so the distant underside
+                // and the fogged void are indistinguishable at range.
+                fixed3 surfaceRgb = lerp(wave.rgb * _Color.rgb, _HorizonColor.rgb, horizonFade);
 
                 fixed4 col;
                 col.rgb = lerp(

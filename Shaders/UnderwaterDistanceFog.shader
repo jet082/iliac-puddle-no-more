@@ -104,14 +104,18 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                     max(fadeStart + 0.10, fadeEnd),
                     dist) * smoothstep(0.15, 1.0, fogStrength);
 
-                // Absolute far limit, independent of fog strength: past this
-                // distance the curtain is FULLY opaque, so the loaded-world
-                // edge (the void) and far terrain silhouettes can never bleed
-                // through. The strength-scaled curtain above only softens what
-                // happens before this hard horizon.
+                // Absolute far limit, independent of fog strength: past
+                // ~1.45x the vision distance EVERYTHING — geometry and
+                // no-depth void alike — converges to the same flat ambient.
+                // The tight range matters: with a distant saturation point,
+                // fogged-but-unsaturated terrain silhouettes met the fully
+                // saturated void paint at the world edge and the difference
+                // showed as a horizon band. Vision distance now means what it
+                // says: nothing is distinguishable beyond it, in any
+                // direction, at any fog strength.
                 float hardCurtain = smoothstep(
-                    effectiveVision * 2.4,
-                    effectiveVision * 3.2,
+                    effectiveVision * 1.0,
+                    effectiveVision * 1.45,
                     dist);
                 curtain = max(curtain, hardCurtain);
 
@@ -176,9 +180,9 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                 {
                     // Sky / no-depth pixels: use a far value so the volume
                     // pushes them to ambient water color. Must sit PAST the
-                    // hard far curtain (3.2x vision) so the void fully fogs
+                    // hard far curtain (1.45x vision) so the void fully fogs
                     // out at every fog strength.
-                    float farFog = effectiveVision * lerp(3.6, 1.40, saturate(_FogStrength));
+                    float farFog = effectiveVision * lerp(3.6, 1.60, saturate(_FogStrength));
 
                     // When looking UP from below the surface, stop the fog at the
                     // water surface instead of treating the whole ray as infinite
