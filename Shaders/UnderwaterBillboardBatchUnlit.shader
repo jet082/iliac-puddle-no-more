@@ -75,6 +75,65 @@ Shader "DeepWaters/UnderwaterBillboardBatchUnlit"
             }
             ENDCG
         }
+
+        // Depth pass. Unity renders _CameraDepthTexture with each shader's
+        // ShadowCaster pass; without one (or with the default vertex
+        // transform), the tangent-expanded billboard quads collapse to
+        // degenerate points in the depth texture, so the underwater fog
+        // post-effect reads the BACKGROUND's depth at the flats' pixels and
+        // paints its opaque far curtain over nearby decorations (the "black
+        // band on top of flats"). This pass mirrors the main pass's
+        // expansion + alpha clip so flats fog by their own distance.
+        // (Renderers keep shadowCastingMode = Off, so this adds no real
+        // light shadows — only depth-texture presence.)
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+            Cull Off
+            ZWrite On
+
+            CGPROGRAM
+            #pragma vertex vertShadow
+            #pragma fragment fragShadow
+            #pragma target 3.0
+            #pragma multi_compile_shadowcaster
+            #include "UnityCG.cginc"
+
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+            fixed4 _Color;
+            float _Cutoff;
+            float3 _UpVector;
+
+            struct v2f_caster
+            {
+                V2F_SHADOW_CASTER;
+                float2 uv : TEXCOORD1;
+            };
+
+            v2f_caster vertShadow(appdata_tan v)
+            {
+                v2f_caster o;
+                float3 viewDirection = UNITY_MATRIX_V._m02_m12_m22;
+                float3 rightVector = normalize(cross(viewDirection, _UpVector));
+
+                v.vertex.xyz += rightVector * (v.tangent.z - 0.5) * v.tangent.x;
+                v.vertex.xyz += _UpVector * (v.tangent.w - 0.5) * v.tangent.y;
+
+                TRANSFER_SHADOW_CASTER_NORMALOFFSET(o)
+                o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);
+                return o;
+            }
+
+            float4 fragShadow(v2f_caster i) : SV_Target
+            {
+                fixed4 col = tex2D(_MainTex, i.uv) * _Color;
+                clip(col.a - _Cutoff);
+                SHADOW_CASTER_FRAGMENT(i)
+            }
+            ENDCG
+        }
     }
 
     FallBack Off
