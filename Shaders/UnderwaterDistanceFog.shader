@@ -114,7 +114,7 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                 // says: nothing is distinguishable beyond it, in any
                 // direction, at any fog strength.
                 float hardCurtain = smoothstep(
-                    effectiveVision * 1.0,
+                    effectiveVision * 0.50,
                     effectiveVision * 1.45,
                     dist);
                 curtain = max(curtain, hardCurtain);
@@ -202,6 +202,20 @@ Shader "DeepWaters/UnderwaterDistanceFog"
                 {
                     float linearEyeDepth = LinearEyeDepth(rawDepth);
                     viewDistance = length(rayWorldUnnorm) * linearEyeDepth;
+
+                    // Geometry ABOVE the surface (boats, docks, towers seen
+                    // from below through the film): only the underwater part
+                    // of the ray is water — clamp the fog path to the surface
+                    // crossing, exactly like the no-depth branch. Without
+                    // this an above-water object fogs over its FULL distance
+                    // (air counted as water) and turns into a flat silhouette
+                    // while the sky beside it stops at the surface and stays
+                    // clear — an inverted look. Underwater geometry is closer
+                    // than the crossing, so the min() never affects it.
+                    float3 rayDir = normalize(rayWorldUnnorm);
+                    float belowSurface = _WaterSurfaceY - _WorldSpaceCameraPos.y;
+                    if (rayDir.y > 0.0001 && belowSurface > 0.0)
+                        viewDistance = min(viewDistance, belowSurface / rayDir.y);
                 }
 
                 source.rgb = ApplyWaterVolume(source.rgb, viewDistance, depthDarkening);

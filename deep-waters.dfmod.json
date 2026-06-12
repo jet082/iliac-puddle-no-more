@@ -26,6 +26,7 @@
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaterFloorBuilder.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaterLocationLoadGate.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaterRuntime.cs",
+        "Assets/Game/Mods/deep-waters/Scripts/DeepWaterPerfProbe.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaterStreamingBuffer.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaterTerrainCapRenderer.cs",
         "Assets/Game/Mods/deep-waters/Scripts/UnderwaterEncounterPulse.cs",
@@ -83,7 +84,8 @@
         "Assets/Game/Mods/deep-waters/Shaders/DeepWaterSeafloor.shader",
         "Assets/Game/Mods/deep-waters/Scripts/PassiveFishResources.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWatersApi.cs",
-        "Assets/Game/Mods/deep-waters/Resources/DistanceBake.bytes"
+        "Assets/Game/Mods/deep-waters/Resources/DistanceBake.bytes",
+        "Assets/Game/Mods/deep-waters/Resources/DistanceBakeVanilla.bytes"
     ],
     "Dependencies": [
         {

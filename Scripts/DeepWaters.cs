@@ -13,8 +13,8 @@ namespace DeepWaters
     /// </summary>
     public partial class DeepWaters : MonoBehaviour
     {
-        internal const string Version = "v0.56.1";
-        internal const string BuildStamp = "2026-06-10 painted-water-authority";
+        internal const string Version = "v0.56.4";
+        internal const string BuildStamp = "2026-06-11 perf-probe+carve-mask";
 
         public static DeepWaters Instance { get; private set; }
         public static Mod Mod { get; private set; }

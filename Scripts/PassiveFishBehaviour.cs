@@ -36,6 +36,14 @@ namespace DeepWaters
         // first), so we have to opt that layer back in with a wider mask.
         private const float CollisionProbeDistance = 0.6f;
         private const float CollisionProbeMargin = 0.15f;
+        // Physics.Raycast per fish per FRAME was the largest per-frame cost
+        // the mod added while swimming (180 fish at the FishParadise cap near
+        // a town). Fish barely move per frame, so probe on a strided schedule
+        // with a probe length covering the whole stride window, and skip
+        // probing entirely for far-away fish (ClampToWater still confines
+        // them to the water volume).
+        private const int ObstacleProbeFrameInterval = 5;
+        private const float ObstacleProbeMaxPlayerDistance = 60f;
         private static int collisionLayerMask = -1;
 
         private DaggerfallLoot loot;
@@ -55,6 +63,7 @@ namespace DeepWaters
         private DeepWaterColumn cachedColumn;
         private float nextWaterColumnRefreshTime;
         private bool hasCachedColumn;
+        private int obstacleProbePhase;
 
         internal void Initialize(DaggerfallLoot lootTarget, float cruiseMultiplier, float fleeMultiplier, PassiveFishSchool fishSchool, float dartHoldMin, float dartHoldMax)
         {
@@ -69,10 +78,18 @@ namespace DeepWaters
 
             lastSafePosition = transform.position;
             hasLastSafePosition = true;
+            obstacleProbePhase = Random.Range(0, ObstacleProbeFrameInterval);
             PickWanderDirection();
         }
 
         void Update()
+        {
+            DeepWaterPerf.Begin(DeepWaterPerf.Fish);
+            try { UpdateCore(); }
+            finally { DeepWaterPerf.End(DeepWaterPerf.Fish); }
+        }
+
+        private void UpdateCore()
         {
             if (loot != null && loot.Items.Count == 0)
             {
@@ -129,7 +146,9 @@ namespace DeepWaters
             }
 
             Vector3 desiredStep = swimDirection * speed * Time.deltaTime;
-            if (!TryAvoidObstacle(desiredStep))
+            bool allowObstacleProbe = fromPlayer.sqrMagnitude <
+                ObstacleProbeMaxPlayerDistance * ObstacleProbeMaxPlayerDistance;
+            if (!TryAvoidObstacle(desiredStep, allowObstacleProbe))
                 transform.position += desiredStep;
 
             ClampToWater();
@@ -141,9 +160,12 @@ namespace DeepWaters
         // surface normal so subsequent frames steer the fish along the wall
         // rather than into it. Returns true when an obstacle was found (so the
         // caller skips the position update).
-        private bool TryAvoidObstacle(Vector3 desiredStep)
+        private bool TryAvoidObstacle(Vector3 desiredStep, bool allowProbe)
         {
-            if (desiredStep.sqrMagnitude < 1e-6f)
+            if (!allowProbe || desiredStep.sqrMagnitude < 1e-6f)
+                return false;
+
+            if (((Time.frameCount + obstacleProbePhase) % ObstacleProbeFrameInterval) != 0)
                 return false;
 
             if (collisionLayerMask < 0)
@@ -154,7 +176,8 @@ namespace DeepWaters
                     collisionLayerMask |= (1 << ignoreRaycast);
             }
 
-            float distance = Mathf.Max(CollisionProbeDistance, desiredStep.magnitude + CollisionProbeMargin);
+            float distance = Mathf.Max(CollisionProbeDistance,
+                desiredStep.magnitude * ObstacleProbeFrameInterval + CollisionProbeMargin);
             RaycastHit hit;
             if (!Physics.Raycast(transform.position, swimDirection, out hit, distance,
                                  collisionLayerMask, QueryTriggerInteraction.Ignore))

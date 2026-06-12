@@ -27,6 +27,7 @@ Shader "DeepWaters/TilemapClipWater" {
 		_MaxIndex("Max Tileset Index", Int) = 255
 		_AtlasSize("Atlas Size (in pixels)", Float) = 2048.0
 		_GutterSize("Gutter Size (in pixels)", Float) = 32.0
+		_DeepWatersCarveMask("DeepWaters Carve Mask", 2D) = "white" {}
 	}
 	SubShader {
 		Tags { "RenderType"="Opaque" }
@@ -40,6 +41,7 @@ Shader "DeepWaters/TilemapClipWater" {
 		sampler2D _TileAtlasTex;
 		sampler2D _TilemapTex;
 		sampler2D _BumpMap;
+		sampler2D _DeepWatersCarveMask;
 		uint _TilesetDim;
 		uint _TilemapDim;
 		uint _MaxIndex;
@@ -60,11 +62,14 @@ Shader "DeepWaters/TilemapClipWater" {
 			uint index = tex2D(_TilemapTex, floor(unwrappedUV) / _TilemapDim).a * _MaxIndex + 0.5;
 
 			// DeepWaters: discard pure-water texels (record 0 in the low 6
-			// bits; rotation variants live in the high bits). Shore transition
-			// tiles keep rendering, so the beach fringe stays solid while the
-			// painted sea-level water cap disappears, revealing the carved
-			// seafloor below.
-			clip((index & 0x3F) == 0 ? -1.0 : 1.0);
+			// bits; rotation variants live in the high bits) — but ONLY where
+			// the seafloor carve actually dug (carve mask = 1). Where the
+			// carve rejected, the painted vanilla water must stay; clipping it
+			// there opened a hole onto nothing, which the water film rendered
+			// as an opaque "fake deep water" patch. Shore transition tiles
+			// keep rendering, so the beach fringe stays solid.
+			if ((index & 0x3F) == 0 && tex2D(_DeepWatersCarveMask, IN.uv_MainTex).r > 0.5)
+				clip(-1.0);
 
 			uint xpos = index % _TilesetDim;
 			uint ypos = index / _TilesetDim;

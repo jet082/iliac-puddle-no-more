@@ -411,6 +411,13 @@ namespace DeepWaters
 
             void Update()
             {
+                DeepWaterPerf.Begin(DeepWaterPerf.EnemyPilot);
+                try { UpdateCore(); }
+                finally { DeepWaterPerf.End(DeepWaterPerf.EnemyPilot); }
+            }
+
+            private void UpdateCore()
+            {
                 if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
                     return;
 

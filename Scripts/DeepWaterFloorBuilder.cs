@@ -224,11 +224,13 @@ namespace DeepWaters
                 if (DiagnosticLogging)
                     Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY +
                               ") ocean-connected but no carved cells (entirely buffered shoreline?) — no seafloor mesh");
+                DeepWaterTerrainCapRenderer.SetCarveMask(dfTerrain, null);
                 RemoveFloor(dfTerrain);
                 return;
             }
 
             BuildOrRefreshFloor(dfTerrain, terrainData, tile, holes);
+            DeepWaterTerrainCapRenderer.SetCarveMask(dfTerrain, holes);
             UpdateTerrainCapRenderer(dfTerrain);
             // Fire the OnFloorRefreshed signal so UnderwaterDecorations
             // (and any other subscribers) can queue per-tile work.

@@ -186,6 +186,20 @@ namespace DeepWaters
             if (!DeepWaterRuntime.CanRunLightRuntimeWork)
                 return;
 
+            // A recycled tile still carries the PREVIOUS map pixel's
+            // decorations (local positions for the old seafloor — they show
+            // as kelp hanging in the sky until the rebuild queue reaches the
+            // tile, or indefinitely if the tile sits outside the populate
+            // radius below). Purge stale groups synchronously, BEFORE the
+            // radius early-out; the throttled queue only rebuilds.
+            var staleMarker = sender.GetComponent<DecorationMarker>();
+            if (staleMarker != null &&
+                (staleMarker.MapPixelX != sender.MapPixelX || staleMarker.MapPixelY != sender.MapPixelY))
+            {
+                RemoveDecoration(sender);
+                ClearDecorationMarker(sender);
+            }
+
             var pgps = GameManager.Instance?.PlayerGPS;
             if (pgps != null)
             {

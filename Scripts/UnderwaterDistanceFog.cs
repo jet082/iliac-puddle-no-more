@@ -27,6 +27,14 @@ namespace DeepWaters
 
         void LateUpdate()
         {
+            DeepWaterPerf.Begin(DeepWaterPerf.Fog);
+            try { LateUpdateCore(); }
+            finally { DeepWaterPerf.End(DeepWaterPerf.Fog); }
+            DeepWaterPerf.Tick();
+        }
+
+        private void LateUpdateCore()
+        {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.MainCamera == null)
             {
@@ -40,6 +48,8 @@ namespace DeepWaters
 
             float oceanSurfaceY;
             bool underwaterPresentation = TryGetUnderwaterPresentation(gameManager, gameManager.MainCamera, out oceanSurfaceY);
+            if (underwaterPresentation)
+                DeepWaterPerf.NoteUnderwater();
             SetUnderwaterShaderGlobals(underwaterPresentation, oceanSurfaceY);
 
             if (ShouldRequireDepthTexture(gameManager))

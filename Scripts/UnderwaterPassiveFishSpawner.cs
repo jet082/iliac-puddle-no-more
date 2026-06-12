@@ -28,6 +28,11 @@ namespace DeepWaters
         private const float ShoreFishPulseMultiplier = 0.5f;
 
         private static readonly TransientObjectTracker liveFish = new TransientObjectTracker();
+
+        internal static int LiveFishCount
+        {
+            get { return liveFish.Count; }
+        }
         private static GameObject iconBridgeObject;
         private static float nextAllowedPulseTime;
         private static bool installed;

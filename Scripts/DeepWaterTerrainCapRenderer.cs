@@ -22,7 +22,16 @@ namespace DeepWaters
             public bool Hidden;
             public Shader OriginalShader;
             public bool WaterTexelsClipped;
+            public Texture2D CarveMask;
+
+            void OnDestroy()
+            {
+                if (CarveMask != null)
+                    Destroy(CarveMask);
+            }
         }
+
+        private static readonly int CarveMaskProperty = Shader.PropertyToID("_DeepWatersCarveMask");
 
         private static Shader tilemapTextureArrayClipShader;
         private static Shader tilemapClipShader;
@@ -122,6 +131,86 @@ namespace DeepWaters
             marker.OriginalShader = material.shader;
             material.shader = clipShader;
             marker.WaterTexelsClipped = true;
+            PushCarveMask(material, marker);
+        }
+
+        /// <summary>
+        /// Per-tile carve mask consumed by the clip shaders: texel=1 where the
+        /// seafloor carve actually dug. Water texels are only discarded there.
+        /// Where the carve was rejected (no swimmable volume below — bake/
+        /// heightmap mismatch regions, buffered shore), the painted vanilla
+        /// water must STAY: clipping it opened a hole onto nothing, which the
+        /// water film rendered as an opaque "fake deep water" patch with a
+        /// hard zigzag seam against the real carved shallows.
+        /// Convention matches DFU terrain holes: holes[z,x] == false IS a hole
+        /// (carved); rows map to terrain Z like the heightmap.
+        /// </summary>
+        public static void SetCarveMask(DaggerfallTerrain dfTerrain, bool[,] holes)
+        {
+            if (dfTerrain == null)
+                return;
+
+            HiddenCapMarker marker = dfTerrain.GetComponent<HiddenCapMarker>();
+            if (holes == null)
+            {
+                if (marker != null && marker.CarveMask != null)
+                {
+                    Object.Destroy(marker.CarveMask);
+                    marker.CarveMask = null;
+                    PushCarveMaskToTile(dfTerrain, marker);
+                }
+                return;
+            }
+
+            if (marker == null)
+                marker = dfTerrain.gameObject.AddComponent<HiddenCapMarker>();
+
+            int rows = holes.GetLength(0);
+            int cols = holes.GetLength(1);
+            Texture2D mask = marker.CarveMask;
+            if (mask == null || mask.width != cols || mask.height != rows)
+            {
+                if (mask != null)
+                    Object.Destroy(mask);
+                mask = new Texture2D(cols, rows, TextureFormat.RGBA32, false, true)
+                {
+                    name = "DeepWaters_CarveMask",
+                    filterMode = FilterMode.Point,
+                    wrapMode = TextureWrapMode.Clamp,
+                };
+                marker.CarveMask = mask;
+            }
+
+            var pixels = new Color32[rows * cols];
+            for (int z = 0; z < rows; z++)
+            {
+                for (int x = 0; x < cols; x++)
+                {
+                    if (!holes[z, x])
+                        pixels[z * cols + x] = new Color32(255, 255, 255, 255);
+                }
+            }
+
+            mask.SetPixels32(pixels);
+            mask.Apply(false, false);
+            PushCarveMaskToTile(dfTerrain, marker);
+        }
+
+        private static void PushCarveMaskToTile(DaggerfallTerrain dfTerrain, HiddenCapMarker marker)
+        {
+            if (marker == null || !marker.WaterTexelsClipped)
+                return;
+
+            Terrain terrain = dfTerrain.GetComponent<Terrain>();
+            Material material = terrain != null ? terrain.materialTemplate : null;
+            if (material != null)
+                PushCarveMask(material, marker);
+        }
+
+        private static void PushCarveMask(Material material, HiddenCapMarker marker)
+        {
+            material.SetTexture(CarveMaskProperty,
+                marker.CarveMask != null ? (Texture)marker.CarveMask : Texture2D.whiteTexture);
         }
 
         private static Shader ResolveClipShader(string currentShaderName)

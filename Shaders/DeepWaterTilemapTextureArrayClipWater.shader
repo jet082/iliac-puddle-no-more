@@ -27,6 +27,7 @@ Shader "DeepWaters/TilemapTextureArrayClipWater" {
         _TilemapTex("Tilemap (R)", 2D) = "red" {}
         _TilemapDim("Tilemap Dimension (in tiles)", Int) = 128
         _MaxIndex("Max Tileset Index", Int) = 255
+        _DeepWatersCarveMask("DeepWaters Carve Mask", 2D) = "white" {}
     }
     SubShader {
         Tags { "RenderType"="Opaque" }
@@ -54,6 +55,7 @@ Shader "DeepWaters/TilemapTextureArrayClipWater" {
         #endif
 
         sampler2D _TilemapTex;
+        sampler2D _DeepWatersCarveMask;
         float4 _TileTexArr_TexelSize;
         uint _MaxIndex;
         uint _TilemapDim;
@@ -98,11 +100,15 @@ Shader "DeepWaters/TilemapTextureArrayClipWater" {
             uint tileIndex = tileData >> 2; // compute correct texture array index from data
             uint tileTransformation = tileData & 0x3;
 
-            // DeepWaters: discard pure-water texels (tile record 0). Shore
-            // transition tiles keep rendering, so the beach fringe stays solid
-            // while the painted sea-level water cap disappears, revealing the
-            // carved seafloor below.
-            clip(tileIndex == 0 ? -1.0 : 1.0);
+            // DeepWaters: discard pure-water texels (tile record 0) — but
+            // ONLY where the seafloor carve actually dug (carve mask = 1).
+            // Where the carve rejected, the painted vanilla water must stay;
+            // clipping it there opened a hole onto nothing, which the water
+            // film rendered as an opaque "fake deep water" patch. Shore
+            // transition tiles keep rendering, so the beach fringe stays
+            // solid.
+            if (tileIndex == 0 && tex2D(_DeepWatersCarveMask, IN.uv_MainTex).r > 0.5)
+                clip(-1.0);
 
             // Offset to fragment position inside tile
             float2 tileUV = frac(unwrappedUV);

@@ -58,11 +58,22 @@ namespace DeepWaters
         private const float OutdoorRenderFogDensityFallbackMax = 0.0012f;
         private const float OutdoorRenderFogDensityCeiling = 0.030f;
 
-        // Shore detection.
+        // Shore transition. ONE continuous authority: the CARVED seafloor
+        // depth below the waterline at the player's exact position (oceanY −
+        // TryGetCarvedSeafloorWorldY, mesh-interpolated — continuous along
+        // the shore approach thanks to the bathymetry's 0.9→2.7m shore-entry
+        // ramp). The vanilla heightmap must NOT be used for this: DFU's
+        // terrain samplers flatten ocean pixels to roughly ocean level, so a
+        // vanilla "depth below waterline" reads ~0 over the entire sea and
+        // the gate would never open (the can't-dive bug). Where no carved
+        // floor exists (beaches, wading strips the carve rejected) there is
+        // no swimmable volume and the colliders stay solid; once the carved
+        // water passes the engage depth the gate opens and the carved volume
+        // catches the player. Hysteresis so the boundary can't flap; both
+        // thresholds sit several meters inside the carve edge on the ramp.
         private const float ShoreExitGraceSeconds = 0.85f;
-        private const float ShoreGroundProbeHeight = 1.25f;
-        private const float ShoreGroundProbeDistance = 3.25f;
-        private const float ShoreGroundOceanMargin = 0.50f;
+        private const float GateEngageWaterDepth = 1.35f;
+        private const float GateReleaseWaterDepth = 1.05f;
 
         // Player water-contact probing (TryGetPlayerWaterColumn).
         private const float WaterContactMinimumDepth = 0.15f;
@@ -76,9 +87,6 @@ namespace DeepWaters
         // a surface floater can't sit exactly on the threshold.
         private const float ColliderGateOpenFeetMargin = 0.25f;
         private const float ColliderGateCloseFeetMargin = 1.00f;
-        private const float ColliderGateShoreProbeRadiusMin = 2.50f;
-        private const float ColliderGateShoreProbeRadiusMax = 4.00f;
-        private const float ColliderGateShoreTerrainMargin = 0.35f;
         // The gate is a DISTANCE RING: every loaded ocean-water tile whose
         // footprint lies within this of the submerged player is disabled.
         // Pure transform/flag math, so the set cannot collapse during the
@@ -150,6 +158,13 @@ namespace DeepWaters
         }
 
         void Update()
+        {
+            DeepWaterPerf.Begin(DeepWaterPerf.Driver);
+            try { UpdateCore(); }
+            finally { DeepWaterPerf.End(DeepWaterPerf.Driver); }
+        }
+
+        private void UpdateCore()
         {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null || !gameManager.IsPlayingGame())
@@ -226,6 +241,13 @@ namespace DeepWaters
         }
 
         void FixedUpdate()
+        {
+            DeepWaterPerf.Begin(DeepWaterPerf.DriverFixed);
+            try { FixedUpdateCore(); }
+            finally { DeepWaterPerf.End(DeepWaterPerf.DriverFixed); }
+        }
+
+        private void FixedUpdateCore()
         {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null || !gameManager.IsPlayingGame())
@@ -447,22 +469,28 @@ namespace DeepWaters
             return PlayerSwimCheckY(player.transform.position.y) < oceanSurfaceY + clearance;
         }
 
+        // The continuous wade/swim boundary (see the shore constants). Uses
+        // the same hysteresis pair as the gate so the two can never disagree.
+        // A carve miss returns false (NOT shore): on dry land the Y-based
+        // swim check is false anyway, and during map-pixel crossings (lookups
+        // starved) answering "shore" would un-forge a mid-ocean swimmer.
         private bool IsStandingOnShoreGround(float oceanSurfaceY)
         {
             if (Time.time < shoreExitGraceUntil)
                 return true;
 
-            var controller = GameManager.Instance?.PlayerController;
-            if (controller == null)
+            GameManager gameManager = GameManager.Instance;
+            GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+            if (player == null)
                 return false;
 
-            Vector3 probe = controller.transform.position + Vector3.up * ShoreGroundProbeHeight;
-            RaycastHit hit;
-            if (!Physics.Raycast(probe, Vector3.down, out hit, ShoreGroundProbeDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            Vector3 position = player.transform.position;
+            float carvedSeafloorY;
+            if (!DeepWaterWorld.TryGetCarvedSeafloorWorldY(position.x, position.z, out carvedSeafloorY))
                 return false;
 
-            return hit.point.y >= oceanSurfaceY - ShoreGroundOceanMargin &&
-                   OutdoorShoreExitAssist.IsValidShoreStandingHit(hit, oceanSurfaceY);
+            float requiredDepth = waterColliderGateActive ? GateReleaseWaterDepth : GateEngageWaterDepth;
+            return oceanSurfaceY - carvedSeafloorY < requiredDepth;
         }
 
         private void MarkShoreExit()
@@ -842,6 +870,13 @@ namespace DeepWaters
         /// </summary>
         private void UpdateWaterTerrainColliderGate(float oceanSurfaceY)
         {
+            DeepWaterPerf.Begin(DeepWaterPerf.Gate);
+            try { UpdateWaterTerrainColliderGateCore(oceanSurfaceY); }
+            finally { DeepWaterPerf.End(DeepWaterPerf.Gate); }
+        }
+
+        private void UpdateWaterTerrainColliderGateCore(float oceanSurfaceY)
+        {
             GameManager gameManager = GameManager.Instance;
             GameObject player = gameManager != null ? gameManager.PlayerObject : null;
             if (player == null || gameManager.PlayerEnterExit == null || gameManager.PlayerEnterExit.IsPlayerInside)
@@ -867,14 +902,12 @@ namespace DeepWaters
             if (!DeepWaterTerrainLookup.TryGetByWorldPosition(position.x, position.z, out playerDfTerrain, out playerTerrain))
                 return;
 
-            // Swimmable-water check: only open the gate where a carved
-            // seafloor quad actually exists beneath the player (real water
-            // VOLUME, depth >= the swimmable minimum). Everywhere else —
-            // beaches, shore fringes the carve rejected — the terrain stays
-            // solid and is plain walkable/wading ground ("swimming in land"
-            // guard). A transient failure here restores colliders, but the
-            // padded eject guard holds anything a genuinely submerged player
-            // is beneath.
+            // Shore rule + swimmable-volume check in one: a carved seafloor
+            // quad must exist beneath the player (real water volume — its
+            // absence means beach/wading ground) and must be deeper than the
+            // engage depth (hysteresis) for the heightfield to open. A
+            // transient carve miss restores colliders, but the padded eject
+            // guard holds anything a genuinely submerged player is beneath.
             float carvedSeafloorY;
             if (!DeepWaterWorld.TryGetCarvedSeafloorWorldY(position.x, position.z, out carvedSeafloorY))
             {
@@ -882,7 +915,8 @@ namespace DeepWaters
                 return;
             }
 
-            if (IsNearColliderGateShore(position, oceanSurfaceY))
+            float requiredDepth = waterColliderGateActive ? GateReleaseWaterDepth : GateEngageWaterDepth;
+            if (oceanSurfaceY - carvedSeafloorY < requiredDepth)
             {
                 RestoreWaterTerrainCollider();
                 return;
@@ -941,129 +975,6 @@ namespace DeepWaters
         private float CurrentGateFeetMargin()
         {
             return waterColliderGateActive ? ColliderGateCloseFeetMargin : ColliderGateOpenFeetMargin;
-        }
-
-        private static float GetGateProbeRadius(float min, float max, float radiusScale)
-        {
-            GameObject player = GameManager.Instance != null ? GameManager.Instance.PlayerObject : null;
-            CharacterController controller = player != null ? player.GetComponent<CharacterController>() : null;
-            if (controller == null)
-                return min;
-
-            return Mathf.Clamp(controller.radius * radiusScale, min, max);
-        }
-
-        private static bool IsNearColliderGateShore(Vector3 position, float oceanSurfaceY)
-        {
-            if (IsSolidShoreForColliderGate(position.x, position.z, oceanSurfaceY))
-                return true;
-
-            float radius = GetGateProbeRadius(ColliderGateShoreProbeRadiusMin, ColliderGateShoreProbeRadiusMax, 5f);
-            if (IsSolidShoreForColliderGate(position.x + radius, position.z, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x - radius, position.z, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x, position.z + radius, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x, position.z - radius, oceanSurfaceY))
-            {
-                return true;
-            }
-
-            float diagonal = radius * 0.70710678f;
-            if (IsSolidShoreForColliderGate(position.x + diagonal, position.z + diagonal, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x + diagonal, position.z - diagonal, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x - diagonal, position.z + diagonal, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x - diagonal, position.z - diagonal, oceanSurfaceY))
-            {
-                return true;
-            }
-
-            Camera camera = GameManager.Instance != null ? GameManager.Instance.MainCamera : null;
-            if (camera == null)
-                return false;
-
-            Vector3 forward = camera.transform.forward;
-            forward.y = 0f;
-            if (forward.sqrMagnitude < 0.001f)
-                return false;
-
-            forward.Normalize();
-            return IsSolidShoreForColliderGate(
-                position.x + forward.x * radius,
-                position.z + forward.z * radius,
-                oceanSurfaceY);
-        }
-
-        private static bool IsSolidShoreForColliderGate(float worldX, float worldZ, float oceanSurfaceY)
-        {
-            DaggerfallTerrain dfTerrain;
-            Terrain terrain;
-            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(worldX, worldZ, out dfTerrain, out terrain) ||
-                dfTerrain == null ||
-                terrain == null ||
-                terrain.terrainData == null ||
-                dfTerrain.MapData.heightmapSamples == null)
-            {
-                return false;
-            }
-
-            float tileWorldSize = DeepWaterWorld.TileWorldSize;
-            if (tileWorldSize <= 0f)
-                return false;
-
-            Vector3 origin = dfTerrain.transform.position;
-            float fracX = (worldX - origin.x) / tileWorldSize;
-            float fracZ = (worldZ - origin.z) / tileWorldSize;
-            if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
-                return false;
-
-            float terrainWorldY;
-            if (!TrySampleVanillaTerrainWorldY(dfTerrain, terrain, fracX, fracZ, out terrainWorldY))
-                return false;
-
-            if (terrainWorldY < oceanSurfaceY - ColliderGateShoreTerrainMargin)
-                return false;
-
-            bool waterLike =
-                DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ||
-                (DeepWaterDistanceBake.HasFineWaterMask &&
-                 DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ));
-
-            return !waterLike || terrainWorldY > oceanSurfaceY + ColliderGateShoreTerrainMargin;
-        }
-
-        private static bool TrySampleVanillaTerrainWorldY(
-            DaggerfallTerrain dfTerrain,
-            Terrain terrain,
-            float fracX,
-            float fracZ,
-            out float worldY)
-        {
-            worldY = 0f;
-
-            float[,] heights = dfTerrain.MapData.heightmapSamples;
-            int rows = heights.GetLength(0);
-            int cols = heights.GetLength(1);
-            if (rows <= 0 || cols <= 0)
-                return false;
-
-            float sampleX = Mathf.Clamp01(fracX) * (cols - 1);
-            float sampleZ = Mathf.Clamp01(fracZ) * (rows - 1);
-            int x0 = Mathf.Clamp(Mathf.FloorToInt(sampleX), 0, cols - 1);
-            int z0 = Mathf.Clamp(Mathf.FloorToInt(sampleZ), 0, rows - 1);
-            int x1 = Mathf.Min(x0 + 1, cols - 1);
-            int z1 = Mathf.Min(z0 + 1, rows - 1);
-            float tx = sampleX - x0;
-            float tz = sampleZ - z0;
-
-            float h00 = heights[z0, x0];
-            float h10 = heights[z0, x1];
-            float h01 = heights[z1, x0];
-            float h11 = heights[z1, x1];
-            float h0 = Mathf.Lerp(h00, h10, tx);
-            float h1 = Mathf.Lerp(h01, h11, tx);
-            float normalizedHeight = Mathf.Lerp(h0, h1, tz);
-
-            worldY = terrain.transform.position.y + normalizedHeight * terrain.terrainData.size.y;
-            return true;
         }
 
         private void DisableWaterTerrainCollider(TerrainCollider collider)
@@ -1193,7 +1104,12 @@ namespace DeepWaters
     public class OutdoorSwimDriverAfter : MonoBehaviour
     {
         internal OutdoorSwimDriver owner;
-        void Update() { owner?.PostPhaseRestore(); }
+        void Update()
+        {
+            DeepWaterPerf.Begin(DeepWaterPerf.After);
+            try { owner?.PostPhaseRestore(); }
+            finally { DeepWaterPerf.End(DeepWaterPerf.After); }
+        }
     }
 
     /// <summary>
@@ -1247,6 +1163,13 @@ namespace DeepWaters
         }
 
         void Update()
+        {
+            DeepWaterPerf.Begin(DeepWaterPerf.Mover);
+            try { UpdateCore(); }
+            finally { DeepWaterPerf.End(DeepWaterPerf.Mover); }
+        }
+
+        private void UpdateCore()
         {
             if (!IsOutdoorSwimming() || DeepWaterRuntime.IsLoadGraceActive)
             {

@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -11,56 +10,20 @@ using UnityEngine.Rendering;
 namespace DeepWaters
 {
     /// <summary>
-    /// Keeps third-party wave presentation consistent around deep water. DFU's exterior
-    /// IndirectLight and PlayerTorch are player-following point lights with no
-    /// shadows, so they can wash out underwater contrast in a perfect local
-    /// radius. Third-party wave renderers are surface effects; from above they
-    /// can hide Deep Waters' transparent surface, and from below they can appear
-    /// as opaque dither bands, so known wave meshes are hidden while the player
-    /// is in a deep-water outdoor area.
+    /// Keeps underwater lighting consistent. DFU's exterior IndirectLight and
+    /// PlayerTorch are player-following point lights with no shadows, so they
+    /// can wash out underwater contrast in a perfect local radius; both are
+    /// suppressed while the player is in a deep-water outdoor area.
     /// </summary>
     [DefaultExecutionOrder(31000)]
     public class UnderwaterWaveShadowFix : MonoBehaviour
     {
-        private const string ComeSailAwayWaveObjectName = "WaveObject";
-        private const string ComeSailAwayWaveShaderName = "Daggerfall/Dither/Wave";
-        private const string ComeSailAwayBillboardWaterShaderName = "Daggerfall/BillboardWaterMasked";
-        private const string AnimatedWaterShaderName = "Daggerfall/Animated";
-        private const string AnimatedWaterMaterialName = "PWater";
-        private const float ScanInterval = 1.0f;
-        private const float MinimumWorldVerticalBounds = 256f;
-        private const float SurfaceSuppressMinimumDepth = 0.5f;
-        private const float SurfaceSuppressNearbyMinDistance = 4f;
-        private const float SurfaceSuppressNearbyMaxDistance = 64f;
-        private const float SurfaceSuppressTransparentTopMaxDistance = 256f;
-        private const float TransparentTopExternalSurfaceAlpha = 0.05f;
-        private const int SurfaceSuppressNearbyDirections = 8;
-
-        private MeshRenderer[] cachedRenderers = new MeshRenderer[0];
-        private float nextScanTime;
         private Light suppressedIndirectLight;
         private float restoreIndirectIntensity;
         private bool restoreIndirectEnabled;
         private bool suppressingIndirectLight;
         private GameObject suppressedPlayerTorch;
         private bool suppressingPlayerTorch;
-        private readonly Dictionary<MeshRenderer, WaveRendererShadowState> waveRendererStates =
-            new Dictionary<MeshRenderer, WaveRendererShadowState>();
-        private readonly HashSet<int> loggedSuppressedRendererIds = new HashSet<int>();
-
-        private struct WaveRendererShadowState
-        {
-            public UnityEngine.Rendering.ShadowCastingMode ShadowCastingMode;
-            public bool ReceiveShadows;
-            public bool Enabled;
-
-            public WaveRendererShadowState(UnityEngine.Rendering.ShadowCastingMode shadowCastingMode, bool receiveShadows, bool enabled)
-            {
-                ShadowCastingMode = shadowCastingMode;
-                ReceiveShadows = receiveShadows;
-                Enabled = enabled;
-            }
-        }
 
         void OnDisable()
         {
@@ -69,32 +32,14 @@ namespace DeepWaters
 
         void LateUpdate()
         {
-            bool shouldFixUnderwaterLighting = ShouldFixUnderwaterLighting();
-            bool shouldSuppressExternalSurfaces = shouldFixUnderwaterLighting || ShouldSuppressExternalSurfaceRenderers();
-
-            if (!shouldFixUnderwaterLighting)
+            if (!ShouldFixUnderwaterLighting())
             {
-                RestoreSuppressedLightsOnly();
-            }
-            else
-            {
-                SuppressPlayerIndirectLight();
-                SuppressPlayerTorch();
-            }
-
-            if (!shouldSuppressExternalSurfaces)
-            {
-                RestoreWaveRendererShadows();
+                RestoreSuppressedLights();
                 return;
             }
 
-            if (Time.unscaledTime >= nextScanTime)
-            {
-                RefreshWaveRenderers();
-                nextScanTime = Time.unscaledTime + ScanInterval;
-            }
-
-            PatchKnownWaveMeshes();
+            SuppressPlayerIndirectLight();
+            SuppressPlayerTorch();
         }
 
         private void SuppressPlayerIndirectLight()
@@ -147,12 +92,6 @@ namespace DeepWaters
 
         private void RestoreSuppressedLights()
         {
-            RestoreSuppressedLightsOnly();
-            RestoreWaveRendererShadows();
-        }
-
-        private void RestoreSuppressedLightsOnly()
-        {
             RestoreIndirectLight();
             RestorePlayerTorch();
         }
@@ -184,63 +123,6 @@ namespace DeepWaters
             suppressingPlayerTorch = false;
         }
 
-        private void RestoreWaveRendererShadows()
-        {
-            foreach (KeyValuePair<MeshRenderer, WaveRendererShadowState> pair in waveRendererStates)
-            {
-                MeshRenderer renderer = pair.Key;
-                if (renderer == null)
-                    continue;
-
-                renderer.shadowCastingMode = pair.Value.ShadowCastingMode;
-                renderer.receiveShadows = pair.Value.ReceiveShadows;
-                renderer.enabled = pair.Value.Enabled;
-            }
-
-            waveRendererStates.Clear();
-        }
-
-        private void RefreshWaveRenderers()
-        {
-            var waveRenderers = new List<MeshRenderer>();
-            GameObject waveObject = GameObject.Find(ComeSailAwayWaveObjectName);
-            if (waveObject != null)
-            {
-                MeshRenderer[] renderers = waveObject.GetComponentsInChildren<MeshRenderer>();
-                AddWaveRenderers(renderers, waveRenderers);
-            }
-
-            AddWaveRenderers(FindObjectsOfType<MeshRenderer>(), waveRenderers);
-
-            RestoreNoLongerWaveRenderers(waveRenderers);
-            cachedRenderers = waveRenderers.ToArray();
-        }
-
-        private void RestoreNoLongerWaveRenderers(List<MeshRenderer> activeWaveRenderers)
-        {
-            var staleRenderers = new List<MeshRenderer>();
-            foreach (KeyValuePair<MeshRenderer, WaveRendererShadowState> pair in waveRendererStates)
-            {
-                MeshRenderer renderer = pair.Key;
-                if (renderer == null || !activeWaveRenderers.Contains(renderer))
-                    staleRenderers.Add(renderer);
-            }
-
-            for (int i = 0; i < staleRenderers.Count; i++)
-            {
-                MeshRenderer renderer = staleRenderers[i];
-                WaveRendererShadowState state;
-                if (renderer != null && waveRendererStates.TryGetValue(renderer, out state))
-                {
-                    renderer.shadowCastingMode = state.ShadowCastingMode;
-                    renderer.receiveShadows = state.ReceiveShadows;
-                    renderer.enabled = state.Enabled;
-                }
-
-                waveRendererStates.Remove(renderer);
-            }
-        }
-
         private static bool ShouldFixUnderwaterLighting()
         {
             GameManager gameManager = GameManager.Instance;
@@ -256,250 +138,6 @@ namespace DeepWaters
             float oceanSurfaceY;
             return UnderwaterDistanceFog.TryGetUnderwaterPresentation(gameManager, gameManager.MainCamera, out oceanSurfaceY);
         }
-
-        private static bool ShouldSuppressExternalSurfaceRenderers()
-        {
-            GameManager gameManager = GameManager.Instance;
-            if (DeepWaters.Instance == null ||
-                !DeepWaters.Instance.SpawnWaterSurfaces ||
-                gameManager == null ||
-                !gameManager.IsPlayingGame() ||
-                gameManager.PlayerEnterExit == null ||
-                gameManager.PlayerEnterExit.IsPlayerInside)
-            {
-                return false;
-            }
-
-            Transform playerTransform = gameManager.PlayerObject != null
-                ? gameManager.PlayerObject.transform
-                : null;
-            if (playerTransform != null && IsNearVisibleDeepWaterSurface(playerTransform.position))
-                return true;
-
-            Camera camera = gameManager.MainCamera;
-            return camera != null && IsNearVisibleDeepWaterSurface(camera.transform.position);
-        }
-
-        private static bool IsNearVisibleDeepWaterSurface(Vector3 worldPosition)
-        {
-            DeepWaterColumn column;
-            if (DeepWaterWorld.TryGetWaterColumn(worldPosition.x, worldPosition.z, out column) &&
-                column.Depth > SurfaceSuppressMinimumDepth)
-            {
-                return true;
-            }
-
-            float nearbyDepth;
-            float maxDistance =
-                DeepWaters.Instance != null &&
-                DeepWaters.Instance.WaterSurfaceTopAlpha <= TransparentTopExternalSurfaceAlpha
-                    ? SurfaceSuppressTransparentTopMaxDistance
-                    : SurfaceSuppressNearbyMaxDistance;
-            return DeepWaterWorld.HasNearbyWaterColumn(
-                worldPosition,
-                SurfaceSuppressNearbyMinDistance,
-                maxDistance,
-                SurfaceSuppressNearbyDirections,
-                SurfaceSuppressMinimumDepth,
-                out nearbyDepth);
-        }
-
-        private void PatchKnownWaveMeshes()
-        {
-            for (int i = 0; i < cachedRenderers.Length; i++)
-            {
-                MeshRenderer renderer = cachedRenderers[i];
-                if (renderer == null)
-                    continue;
-
-                if (!waveRendererStates.ContainsKey(renderer))
-                {
-                    waveRendererStates.Add(
-                        renderer,
-                        new WaveRendererShadowState(renderer.shadowCastingMode, renderer.receiveShadows, renderer.enabled));
-                }
-
-                DeepWaterRendering.DisableShadows(renderer);
-                renderer.enabled = false;
-                LogSuppressedSurfaceRenderer(renderer);
-
-                MeshFilter filter = renderer.GetComponent<MeshFilter>();
-                if (filter == null || filter.sharedMesh == null || filter.sharedMesh.vertexCount == 0)
-                    continue;
-
-                ExpandWaveMeshBounds(filter);
-            }
-        }
-
-        private static void AddWaveRenderers(MeshRenderer[] renderers, List<MeshRenderer> waveRenderers)
-        {
-            if (renderers == null)
-                return;
-
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                MeshRenderer renderer = renderers[i];
-                if (renderer != null &&
-                    IsWaveRenderer(renderer) &&
-                    !waveRenderers.Contains(renderer))
-                {
-                    waveRenderers.Add(renderer);
-                }
-            }
-        }
-
-        private static bool IsWaveRenderer(MeshRenderer renderer)
-        {
-            if (IsDeepWatersOwnRenderer(renderer))
-                return false;
-
-            if (renderer.gameObject != null && renderer.gameObject.name == ComeSailAwayWaveObjectName)
-                return true;
-
-            Material[] materials = renderer.sharedMaterials;
-            for (int i = 0; i < materials.Length; i++)
-            {
-                Material material = materials[i];
-                if (material == null)
-                    continue;
-
-                if (IsKnownExternalWaterMaterial(material.name))
-                    return true;
-
-                if (material.shader != null && IsKnownExternalWaterShader(material.shader.name))
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static bool IsDeepWatersOwnRenderer(MeshRenderer renderer)
-        {
-            return renderer != null &&
-                   (renderer.GetComponentInParent<DeepWatersWaterSurface>() != null ||
-                    renderer.GetComponentInParent<DeepWaterFloorMesh>() != null ||
-                    IsUnderTransformNamed(renderer.transform, UnderwaterDecorationBatchFactory.GroupName) ||
-                    HasDeepWatersShader(renderer));
-        }
-
-        private static bool IsUnderTransformNamed(Transform transform, string name)
-        {
-            while (transform != null)
-            {
-                if (transform.name == name)
-                    return true;
-
-                transform = transform.parent;
-            }
-
-            return false;
-        }
-
-        private static bool HasDeepWatersShader(MeshRenderer renderer)
-        {
-            Material[] materials = renderer.sharedMaterials;
-            for (int i = 0; i < materials.Length; i++)
-            {
-                Material material = materials[i];
-                if (material != null &&
-                    material.shader != null &&
-                    material.shader.name.StartsWith("DeepWaters/", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool IsKnownExternalWaterShader(string shaderName)
-        {
-            if (string.IsNullOrEmpty(shaderName))
-                return false;
-
-            return shaderName.Equals(ComeSailAwayWaveShaderName, StringComparison.OrdinalIgnoreCase) ||
-                   shaderName.IndexOf(ComeSailAwayBillboardWaterShaderName, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   shaderName.IndexOf(AnimatedWaterShaderName, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   shaderName.IndexOf("Water", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   shaderName.IndexOf("Wave", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private static bool IsKnownExternalWaterMaterial(string materialName)
-        {
-            if (string.IsNullOrEmpty(materialName))
-                return false;
-
-            return materialName.Equals(AnimatedWaterMaterialName, StringComparison.OrdinalIgnoreCase) ||
-                   materialName.IndexOf(AnimatedWaterMaterialName + " ", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   materialName.IndexOf("CurrentMaterial", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   materialName.IndexOf("Water", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   materialName.IndexOf("Wave", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private static void ExpandWaveMeshBounds(MeshFilter filter)
-        {
-            Mesh mesh = filter.sharedMesh;
-            Bounds bounds = mesh.bounds;
-
-            float scaleY = Mathf.Abs(filter.transform.lossyScale.y);
-            if (scaleY < 0.001f)
-                scaleY = 1f;
-
-            float waterDepth = DeepWaters.Instance != null ? DeepWaters.Instance.WaterDepth : 35f;
-            float worldVerticalBounds = Mathf.Max(MinimumWorldVerticalBounds, waterDepth + 192f);
-            float localBelowSurface = worldVerticalBounds / scaleY;
-            float localAboveSurface = 32f / scaleY;
-
-            Vector3 min = bounds.min;
-            Vector3 max = bounds.max;
-            min.y = Mathf.Min(min.y, -localBelowSurface);
-            max.y = Mathf.Max(max.y, localAboveSurface);
-            bounds.SetMinMax(min, max);
-
-            mesh.bounds = bounds;
-        }
-
-        private void LogSuppressedSurfaceRenderer(MeshRenderer renderer)
-        {
-            if (renderer == null)
-                return;
-
-            int id = renderer.GetInstanceID();
-            if (!loggedSuppressedRendererIds.Add(id))
-                return;
-
-            string materialName = "none";
-            string shaderName = "none";
-            Material material = renderer.sharedMaterial;
-            if (material != null)
-            {
-                materialName = material.name;
-                shaderName = material.shader != null ? material.shader.name : "none";
-            }
-
-            Debug.Log(
-                "[DeepWaters.SurfaceSuppressor] Hiding external underwater surface renderer path='" +
-                GetTransformPath(renderer.transform) +
-                "' material='" + materialName +
-                "' shader='" + shaderName +
-                "' bounds=" + renderer.bounds);
-        }
-
-        private static string GetTransformPath(Transform transform)
-        {
-            if (transform == null)
-                return "none";
-
-            string path = transform.name;
-            Transform parent = transform.parent;
-            while (parent != null)
-            {
-                path = parent.name + "/" + path;
-                parent = parent.parent;
-            }
-
-            return path;
-        }
     }
 
     /// <summary>
@@ -513,7 +151,13 @@ namespace DeepWaters
     [DefaultExecutionOrder(30950)]
     public class CutoutDepthQueueFix : MonoBehaviour
     {
-        private const float ScanInterval = 1.0f;
+        // This scan runs whenever the player is outside, so it must not be a
+        // per-second whole-scene sweep (FindObjectsOfType plus a materials
+        // array allocation per renderer was a GC metronome in complex towns).
+        // Materials only need re-checking when new ones stream in, so a slow
+        // cadence with sliced, non-allocating processing is plenty.
+        private const float ScanInterval = 8.0f;
+        private const int ScanSliceSize = 150;
         private const string TransparentCutoutRenderType = "TransparentCutout";
 
         private static readonly string[] CutoutShaderNames =
@@ -526,14 +170,25 @@ namespace DeepWaters
 
         private readonly HashSet<int> patchedMaterialIds = new HashSet<int>();
         private float nextScanTime;
+        private MeshRenderer[] pendingRenderers;
+        private int pendingIndex;
+        private static readonly List<Material> materialScratch = new List<Material>(8);
 
         void LateUpdate()
         {
+            if (pendingRenderers != null)
+            {
+                ContinuePatchScan();
+                return;
+            }
+
             if (Time.unscaledTime < nextScanTime || !ShouldPatchCutoutQueues())
                 return;
 
             nextScanTime = Time.unscaledTime + ScanInterval;
-            PatchLoadedCutoutMaterials();
+            pendingRenderers = FindObjectsOfType<MeshRenderer>();
+            pendingIndex = 0;
+            ContinuePatchScan();
         }
 
         private static bool ShouldPatchCutoutQueues()
@@ -546,19 +201,19 @@ namespace DeepWaters
                    !gameManager.PlayerEnterExit.IsPlayerInside;
         }
 
-        private void PatchLoadedCutoutMaterials()
+        private void ContinuePatchScan()
         {
-            MeshRenderer[] renderers = FindObjectsOfType<MeshRenderer>();
-            for (int i = 0; i < renderers.Length; i++)
+            int end = Mathf.Min(pendingIndex + ScanSliceSize, pendingRenderers.Length);
+            for (; pendingIndex < end; pendingIndex++)
             {
-                MeshRenderer renderer = renderers[i];
+                MeshRenderer renderer = pendingRenderers[pendingIndex];
                 if (renderer == null)
                     continue;
 
-                Material[] materials = renderer.sharedMaterials;
-                for (int j = 0; j < materials.Length; j++)
+                renderer.GetSharedMaterials(materialScratch);
+                for (int j = 0; j < materialScratch.Count; j++)
                 {
-                    Material material = materials[j];
+                    Material material = materialScratch[j];
                     if (material == null || material.shader == null)
                         continue;
 
@@ -574,6 +229,9 @@ namespace DeepWaters
                     patchedMaterialIds.Add(materialId);
                 }
             }
+
+            if (pendingIndex >= pendingRenderers.Length)
+                pendingRenderers = null;
         }
 
         private static bool IsKnownAlphaCutoutShader(string shaderName)
@@ -591,4 +249,3 @@ namespace DeepWaters
         }
     }
 }
-
