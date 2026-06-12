@@ -12,6 +12,7 @@ namespace DeepWaters
     internal sealed class UnderwaterDecorationReplacementInfo
     {
         public bool HasReplacement;
+        public bool HasImportedAnimation;
         public Material Material;
         public Rect Rect;
         public Vector2 BatchSize;
@@ -72,6 +73,8 @@ namespace DeepWaters
                 Object.Destroy(mesh);
 
             info.HasReplacement = baseSize.x > 0f && baseSize.y > 0f;
+            info.HasImportedAnimation = summary.ImportedTextures.HasImportedTextures &&
+                                        summary.ImportedTextures.FrameCount > 1;
             info.Material = material;
             info.Rect = summary.Rect;
             info.BatchSize = new Vector2(

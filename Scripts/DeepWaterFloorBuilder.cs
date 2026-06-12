@@ -224,13 +224,11 @@ namespace DeepWaters
                 if (DiagnosticLogging)
                     Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY +
                               ") ocean-connected but no carved cells (entirely buffered shoreline?) — no seafloor mesh");
-                DeepWaterTerrainCapRenderer.SetCarveMask(dfTerrain, null);
                 RemoveFloor(dfTerrain);
                 return;
             }
 
             BuildOrRefreshFloor(dfTerrain, terrainData, tile, holes);
-            DeepWaterTerrainCapRenderer.SetCarveMask(dfTerrain, holes);
             UpdateTerrainCapRenderer(dfTerrain);
             // Fire the OnFloorRefreshed signal so UnderwaterDecorations
             // (and any other subscribers) can queue per-tile work.
@@ -337,6 +335,13 @@ namespace DeepWaters
                     bool isWater = true;
                     if (isWater && useBakeMask)
                     {
+                        // The bake's fine mask is AUTHORITATIVE — including
+                        // its deliberate shore buffer (no carve within
+                        // HoleBufferMeters of the coast, so no shore tile is
+                        // ever swimmable). A "rescue" that carved painted
+                        // pure-water cells the mask rejected bulldozed that
+                        // buffer right up to the waterline (swim-through
+                        // shores + seams) — do not override the mask.
                         isWater = DeepWaterDistanceBake.IsCarvedWater(
                             mapPixelX, mapPixelY, fracX, fracZ);
                     }

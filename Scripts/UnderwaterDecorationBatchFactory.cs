@@ -109,6 +109,7 @@ namespace DeepWaters
             {
                 UnderwaterDecorationPlacementInfo item = positions[i];
                 UnderwaterDecorationRecord record = item.ToRecord();
+
                 if (UnderwaterDecorationCatalog.UsesArchiveAnimation(record))
                 {
                     // Asset injection (DREAM etc.): route animated flats through
@@ -122,20 +123,14 @@ namespace DeepWaters
                 }
 
                 UnderwaterDecorationReplacementInfo replacementInfo;
-                if (!UnderwaterDecorationReplacementCache.TryGet(record, out replacementInfo))
+                bool hasReplacement = UnderwaterDecorationReplacementCache.TryGet(record, out replacementInfo);
+                if (!hasReplacement)
                 {
                     AddArchivePosition(archivePositions, item);
                     continue;
                 }
 
-                List<Vector3> recordPositions;
-                if (!replacementPositions.TryGetValue(record, out recordPositions))
-                {
-                    recordPositions = new List<Vector3>();
-                    replacementPositions.Add(record, recordPositions);
-                }
-
-                recordPositions.Add(item.LocalPosition);
+                AddReplacementPosition(replacementPositions, record, item.LocalPosition);
             }
 
             if (archivePositions.Count > 0)
@@ -147,6 +142,21 @@ namespace DeepWaters
                 if (UnderwaterDecorationReplacementCache.TryGet(pair.Key, out replacementInfo))
                     SpawnReplacementBatch(parent, pair.Key, pair.Value, replacementInfo);
             }
+        }
+
+        private static void AddReplacementPosition(
+            Dictionary<UnderwaterDecorationRecord, List<Vector3>> positionsByRecord,
+            UnderwaterDecorationRecord record,
+            Vector3 localPosition)
+        {
+            List<Vector3> recordPositions;
+            if (!positionsByRecord.TryGetValue(record, out recordPositions))
+            {
+                recordPositions = new List<Vector3>();
+                positionsByRecord.Add(record, recordPositions);
+            }
+
+            recordPositions.Add(localPosition);
         }
 
         private static void SpawnReplacementBatch(

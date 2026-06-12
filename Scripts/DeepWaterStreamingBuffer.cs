@@ -30,6 +30,8 @@ namespace DeepWaters
     {
         private const int ExtraTerrainRings = 1;
         private const int MaxBufferedTerrainDistance = 7;
+        private static readonly bool EnableTerrainDistanceBuffer = false;
+        private static readonly bool EnableSwimWorldPositionOverride = false;
         private const float ExitLingerSeconds = 3f;
         private const float SurfaceActivationMargin = 2f;
         private const float MinimumBufferedDepth = 1f;
@@ -73,20 +75,29 @@ namespace DeepWaters
                     return;
 
                 StreamingWorld streamingWorld = GameManager.Instance != null ? GameManager.Instance.StreamingWorld : null;
-                bool shouldBuffer = ShouldBufferStreaming(streamingWorld);
-                if (shouldBuffer)
+                if (!EnableTerrainDistanceBuffer && !EnableSwimWorldPositionOverride)
+                {
+                    RestoreOriginalDistance();
+                    swimTrackInitialized = false;
+                    return;
+                }
+
+                bool shouldTrackSwimming = ShouldTrackSwimming(streamingWorld);
+                bool shouldExpandTerrainDistance = EnableTerrainDistanceBuffer &&
+                                                   shouldTrackSwimming &&
+                                                   ShouldExpandTerrainDistance();
+                if (shouldExpandTerrainDistance)
                     keepBufferUntil = Time.realtimeSinceStartup + ExitLingerSeconds;
 
-                if (streamingWorld != null && (shouldBuffer || Time.realtimeSinceStartup < keepBufferUntil))
-                {
+                if (streamingWorld != null && (shouldExpandTerrainDistance || Time.realtimeSinceStartup < keepBufferUntil))
                     ApplyBuffer(streamingWorld);
-                    OverrideSwimWorldPosition();
-                }
                 else
-                {
-                    swimTrackInitialized = false;
                     RestoreOriginalDistance();
-                }
+
+                if (EnableSwimWorldPositionOverride && streamingWorld != null && shouldTrackSwimming)
+                    OverrideSwimWorldPosition();
+                else
+                    swimTrackInitialized = false;
             }
             catch (System.Exception ex)
             {
@@ -222,7 +233,7 @@ namespace DeepWaters
             appliedTerrainDistance = -1;
         }
 
-        private bool ShouldBufferStreaming(StreamingWorld streamingWorld)
+        private bool ShouldTrackSwimming(StreamingWorld streamingWorld)
         {
             if (DeepWaterRuntime.IsLoadGraceActive)
                 return false;
@@ -250,6 +261,13 @@ namespace DeepWaters
                 return false;
 
             return column.Depth >= MinimumBufferedDepth;
+        }
+
+        private static bool ShouldExpandTerrainDistance()
+        {
+            GameManager gameManager = GameManager.Instance;
+            PlayerGPS playerGPS = gameManager != null ? gameManager.PlayerGPS : null;
+            return playerGPS == null || !playerGPS.IsPlayerInLocationRect;
         }
     }
 }

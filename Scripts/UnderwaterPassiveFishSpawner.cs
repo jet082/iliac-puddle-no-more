@@ -19,6 +19,8 @@ namespace DeepWaters
         private const int FullFishCount = UnderwaterEnemySpawner.FullSpawnCount * 3;
         private const int NormalMaxLiveFish = 72;
         private const int FishParadiseMaxLiveFish = 180;
+        private const int LocationMaxLiveFish = 36;
+        private const int LocationFishParadiseMaxLiveFish = 72;
         private const float FishParadiseSpawnMultiplier = 4f;
         private const float FishParadisePulseIntervalMultiplier = 0.5f;
         private const float SpawnViewportMargin = 0.08f;
@@ -87,8 +89,9 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
                 return false;
 
-            liveFish.PruneByDistance(playerPos, DespawnDistance);
             int maxLiveFish = GetMaxLiveFish();
+            liveFish.PruneByDistance(playerPos, DespawnDistance);
+            liveFish.PruneToCount(playerPos, maxLiveFish);
             if (liveFish.Count >= maxLiveFish)
                 return true;
 
@@ -116,6 +119,7 @@ namespace DeepWaters
         internal static void PruneFromEncounterPulse(Vector3 playerPos)
         {
             liveFish.PruneByDistance(playerPos, DespawnDistance);
+            liveFish.PruneToCount(playerPos, GetMaxLiveFish());
         }
 
         internal static void ClearEncounterPulseObjects()
@@ -266,9 +270,20 @@ namespace DeepWaters
 
         private static int GetMaxLiveFish()
         {
-            return DeepWaters.Instance != null && DeepWaters.Instance.FishParadise
-                ? FishParadiseMaxLiveFish
-                : NormalMaxLiveFish;
+            bool fishParadise = DeepWaters.Instance != null && DeepWaters.Instance.FishParadise;
+            bool inLocation = IsPlayerInLoadedLocation();
+            if (fishParadise)
+                return inLocation ? LocationFishParadiseMaxLiveFish : FishParadiseMaxLiveFish;
+
+            return inLocation ? LocationMaxLiveFish : NormalMaxLiveFish;
+        }
+
+        private static bool IsPlayerInLoadedLocation()
+        {
+            GameManager gameManager = GameManager.Instance;
+            return gameManager != null &&
+                   gameManager.PlayerGPS != null &&
+                   gameManager.PlayerGPS.IsPlayerInLocationRect;
         }
 
         private static float GetFishParadiseMultiplier()
@@ -288,5 +303,4 @@ namespace DeepWaters
     }
 
 }
-
 

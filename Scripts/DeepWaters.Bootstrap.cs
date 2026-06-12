@@ -10,6 +10,21 @@ namespace DeepWaters
     {
         private static void InstallSubsystems(GameObject go)
         {
+            // Physics catch-up clamp. After a frame longer than
+            // Time.maximumDeltaTime, Unity runs maximumDeltaTime /
+            // fixedDeltaTime catch-up physics steps EVERY frame; at the
+            // default 0.333s cap that is ~15 steps, and in a town scene one
+            // streaming hitch locked the game below 3fps permanently — each
+            // 15-step frame exceeded the cap again (pausing "fixed" it
+            // because timeScale=0 stops physics and clears the debt). 0.1s
+            // (max ~5 steps) turns hitches into a brief slow-motion instead.
+            if (Time.maximumDeltaTime > 0.1f)
+            {
+                Debug.Log("[DeepWaters] Clamping Time.maximumDeltaTime " +
+                          Time.maximumDeltaTime.ToString("F2") + "s -> 0.10s (physics catch-up cap).");
+                Time.maximumDeltaTime = 0.1f;
+            }
+
             // === Core path ===
             // The floor builder must subscribe to OnPromoteTerrainData before
             // any tile promotes.
@@ -23,13 +38,6 @@ namespace DeepWaters
 
             // === Content and presentation ===
             WaterSurfaceManager.Install();
-            // Underwater terrain-streaming buffer: keeps a wider terrain ring
-            // loaded and forces a stream while swimming, so the seafloor/land
-            // appears as you move instead of only when you surface. Shelved
-            // during the crash hunt (expanding TerrainDistance mid-promote
-            // "matched crash timing") — but that crash was the holes-texture
-            // compression line (v0.55.24), now fixed, so it's safe to run again.
-            go.AddComponent<DeepWaterStreamingBuffer>();
             UnderwaterEnemySpawner.Install();
             UnderwaterPassiveFishSpawner.Install();
             UnderwaterEncounterPulse.Install();

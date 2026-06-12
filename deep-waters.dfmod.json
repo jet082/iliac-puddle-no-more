@@ -1,6 +1,6 @@
 {
     "ModTitle": "Iliac Puddle No More",
-    "ModVersion": "0.55.0",
+    "ModVersion": "0.56.9",
     "ModAuthor": "jet082",
     "ContactInfo": "",
     "DFUnity_Version": "1.1.1",
@@ -89,32 +89,12 @@
     ],
     "Dependencies": [
         {
-            "Name": "wilderness overhaul",
+            "Name": "world of daggerfall - terrain",
             "IsOptional": true,
             "IsPeer": false
         },
         {
-            "Name": "Wilderness Overhaul",
-            "IsOptional": true,
-            "IsPeer": false
-        },
-        {
-            "Name": "basicroads",
-            "IsOptional": true,
-            "IsPeer": false
-        },
-        {
-            "Name": "BasicRoads",
-            "IsOptional": true,
-            "IsPeer": false
-        },
-        {
-            "Name": "wod-terrain",
-            "IsOptional": true,
-            "IsPeer": false
-        },
-        {
-            "Name": "World of Daggerfall - Terrain",
+            "Name": "interesting terrains",
             "IsOptional": true,
             "IsPeer": false
         }

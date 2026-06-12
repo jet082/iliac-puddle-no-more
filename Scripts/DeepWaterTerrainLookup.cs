@@ -186,6 +186,45 @@ namespace DeepWaters
             lastHitIndex = -1;
             frameSnapshotFrame = frame;
 
+            // Streamed terrains all live as direct children of DFU's
+            // StreamingTarget, so iterating its children gives the same set as
+            // FindObjectsOfType<DaggerfallTerrain> — for tens of microseconds
+            // instead of a whole-scene object sweep. The perf probe measured
+            // the sweep at 3-6ms per frame inside a town (the scene's object
+            // count multiplies its cost), which made the swim collider gate
+            // the single most expensive thing the mod did. The activeSelf
+            // filter preserves the load-bearing semantics: tiles mid-recycle
+            // are deactivated and must not be matched.
+            GameManager gameManager = GameManager.Instance;
+            StreamingWorld streamingWorld = gameManager != null ? gameManager.StreamingWorld : null;
+            Transform streamingTarget = streamingWorld != null ? streamingWorld.StreamingTarget : null;
+            if (streamingTarget != null)
+            {
+                int childCount = streamingTarget.childCount;
+                for (int i = 0; i < childCount; i++)
+                {
+                    try
+                    {
+                        Transform child = streamingTarget.GetChild(i);
+                        if (child == null || !child.gameObject.activeInHierarchy)
+                            continue;
+
+                        DaggerfallTerrain candidate = child.GetComponent<DaggerfallTerrain>();
+                        if (candidate == null)
+                            continue;
+
+                        AddSnapshotEntry(candidate);
+                    }
+                    catch
+                    {
+                        // Destroy race mid-iteration; skip, next frame re-snaps.
+                    }
+                }
+
+                return frameSnapshot;
+            }
+
+            // Fallback (no streaming world yet): the legacy whole-scene sweep.
             DaggerfallTerrain[] terrains;
             try
             {
@@ -198,32 +237,34 @@ namespace DeepWaters
 
             for (int i = 0; i < terrains.Length; i++)
             {
-                DaggerfallTerrain candidate = terrains[i];
-                if (candidate == null)
-                    continue;
-
-                try
-                {
-                    Terrain candidateTerrain = candidate.GetComponent<Terrain>();
-                    if (candidateTerrain == null || candidateTerrain.terrainData == null)
-                        continue;
-
-                    Vector3 origin = candidate.transform.position;
-                    TerrainSnapshotEntry entry;
-                    entry.DfTerrain = candidate;
-                    entry.Terrain = candidateTerrain;
-                    entry.OriginX = origin.x;
-                    entry.OriginZ = origin.z;
-                    frameSnapshot.Add(entry);
-                }
-                catch
-                {
-                    // Race: candidate destroyed between FindObjectsOfType and
-                    // our member access. Skip it; next frame re-snaps fresh.
-                }
+                if (terrains[i] != null)
+                    AddSnapshotEntry(terrains[i]);
             }
 
             return frameSnapshot;
+        }
+
+        private static void AddSnapshotEntry(DaggerfallTerrain candidate)
+        {
+            try
+            {
+                Terrain candidateTerrain = candidate.GetComponent<Terrain>();
+                if (candidateTerrain == null || candidateTerrain.terrainData == null)
+                    return;
+
+                Vector3 origin = candidate.transform.position;
+                TerrainSnapshotEntry entry;
+                entry.DfTerrain = candidate;
+                entry.Terrain = candidateTerrain;
+                entry.OriginX = origin.x;
+                entry.OriginZ = origin.z;
+                frameSnapshot.Add(entry);
+            }
+            catch
+            {
+                // Race: candidate destroyed between enumeration and member
+                // access. Skip it; next frame re-snaps fresh.
+            }
         }
     }
 }

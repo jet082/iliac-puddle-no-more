@@ -70,6 +70,7 @@ namespace DeepWaters
             return false;
         }
 
+
         // True if ANY heightmap sample in this cell is at/below ocean level —
         // i.e. part of the cell is underwater, so the water film must cover it
         // or the waterline shows a bare band where ground dips under the

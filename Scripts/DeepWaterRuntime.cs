@@ -133,6 +133,7 @@ namespace DeepWaters
         private static void OnUpdateTerrainsEnd()
         {
             terrainUpdateEventActive = false;
+            DeepWaterTerrainLookup.Clear();
         }
 
         private static void ResolveTerrainUpdateRunningField()

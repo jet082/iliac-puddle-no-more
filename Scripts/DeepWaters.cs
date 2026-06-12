@@ -13,8 +13,8 @@ namespace DeepWaters
     /// </summary>
     public partial class DeepWaters : MonoBehaviour
     {
-        internal const string Version = "v0.56.4";
-        internal const string BuildStamp = "2026-06-11 perf-probe+carve-mask";
+        internal const string Version = "v0.56.9";
+        internal const string BuildStamp = "2026-06-12 streaming-source-fix";
 
         public static DeepWaters Instance { get; private set; }
         public static Mod Mod { get; private set; }
@@ -62,6 +62,10 @@ namespace DeepWaters
             // DefaultTerrainSampler means no terrain overhaul (Interesting
             // Terrains / WoD replace the sampler with their own type), so the
             // vanilla bake lines the carve/shore data up with vanilla coasts.
+            // Init runs in mod LOAD ORDER, so this check only sees an
+            // overhaul's sampler if that mod initialized first — the
+            // dfmod.json declares the terrain mods as optional load-before
+            // dependencies so the mod manager keeps them above us.
             string assetName = DeepWaterDistanceBake.BakeAssetName;
             bool vanillaTerrain = DaggerfallUnity.Instance != null &&
                                   DaggerfallUnity.Instance.TerrainSampler is DefaultTerrainSampler;
