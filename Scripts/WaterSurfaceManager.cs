@@ -21,7 +21,7 @@ namespace DeepWaters
         private const string TopSurfaceChildName = "DeepWaters_Surface_Top";
         private const string UndersideSurfaceChildName = "DeepWaters_Surface_Underside";
         private const string GeneratedMeshName = "DeepWaters.SurfaceMesh";
-        private const int SurfaceGridResolution = 16;
+        private const int DefaultSurfaceGridResolution = 16;
 
         private static bool installed;
 
@@ -179,7 +179,7 @@ namespace DeepWaters
 
         private static Mesh BuildSurfaceMesh(DaggerfallTerrain terrain, TerrainData terrainData)
         {
-            int n = SurfaceGridResolution;
+            int n = DeepWaters.Instance != null ? DeepWaters.Instance.WaterSurfaceMeshSize : DefaultSurfaceGridResolution;
             float sizeX = terrainData.size.x;
             float sizeZ = terrainData.size.z;
 

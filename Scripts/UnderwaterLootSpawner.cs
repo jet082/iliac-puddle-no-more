@@ -35,9 +35,6 @@ namespace DeepWaters
         private const int FullStrayLootPerPulse = 2;
         private const float NormalLootMultiplier = 2f;
         private const float TreasureCoveStrayMultiplier = 3f;
-        private const int MaxNormalStrayLootPerPulse = 4;
-        private const int MaxCoveStrayLootPerPulse = 6;
-
         // Treasure clusters are event-like, so the setting maps directly to a
         // per-pulse chance rather than a count.
         private const float TreasureCoveClusterChanceMultiplier = 3f;
@@ -60,9 +57,7 @@ namespace DeepWaters
         private static Vector3 lastPulseAnchor;
         private static bool hasPulseAnchor;
         private static float nextAllowedPulseTime;
-        private static float nextNearbyWaterGateCheckTime;
-        private static bool hasNearbyWaterGateCache;
-        private static bool lastNearbyWaterGateResult;
+        private static readonly TimedGateCache nearbyWaterGate = new TimedGateCache(NearbyWaterGateCheckInterval);
         private static bool installed;
 
         public static void Install()
@@ -93,8 +88,7 @@ namespace DeepWaters
             UnderwaterLootPlacement.Reset();
             hasPulseAnchor = false;
             nextAllowedPulseTime = 0f;
-            hasNearbyWaterGateCache = false;
-            lastNearbyWaterGateResult = false;
+            nearbyWaterGate.Invalidate();
             trackedObjects.Clear();
         }
 
@@ -146,6 +140,10 @@ namespace DeepWaters
             GetLootSpawnDistanceRange(out spawnMinDistance, out spawnMaxDistance);
 
             trackedObjects.PruneByDistance(playerPos, GetLootDespawnDistance());
+            int maxLiveLoot = GetMaxLiveLootObjects();
+            trackedObjects.PruneToCount(playerPos, maxLiveLoot);
+            if (trackedObjects.Count >= maxLiveLoot)
+                return;
 
             bool spawnedCluster = false;
             int spawnedStrays = 0;
@@ -189,7 +187,9 @@ namespace DeepWaters
             float scaledCount = FullStrayLootPerPulse * rate * multiplier * GetWaterContextSpawnMultiplier();
             int count = DeepWaterWorld.RollCount(scaledCount);
 
-            int max = DeepWaters.Instance.TreasureCove ? MaxCoveStrayLootPerPulse : MaxNormalStrayLootPerPulse;
+            int max = DeepWaters.Instance.TreasureCove
+                ? DeepWaters.Instance.TreasureCoveMaxStrayLootPerPulse
+                : DeepWaters.Instance.MaxStrayLootPerPulse;
             return Mathf.Clamp(count, 0, max);
         }
 
@@ -285,8 +285,8 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
                 return false;
 
-            if (hasNearbyWaterGateCache && Time.time < nextNearbyWaterGateCheckTime)
-                return lastNearbyWaterGateResult;
+            if (nearbyWaterGate.IsFresh)
+                return nearbyWaterGate.Value;
 
             float minSpawnDistance;
             float maxSpawnDistance;
@@ -301,10 +301,7 @@ namespace DeepWaters
                 SurfaceLootOriginClearance,
                 out depth);
 
-            hasNearbyWaterGateCache = true;
-            lastNearbyWaterGateResult = result;
-            nextNearbyWaterGateCheckTime = Time.time + NearbyWaterGateCheckInterval;
-            return result;
+            return nearbyWaterGate.Store(result);
         }
 
         private static float GetWaterContextSpawnMultiplier()
@@ -316,13 +313,25 @@ namespace DeepWaters
 
         private static void GetLootSpawnDistanceRange(out float minDistance, out float maxDistance)
         {
-            minDistance = UnderwaterLootPlacement.MinSpawnDistance;
-            maxDistance = UnderwaterLootPlacement.MaxSpawnDistance;
+            if (DeepWaters.Instance == null)
+            {
+                minDistance = UnderwaterLootPlacement.MinSpawnDistance;
+                maxDistance = UnderwaterLootPlacement.MaxSpawnDistance;
+                return;
+            }
+
+            minDistance = DeepWaters.Instance.LootSpawnMinDistance;
+            maxDistance = Mathf.Max(minDistance + 1f, DeepWaters.Instance.LootSpawnMaxDistance);
         }
 
         private static float GetLootDespawnDistance()
         {
             return DespawnDistance;
+        }
+
+        private static int GetMaxLiveLootObjects()
+        {
+            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveLootObjects : 32;
         }
 
     }

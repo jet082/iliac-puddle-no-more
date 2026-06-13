@@ -24,9 +24,7 @@ namespace DeepWaters
         private static GameObject driverObject;
         private static Vector3 lastPulseAnchor;
         private static bool hasPulseAnchor;
-        private static float nextNearbyOceanGateCheckTime;
-        private static bool hasNearbyOceanGateCache;
-        private static bool lastNearbyOceanGateResult;
+        private static readonly TimedGateCache oceanGate = new TimedGateCache(NearbyOceanGateCheckInterval);
         private static float enemiesInactiveSince = -1f;
         private static float fishInactiveSince = -1f;
         private static float missingWaterSince = -1f;
@@ -145,8 +143,8 @@ namespace DeepWaters
 
         private static bool HasNearbyEncounterWaterColumn(Vector3 playerPos)
         {
-            if (hasNearbyOceanGateCache && Time.time < nextNearbyOceanGateCheckTime)
-                return lastNearbyOceanGateResult;
+            if (oceanGate.IsFresh)
+                return oceanGate.Value;
 
             float depth;
             bool result = DeepWaterWorld.HasNearbyWaterColumn(
@@ -157,17 +155,13 @@ namespace DeepWaters
                 MinimumColumnDepth,
                 out depth);
 
-            hasNearbyOceanGateCache = true;
-            lastNearbyOceanGateResult = result;
-            nextNearbyOceanGateCheckTime = Time.time + NearbyOceanGateCheckInterval;
-            return result;
+            return oceanGate.Store(result);
         }
 
         private static void ResetPulseState()
         {
             hasPulseAnchor = false;
-            hasNearbyOceanGateCache = false;
-            lastNearbyOceanGateResult = false;
+            oceanGate.Invalidate();
             enemiesInactiveSince = -1f;
             fishInactiveSince = -1f;
             missingWaterSince = -1f;

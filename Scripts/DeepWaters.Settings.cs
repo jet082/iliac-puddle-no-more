@@ -35,15 +35,26 @@ namespace DeepWaters
 
         public float WaterDepth { get; private set; } = 200f;
         public bool SpawnWaterSurfaces { get; private set; } = true;
+        public int WaterSurfaceMeshSize { get; private set; } = 16;
+        public int SeafloorMeshSize { get; private set; } = 33;
         public bool SpawnUnderwaterEnemies { get; private set; } = true;
+        public int MaxLiveEnemies { get; private set; } = 8;
         public float EnemyFrequency { get; private set; } = EnemyFrequencyAtMidpoint;
         public float PassiveFishFrequency { get; private set; } = PassiveFishFrequencyAtMidpoint;
+        public int MaxLiveFish { get; private set; } = 36;
+        public int FishParadiseMaxLiveFish { get; private set; } = 72;
         public bool FishParadise { get; private set; }
         public bool SpawnUnderwaterDecorations { get; private set; } = true;
+        public int DecorationPopulateRadius { get; private set; } = 1;
         public float DecorationFrequency { get; private set; } = DecorationFrequencyAtMidpoint;
         public float SeafloorLootRate { get; private set; } = SeafloorLootRateAtMidpoint;
+        public int MaxLiveLootObjects { get; private set; } = 32;
+        public int MaxStrayLootPerPulse { get; private set; } = 4;
+        public int TreasureCoveMaxStrayLootPerPulse { get; private set; } = 6;
         public float TreasureClusterRate { get; private set; } = TreasureClusterRateAtMidpoint;
         public bool TreasureCove { get; private set; }
+        public int LootSpawnMinDistance { get; private set; } = 42;
+        public int LootSpawnMaxDistance { get; private set; } = 72;
         public float WaterSurfaceTopTransparency { get; private set; } = SliderMidpoint;
         public float WaterSurfaceBottomTransparency { get; private set; } = SliderMidpoint;
         public float WaterSurfaceDistanceFalloff { get; private set; } = SliderMidpoint;
@@ -52,6 +63,8 @@ namespace DeepWaters
         public bool ArgonianInfiniteBreath { get; private set; } = true;
         public float SwimSpeedMultiplier { get; private set; } = 1f;
         public bool EnableSwimStroke { get; private set; }
+        private int encounterSpawnMinDistance = (int)DefaultEncounterMinSpawnDistance;
+        private int encounterSpawnMaxDistance = (int)DefaultEncounterMaxSpawnDistance;
 
         public float WaterSurfaceTopAlpha
         {
@@ -98,12 +111,12 @@ namespace DeepWaters
 
         public float EncounterSpawnMinDistance
         {
-            get { return DefaultEncounterMinSpawnDistance; }
+            get { return encounterSpawnMinDistance; }
         }
 
         public float EncounterSpawnMaxDistance
         {
-            get { return DefaultEncounterMaxSpawnDistance; }
+            get { return Mathf.Max(encounterSpawnMinDistance + 1, encounterSpawnMaxDistance); }
         }
 
         public float EncounterSpawnViewSafetyDistance
@@ -134,6 +147,7 @@ namespace DeepWaters
             ApplySettings(settings);
             WaterSurfaceResources.ApplyMaterialSettings();
             WaterSurfaceManager.RefreshLoadedSurfaces();
+            UnderwaterDecorations.RefreshPlayerArea();
             if (DeepWaterRuntime.CanRunHeavyRuntimeWork)
             {
                 // Settings changed (e.g. WaterDepth, climate-band hue,
@@ -149,15 +163,28 @@ namespace DeepWaters
         {
             WaterDepth = GetFloatSetting(s, "WaterDepth");
             SpawnWaterSurfaces = GetBoolSetting(s, "SpawnWaterSurfaces");
+            WaterSurfaceMeshSize = Mathf.Clamp(GetIntSetting(s, "WaterSurfaceMeshSize"), 8, 64);
+            SeafloorMeshSize = Mathf.Clamp(GetIntSetting(s, "SeafloorMeshSize"), 17, 65);
             SpawnUnderwaterEnemies = GetBoolSetting(s, "SpawnUnderwaterEnemies");
+            MaxLiveEnemies = Mathf.Clamp(GetIntSetting(s, "MaxLiveEnemies"), 0, 32);
             EnemyFrequency = GetScaledSliderSetting(s, "EnemyFrequency", EnemyFrequencyAtMidpoint);
             PassiveFishFrequency = GetScaledSliderSetting(s, "PassiveFishFrequency", PassiveFishFrequencyAtMidpoint);
+            MaxLiveFish = Mathf.Clamp(GetIntSetting(s, "MaxLiveFish"), 0, 180);
+            FishParadiseMaxLiveFish = Mathf.Clamp(GetIntSetting(s, "FishParadiseMaxLiveFish"), 0, 240);
             FishParadise = GetBoolSetting(s, "FishParadise");
             SpawnUnderwaterDecorations = GetBoolSetting(s, "SpawnUnderwaterDecorations");
+            DecorationPopulateRadius = Mathf.Clamp(GetIntSetting(s, "DecorationPopulateRadius"), 1, 3);
             DecorationFrequency = GetScaledSliderSetting(s, "DecorationFrequency", DecorationFrequencyAtMidpoint);
             SeafloorLootRate = GetScaledSliderSetting(s, "SeafloorLootRate", SeafloorLootRateAtMidpoint);
+            MaxLiveLootObjects = Mathf.Clamp(GetIntSetting(s, "MaxLiveLootObjects"), 0, 64);
+            MaxStrayLootPerPulse = Mathf.Clamp(GetIntSetting(s, "MaxStrayLootPerPulse"), 0, 16);
+            TreasureCoveMaxStrayLootPerPulse = Mathf.Clamp(GetIntSetting(s, "TreasureCoveMaxStrayLootPerPulse"), 0, 24);
             TreasureClusterRate = GetScaledSliderSetting(s, "TreasureClusterRate", TreasureClusterRateAtMidpoint);
             TreasureCove = GetBoolSetting(s, "TreasureCove");
+            encounterSpawnMinDistance = Mathf.Clamp(GetIntSetting(s, "EncounterSpawnMinDistance"), 10, 180);
+            encounterSpawnMaxDistance = Mathf.Clamp(GetIntSetting(s, "EncounterSpawnMaxDistance"), 20, 240);
+            LootSpawnMinDistance = Mathf.Clamp(GetIntSetting(s, "LootSpawnMinDistance"), 10, 180);
+            LootSpawnMaxDistance = Mathf.Clamp(GetIntSetting(s, "LootSpawnMaxDistance"), 20, 240);
             WaterSurfaceTopTransparency = GetFloatSetting(s, "WaterSurfaceTopTransparency");
             WaterSurfaceBottomTransparency = GetFloatSetting(s, "WaterSurfaceBottomTransparency");
             WaterSurfaceDistanceFalloff = GetFloatSetting(s, "WaterSurfaceDistanceFalloff");
@@ -210,6 +237,11 @@ namespace DeepWaters
         private static float GetFloatSetting(ModSettings settings, string key)
         {
             return settings.GetFloat("General", key);
+        }
+
+        private static int GetIntSetting(ModSettings settings, string key)
+        {
+            return settings.GetInt("General", key);
         }
     }
 }

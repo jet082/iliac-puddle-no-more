@@ -78,7 +78,6 @@ namespace DeepWaters
 
         public const int FullSpawnCount = 4;
         public const float SpawnRateScale = 0.4f;
-        private const int MaxLiveEnemies = 8;
 
         private static readonly TransientObjectTracker liveEnemies = new TransientObjectTracker();
         private static float nextAllowedPulseTime;
@@ -117,11 +116,12 @@ namespace DeepWaters
                 return false;
 
             liveEnemies.Prune(playerPos, DespawnDistance, IsEnemyStillInWater);
-            if (liveEnemies.Count >= MaxLiveEnemies)
+            int maxLiveEnemies = GetMaxLiveEnemies();
+            if (liveEnemies.Count >= maxLiveEnemies)
                 return true;
 
             int targetCount = RollScaledSpawnCount(FullSpawnCount);
-            targetCount = Mathf.Min(targetCount, MaxLiveEnemies - liveEnemies.Count);
+            targetCount = Mathf.Min(targetCount, maxLiveEnemies - liveEnemies.Count);
             if (targetCount <= 0)
                 return true;
 
@@ -378,6 +378,11 @@ namespace DeepWaters
 
             if (destroyEnemies)
                 liveEnemies.Clear();
+        }
+
+        private static int GetMaxLiveEnemies()
+        {
+            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveEnemies : 8;
         }
 
         private static bool IsEnemyStillInWater(GameObject enemy)

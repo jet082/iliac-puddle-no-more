@@ -169,9 +169,7 @@ namespace DeepWaters
 
         void Update()
         {
-            DeepWaterPerf.Begin(DeepWaterPerf.Driver);
-            try { UpdateCore(); }
-            finally { DeepWaterPerf.End(DeepWaterPerf.Driver); }
+            UpdateCore();
         }
 
         private void UpdateCore()
@@ -252,9 +250,7 @@ namespace DeepWaters
 
         void FixedUpdate()
         {
-            DeepWaterPerf.Begin(DeepWaterPerf.DriverFixed);
-            try { FixedUpdateCore(); }
-            finally { DeepWaterPerf.End(DeepWaterPerf.DriverFixed); }
+            FixedUpdateCore();
         }
 
         private void FixedUpdateCore()
@@ -948,9 +944,7 @@ namespace DeepWaters
             gateLastRunFrame = Time.frameCount;
             nextGateRefreshTime = Time.realtimeSinceStartup + ColliderGateRefreshIntervalSeconds;
 
-            DeepWaterPerf.Begin(DeepWaterPerf.Gate);
-            try { UpdateWaterTerrainColliderGateCore(oceanSurfaceY); }
-            finally { DeepWaterPerf.End(DeepWaterPerf.Gate); }
+            UpdateWaterTerrainColliderGateCore(oceanSurfaceY);
         }
 
         private void UpdateWaterTerrainColliderGateCore(float oceanSurfaceY)
@@ -1199,9 +1193,7 @@ namespace DeepWaters
         internal OutdoorSwimDriver owner;
         void Update()
         {
-            DeepWaterPerf.Begin(DeepWaterPerf.After);
-            try { owner?.PostPhaseRestore(); }
-            finally { DeepWaterPerf.End(DeepWaterPerf.After); }
+            owner?.PostPhaseRestore();
         }
     }
 
@@ -1257,9 +1249,7 @@ namespace DeepWaters
 
         void Update()
         {
-            DeepWaterPerf.Begin(DeepWaterPerf.Mover);
-            try { UpdateCore(); }
-            finally { DeepWaterPerf.End(DeepWaterPerf.Mover); }
+            UpdateCore();
         }
 
         private void UpdateCore()

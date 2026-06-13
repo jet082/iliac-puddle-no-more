@@ -21,7 +21,7 @@ namespace DeepWaters
     [RequireComponent(typeof(MeshCollider))]
     public class DeepWaterFloorMesh : MonoBehaviour
     {
-        public const int VertexGridSize = 33;
+        private const int DefaultVertexGridSize = 33;
         private const float WallMinimumDrop = 0.25f;
         private const float ShoreWallSurfaceInset = 0.20f;
         private const float ShoreWallBottomOverlap = 0.10f;
@@ -49,6 +49,7 @@ namespace DeepWaters
         private float[,] vertexLocalY;
         private bool[,] floorQuadWater;
         private float tileWorldSizeCached;
+        private int builtVertexGridSize;
 
         // Diagnostic counters captured per Build call, logged at the end.
         // The user runs the game with this and shares the Player.log so we
@@ -113,7 +114,8 @@ namespace DeepWaters
             tileWorldSizeCached = tileWorldSize;
             Vector3 terrainOrigin = owner.transform.position;
 
-            int n = VertexGridSize;
+            int n = CurrentVertexGridSize;
+            builtVertexGridSize = n;
             int vertexCount = n * n;
             var vertices = new List<Vector3>(vertexCount + EstimateWallVertexCapacity(holes));
             var colors = new List<Color>(vertices.Capacity);
@@ -275,7 +277,7 @@ namespace DeepWaters
             if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
                 return false;
 
-            int n = VertexGridSize;
+            int n = builtVertexGridSize > 1 ? builtVertexGridSize : CurrentVertexGridSize;
             float fx = fracX * (n - 1);
             float fz = fracZ * (n - 1);
             int x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, n - 2);
@@ -327,6 +329,16 @@ namespace DeepWaters
             int hx = Mathf.Clamp(Mathf.FloorToInt(fracX * cols), 0, cols - 1);
             int hz = Mathf.Clamp(Mathf.FloorToInt(fracZ * rows), 0, rows - 1);
             return !holes[hz, hx];
+        }
+
+        private static int CurrentVertexGridSize
+        {
+            get
+            {
+                return DeepWaters.Instance != null
+                    ? Mathf.Clamp(DeepWaters.Instance.SeafloorMeshSize, 17, 65)
+                    : DefaultVertexGridSize;
+            }
         }
 
         private void AppendHoleEdgeWalls(

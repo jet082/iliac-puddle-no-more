@@ -84,9 +84,7 @@ namespace DeepWaters
 
         void Update()
         {
-            DeepWaterPerf.Begin(DeepWaterPerf.Fish);
-            try { UpdateCore(); }
-            finally { DeepWaterPerf.End(DeepWaterPerf.Fish); }
+            UpdateCore();
         }
 
         private void UpdateCore()

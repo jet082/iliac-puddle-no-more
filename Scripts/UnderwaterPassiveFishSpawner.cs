@@ -17,10 +17,6 @@ namespace DeepWaters
         public const ItemGroups FishItemGroup = PassiveFishSpeciesCatalog.FishItemGroup;
 
         private const int FullFishCount = UnderwaterEnemySpawner.FullSpawnCount * 2;
-        private const int NormalMaxLiveFish = 36;
-        private const int FishParadiseMaxLiveFish = 72;
-        private const int LocationMaxLiveFish = 24;
-        private const int LocationFishParadiseMaxLiveFish = 36;
         private const float FishParadiseSpawnMultiplier = 4f;
         private const float FishParadisePulseIntervalMultiplier = 0.5f;
         private const float SpawnViewportMargin = 0.08f;
@@ -31,10 +27,6 @@ namespace DeepWaters
 
         private static readonly TransientObjectTracker liveFish = new TransientObjectTracker();
 
-        internal static int LiveFishCount
-        {
-            get { return liveFish.Count; }
-        }
         private static GameObject iconBridgeObject;
         private static float nextAllowedPulseTime;
         private static bool installed;
@@ -272,10 +264,12 @@ namespace DeepWaters
         {
             bool fishParadise = DeepWaters.Instance != null && DeepWaters.Instance.FishParadise;
             bool inLocation = IsPlayerInLoadedLocation();
+            int maxFish = DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveFish : 36;
+            int maxParadiseFish = DeepWaters.Instance != null ? DeepWaters.Instance.FishParadiseMaxLiveFish : 72;
             if (fishParadise)
-                return inLocation ? LocationFishParadiseMaxLiveFish : FishParadiseMaxLiveFish;
+                return inLocation ? Mathf.FloorToInt(maxParadiseFish * 0.5f) : maxParadiseFish;
 
-            return inLocation ? LocationMaxLiveFish : NormalMaxLiveFish;
+            return inLocation ? Mathf.FloorToInt(maxFish * 0.67f) : maxFish;
         }
 
         private static bool IsPlayerInLoadedLocation()

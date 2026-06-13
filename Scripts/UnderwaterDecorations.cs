@@ -15,8 +15,6 @@ namespace DeepWaters
     /// </summary>
     public static class UnderwaterDecorations
     {
-        private const int MinimumPopulateRadius = 1;
-        private const int MaxPopulateRadius = 1;
         private const int MaxTilesPerWorkCycle = 1;
 
         private static readonly Queue<DaggerfallTerrain> workQueue = new Queue<DaggerfallTerrain>();
@@ -203,9 +201,8 @@ namespace DeepWaters
 
         private static int GetPopulateRadius(StreamingWorld streamingWorld)
         {
-            return streamingWorld != null
-                ? Mathf.Clamp(streamingWorld.TerrainDistance, MinimumPopulateRadius, MaxPopulateRadius)
-                : MinimumPopulateRadius;
+            int radius = DeepWaters.Instance != null ? DeepWaters.Instance.DecorationPopulateRadius : 1;
+            return Mathf.Clamp(radius, 1, 3);
         }
         
         private static void PopulateTile(DaggerfallTerrain dfTerrain, TerrainData terrainData)
