@@ -31,7 +31,9 @@ namespace DeepWaters
             DeepWaterRendering.DisableShadows(loot != null ? loot.gameObject : null);
             if (loot != null)
             {
-                BrightenUnderwaterBillboards(loot.gameObject);
+                if (!DaggerfallUnity.Settings.AssetInjection)
+                    BrightenUnderwaterBillboards(loot.gameObject);
+
                 DeepWaterWorld.AlignObjectBottomToWorldY(loot.gameObject, worldPos.y);
             }
             if (tracker != null)
@@ -43,7 +45,7 @@ namespace DeepWaters
         public static void QueueRubbleSprite(
             Vector3 worldPos,
             Transform parent,
-            Dictionary<Transform, List<DaggerfallBillboardBatch.BasicInfo>> rubbleBatches)
+            Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches)
         {
             QueueRubbleSprite(
                 worldPos,
@@ -55,13 +57,13 @@ namespace DeepWaters
         public static void QueueRubbleSprite(
             Vector3 worldPos,
             Transform parent,
-            Dictionary<Transform, List<DaggerfallBillboardBatch.BasicInfo>> rubbleBatches,
+            Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches,
             int record)
         {
-            List<DaggerfallBillboardBatch.BasicInfo> batchItems;
+            List<UnderwaterDecorationPlacementInfo> batchItems;
             if (!rubbleBatches.TryGetValue(parent, out batchItems))
             {
-                batchItems = new List<DaggerfallBillboardBatch.BasicInfo>();
+                batchItems = new List<UnderwaterDecorationPlacementInfo>();
                 rubbleBatches.Add(parent, batchItems);
             }
 
@@ -70,52 +72,33 @@ namespace DeepWaters
                 record,
                 worldPos.y);
 
-            batchItems.Add(new DaggerfallBillboardBatch.BasicInfo(record, worldPos - parent.position));
+            batchItems.Add(new UnderwaterDecorationPlacementInfo(
+                new UnderwaterDecorationRecord(UnderwaterLootCatalog.RubbleArchive, record),
+                worldPos - parent.position));
         }
 
         public static int SpawnRubbleBatches(
-            Dictionary<Transform, List<DaggerfallBillboardBatch.BasicInfo>> rubbleBatches,
+            Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches,
             TransientObjectTracker tracker)
         {
             int placed = 0;
-            foreach (KeyValuePair<Transform, List<DaggerfallBillboardBatch.BasicInfo>> pair in rubbleBatches)
+            foreach (KeyValuePair<Transform, List<UnderwaterDecorationPlacementInfo>> pair in rubbleBatches)
             {
                 if (pair.Key == null || pair.Value == null || pair.Value.Count == 0)
                     continue;
 
-                if (SpawnRubbleBatch(pair.Key, pair.Value, tracker))
-                    placed += pair.Value.Count;
+                GameObject group = UnderwaterDecorationBatchFactory.Spawn(pair.Key, pair.Value);
+                if (group == null)
+                    continue;
+
+                group.name = "DeepWaters_LootRubbleBatch";
+                if (tracker != null)
+                    tracker.Add(group);
+
+                placed += pair.Value.Count;
             }
 
             return placed;
-        }
-
-        private static bool SpawnRubbleBatch(
-            Transform parent,
-            List<DaggerfallBillboardBatch.BasicInfo> items,
-            TransientObjectTracker tracker)
-        {
-            DaggerfallBillboardBatch batch = GameObjectHelper.CreateBillboardBatchGameObject(
-                UnderwaterLootCatalog.RubbleArchive,
-                parent);
-            if (batch == null)
-                return false;
-
-            batch.Clear();
-
-#pragma warning disable 0618
-            for (int i = 0; i < items.Count; i++)
-                batch.AddItem(items[i]);
-#pragma warning restore 0618
-
-            batch.Apply();
-            batch.gameObject.name = "DeepWaters_LootRubbleBatch";
-            DeepWaterRendering.DisableShadows(batch.gameObject);
-            BrightenUnderwaterBillboards(batch.gameObject);
-            if (tracker != null)
-                tracker.Add(batch.gameObject);
-
-            return true;
         }
 
         // Loot piles and wreck rubble are dark underwater because DFU's billboard

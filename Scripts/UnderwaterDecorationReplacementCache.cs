@@ -11,6 +11,7 @@ namespace DeepWaters
 {
     internal sealed class UnderwaterDecorationReplacementInfo
     {
+        public bool HasMaterial;
         public bool HasReplacement;
         public bool HasImportedAnimation;
         public Material Material;
@@ -33,6 +34,17 @@ namespace DeepWaters
             return info.HasReplacement;
         }
 
+        public static bool TryGetMaterial(UnderwaterDecorationRecord record, out UnderwaterDecorationReplacementInfo info)
+        {
+            if (!cache.TryGetValue(record, out info))
+            {
+                info = Probe(record);
+                cache.Add(record, info);
+            }
+
+            return info.HasMaterial;
+        }
+
         private static UnderwaterDecorationReplacementInfo Probe(UnderwaterDecorationRecord record)
         {
             var info = new UnderwaterDecorationReplacementInfo();
@@ -49,7 +61,9 @@ namespace DeepWaters
                 out replacementScale);
 
             if (material != null && material.mainTexture != null)
-                FillReplacementInfo(record, material, summary, replacementScale, info);
+                FillReplacementInfo(record, material, summary.Rect, replacementScale, summary, info);
+            else
+                FillVanillaMaterialInfo(record, info);
 
             Object.Destroy(probe);
             return info;
@@ -58,13 +72,49 @@ namespace DeepWaters
         private static void FillReplacementInfo(
             UnderwaterDecorationRecord record,
             Material material,
-            BillboardSummary summary,
+            Rect rect,
             Vector2 replacementScale,
+            BillboardSummary summary,
+            UnderwaterDecorationReplacementInfo info)
+        {
+            FillMaterialInfo(record, material, rect, replacementScale, info);
+            info.HasReplacement = info.HasMaterial;
+            info.HasImportedAnimation = info.HasMaterial &&
+                                        summary.ImportedTextures.HasImportedTextures &&
+                                        summary.ImportedTextures.FrameCount > 1;
+        }
+
+        private static void FillVanillaMaterialInfo(
+            UnderwaterDecorationRecord record,
+            UnderwaterDecorationReplacementInfo info)
+        {
+            if (DaggerfallUnity.Instance == null || DaggerfallUnity.Instance.MaterialReader == null)
+                return;
+
+            Rect rect;
+            Material material = DaggerfallUnity.Instance.MaterialReader.GetMaterial(
+                record.Archive,
+                record.Record,
+                0,
+                0,
+                out rect,
+                4,
+                true,
+                true);
+
+            FillMaterialInfo(record, material, rect, Vector2.one, info);
+        }
+
+        private static void FillMaterialInfo(
+            UnderwaterDecorationRecord record,
+            Material material,
+            Rect rect,
+            Vector2 scale,
             UnderwaterDecorationReplacementInfo info)
         {
             Vector2 baseSize;
             Mesh mesh = DaggerfallUnity.Instance.MeshReader.GetBillboardMesh(
-                summary.Rect,
+                rect,
                 record.Archive,
                 record.Record,
                 out baseSize);
@@ -72,14 +122,15 @@ namespace DeepWaters
             if (mesh != null)
                 Object.Destroy(mesh);
 
-            info.HasReplacement = baseSize.x > 0f && baseSize.y > 0f;
-            info.HasImportedAnimation = summary.ImportedTextures.HasImportedTextures &&
-                                        summary.ImportedTextures.FrameCount > 1;
+            info.HasMaterial = material != null &&
+                               material.mainTexture != null &&
+                               baseSize.x > 0f &&
+                               baseSize.y > 0f;
             info.Material = material;
-            info.Rect = summary.Rect;
+            info.Rect = rect;
             info.BatchSize = new Vector2(
-                baseSize.x * replacementScale.x / MeshReader.GlobalScale,
-                baseSize.y * replacementScale.y / MeshReader.GlobalScale);
+                baseSize.x * scale.x / MeshReader.GlobalScale,
+                baseSize.y * scale.y / MeshReader.GlobalScale);
         }
     }
 }

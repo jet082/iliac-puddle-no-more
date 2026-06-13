@@ -225,7 +225,7 @@ namespace DeepWaters
                 return 0;
 
             int targetCount = Random.Range(1, 3);
-            var rubbleBatches = new Dictionary<Transform, List<DaggerfallBillboardBatch.BasicInfo>>();
+            var rubbleBatches = new Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>>();
             var usedRecords = new HashSet<int>();
 
             for (int i = 0; i < targetCount; i++)
@@ -236,7 +236,7 @@ namespace DeepWaters
 
         private static bool TryQueueLooseLootDebris(
             Vector3 lootPos,
-            Dictionary<Transform, List<DaggerfallBillboardBatch.BasicInfo>> rubbleBatches,
+            Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches,
             HashSet<int> usedRecords)
         {
             for (int attempt = 0; attempt < LooseLootDebrisSpotAttempts; attempt++)

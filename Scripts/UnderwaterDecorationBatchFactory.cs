@@ -34,16 +34,19 @@ namespace DeepWaters
         private static readonly int ColorProperty = Shader.PropertyToID("_Color");
         private static readonly int CutoffProperty = Shader.PropertyToID("_Cutoff");
 
-        public static void Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
+        public static GameObject Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {
             if (terrainParent == null || positions == null || positions.Count == 0)
-                return;
+                return null;
 
-            Transform group = CreateDecorationGroup(terrainParent).transform;
+            GameObject groupObject = CreateDecorationGroup(terrainParent);
+            Transform group = groupObject.transform;
             if (DaggerfallUnity.Settings.AssetInjection)
                 SpawnReplacementAwareBillboards(group, positions);
             else
                 SpawnArchiveBillboards(group, positions);
+
+            return groupObject;
         }
 
         private static GameObject CreateDecorationGroup(Transform parent)
@@ -104,6 +107,7 @@ namespace DeepWaters
         {
             var archivePositions = new Dictionary<int, List<DaggerfallBillboardBatch.BasicInfo>>();
             var replacementPositions = new Dictionary<UnderwaterDecorationRecord, List<Vector3>>();
+            var animatedReplacementPositions = new List<UnderwaterDecorationPlacementInfo>();
 
             for (int i = 0; i < positions.Count; i++)
             {
@@ -112,19 +116,28 @@ namespace DeepWaters
 
                 if (UnderwaterDecorationCatalog.UsesArchiveAnimation(record))
                 {
-                    // Asset injection (DREAM etc.): route animated flats through
-                    // DFU's native billboard batch rather than the custom atlas
-                    // batch. DFU's batch loads the replacement atlas and animates
-                    // by cycling mesh UVs, which survives our unlit-material swap,
-                    // so DREAM's animated replacements render correctly. The
-                    // custom atlas path mishandled replacement textures. (issue 11)
-                    AddArchivePosition(archivePositions, item);
+                    // DREAM-style imported multi-frame replacements animate by
+                    // swapping material textures on DaggerfallBillboard. The
+                    // batch paths only animate atlas UVs, which can leave these
+                    // records as flat white quads.
+                    UnderwaterDecorationReplacementInfo animatedInfo;
+                    if (UnderwaterDecorationReplacementCache.TryGet(record, out animatedInfo))
+                    {
+                        if (animatedInfo.HasImportedAnimation)
+                            animatedReplacementPositions.Add(item);
+                        else
+                            AddReplacementPosition(replacementPositions, record, item.LocalPosition);
+                    }
+                    else
+                    {
+                        AddArchivePosition(archivePositions, item);
+                    }
+
                     continue;
                 }
 
                 UnderwaterDecorationReplacementInfo replacementInfo;
-                bool hasReplacement = UnderwaterDecorationReplacementCache.TryGet(record, out replacementInfo);
-                if (!hasReplacement)
+                if (!UnderwaterDecorationReplacementCache.TryGetMaterial(record, out replacementInfo))
                 {
                     AddArchivePosition(archivePositions, item);
                     continue;
@@ -139,9 +152,11 @@ namespace DeepWaters
             foreach (KeyValuePair<UnderwaterDecorationRecord, List<Vector3>> pair in replacementPositions)
             {
                 UnderwaterDecorationReplacementInfo replacementInfo;
-                if (UnderwaterDecorationReplacementCache.TryGet(pair.Key, out replacementInfo))
+                if (UnderwaterDecorationReplacementCache.TryGetMaterial(pair.Key, out replacementInfo))
                     SpawnReplacementBatch(parent, pair.Key, pair.Value, replacementInfo);
             }
+
+            SpawnAnimatedReplacementBillboards(parent, animatedReplacementPositions);
         }
 
         private static void AddReplacementPosition(
@@ -165,22 +180,62 @@ namespace DeepWaters
             List<Vector3> positions,
             UnderwaterDecorationReplacementInfo info)
         {
-            DaggerfallBillboardBatch batch = GameObjectHelper.CreateBillboardBatchGameObject(
-                record.Archive,
-                parent);
-            if (batch == null)
+            if (parent == null || positions == null || positions.Count == 0 || info == null || info.Material == null)
                 return;
 
-            batch.Clear();
-            batch.gameObject.name =
-                "DeepWaters_DecorationReplacementBatch_" + record.Archive + "_" + record.Record;
-            batch.SetMaterial(info.Material);
+            Mesh mesh = BuildMaterialBillboardBatchMesh(positions, info);
+            if (mesh == null)
+                return;
 
-            AddReplacementItems(batch, positions, info);
+            var go = new GameObject("DeepWaters_DecorationMaterialBatch_" + record.Archive + "_" + record.Record);
+            go.transform.parent = parent;
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
 
-            batch.Apply();
-            ApplyUnderwaterDecorationMaterial(batch.GetComponent<MeshRenderer>());
-            DeepWaterRendering.DisableShadows(batch.gameObject);
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>().sharedMaterial = info.Material;
+
+            var owner = go.AddComponent<OwnedUnderwaterDecorationMesh>();
+            owner.Set(mesh);
+
+            ApplyUnderwaterDecorationMaterial(go.GetComponent<MeshRenderer>());
+            DeepWaterRendering.DisableShadows(go);
+        }
+
+        private static void SpawnAnimatedReplacementBillboards(
+            Transform parent,
+            List<UnderwaterDecorationPlacementInfo> positions)
+        {
+            if (positions == null || positions.Count == 0)
+                return;
+
+            for (int i = 0; i < positions.Count; i++)
+            {
+                UnderwaterDecorationPlacementInfo item = positions[i];
+                GameObject go = GameObjectHelper.CreateDaggerfallBillboardGameObject(
+                    item.Archive,
+                    item.Record,
+                    parent);
+                if (go == null)
+                    continue;
+
+                go.name = "DeepWaters_DecorationAnimatedReplacement_" + item.Archive + "_" + item.Record;
+                go.transform.localPosition = item.LocalPosition;
+                float sizeFactor = UnityEngine.Random.Range(DecorationScaleMin, DecorationScaleMax);
+                go.transform.localScale = go.transform.localScale * sizeFactor;
+
+                Billboard billboard = go.GetComponent<Billboard>();
+                float framesPerSecond;
+                if (billboard != null &&
+                    UnderwaterDecorationCatalog.TryGetFramesPerSecond(item.Archive, out framesPerSecond))
+                {
+                    billboard.FramesPerSecond = Mathf.Max(1, Mathf.RoundToInt(framesPerSecond));
+                }
+
+                ApplyUnderwaterDecorationMaterial(go.GetComponent<MeshRenderer>());
+                DeepWaterRendering.DisableShadows(go);
+            }
         }
 
         private static void AddArchivePosition(
@@ -226,29 +281,78 @@ namespace DeepWaters
 #pragma warning restore 618
         }
 
-        private static void AddReplacementItems(
-            DaggerfallBillboardBatch batch,
+        private static Mesh BuildMaterialBillboardBatchMesh(
             List<Vector3> positions,
             UnderwaterDecorationReplacementInfo info)
         {
-            if (batch == null || positions == null || positions.Count == 0)
-                return;
+            if (positions == null || positions.Count == 0 || info == null)
+                return null;
 
-            // Per-item path for the same reason as AddArchiveItems (see note
-            // there). This is also the only API that works with a custom
-            // (replacement) material.
-#pragma warning disable 618
+            int count = positions.Count;
+            var mesh = new Mesh();
+            mesh.name = "DeepWaters_DecorationMaterialBatchMesh";
+            if (count * 4 > 65535)
+                mesh.indexFormat = IndexFormat.UInt32;
+
+            Vector3[] vertices = new Vector3[count * 4];
+            Vector3[] normals = new Vector3[count * 4];
+            Vector4[] tangents = new Vector4[count * 4];
+            Vector2[] uvs = new Vector2[count * 4];
+            int[] triangles = new int[count * 6];
+
+            Vector3 normal = new Vector3(0f, 0.70710678f, 0.70710678f);
+            Rect rect = info.Rect;
+            Bounds bounds = new Bounds();
+
             for (int i = 0; i < positions.Count; i++)
             {
                 float sizeFactor = UnityEngine.Random.Range(DecorationScaleMin, DecorationScaleMax);
-                float scaleValue = (sizeFactor - 1f) * BlocksFile.ScaleDivisor;
-                batch.AddItem(
-                    info.Rect,
-                    info.BatchSize,
-                    new Vector2(scaleValue, scaleValue),
-                    positions[i]);
+                Vector2 size = info.BatchSize * MeshReader.GlobalScale * sizeFactor;
+                Vector3 center = positions[i] + Vector3.up * (size.y * 0.5f);
+                int v = i * 4;
+                int t = i * 6;
+
+                vertices[v] = center;
+                vertices[v + 1] = center;
+                vertices[v + 2] = center;
+                vertices[v + 3] = center;
+
+                normals[v] = normal;
+                normals[v + 1] = normal;
+                normals[v + 2] = normal;
+                normals[v + 3] = normal;
+
+                tangents[v] = new Vector4(size.x, size.y, 0f, 1f);
+                tangents[v + 1] = new Vector4(size.x, size.y, 1f, 1f);
+                tangents[v + 2] = new Vector4(size.x, size.y, 0f, 0f);
+                tangents[v + 3] = new Vector4(size.x, size.y, 1f, 0f);
+
+                uvs[v] = new Vector2(rect.x, rect.yMax);
+                uvs[v + 1] = new Vector2(rect.xMax, rect.yMax);
+                uvs[v + 2] = new Vector2(rect.x, rect.y);
+                uvs[v + 3] = new Vector2(rect.xMax, rect.y);
+
+                triangles[t] = v;
+                triangles[t + 1] = v + 1;
+                triangles[t + 2] = v + 2;
+                triangles[t + 3] = v + 3;
+                triangles[t + 4] = v + 2;
+                triangles[t + 5] = v + 1;
+
+                Bounds itemBounds = new Bounds(center, new Vector3(size.x, size.y, size.x));
+                if (i == 0)
+                    bounds = itemBounds;
+                else
+                    bounds.Encapsulate(itemBounds);
             }
-#pragma warning restore 618
+
+            mesh.vertices = vertices;
+            mesh.normals = normals;
+            mesh.tangents = tangents;
+            mesh.uv = uvs;
+            mesh.triangles = triangles;
+            mesh.bounds = bounds;
+            return mesh;
         }
 
         // Internal so loot/wreck billboards can reuse the same unlit, brightened
@@ -291,7 +395,7 @@ namespace DeepWaters
             };
 
             CopyTextureAndTransform(sourceMaterial, material, Uniforms.MainTex);
-            ConfigureUnderwaterDecorationMaterial(material);
+            ConfigureUnderwaterDecorationMaterial(material, sourceMaterial);
             return material;
         }
 
@@ -331,7 +435,7 @@ namespace DeepWaters
             targetMaterial.SetTextureOffset(propertyId, sourceMaterial.GetTextureOffset(propertyId));
         }
 
-        private static void ConfigureUnderwaterDecorationMaterial(Material material)
+        private static void ConfigureUnderwaterDecorationMaterial(Material material, Material sourceMaterial = null)
         {
             if (material == null)
                 return;
@@ -343,7 +447,13 @@ namespace DeepWaters
                 material.SetColor(ColorProperty, UnderwaterDecorationColor);
 
             if (material.HasProperty(CutoffProperty))
-                material.SetFloat(CutoffProperty, 0.5f);
+            {
+                float cutoff = 0.5f;
+                if (sourceMaterial != null && sourceMaterial.HasProperty(CutoffProperty))
+                    cutoff = sourceMaterial.GetFloat(CutoffProperty);
+
+                material.SetFloat(CutoffProperty, cutoff);
+            }
         }
 
         private sealed class OwnedUnderwaterDecorationMaterial : MonoBehaviour
@@ -362,6 +472,25 @@ namespace DeepWaters
             {
                 if (material != null)
                     Destroy(material);
+            }
+        }
+
+        private sealed class OwnedUnderwaterDecorationMesh : MonoBehaviour
+        {
+            private Mesh mesh;
+
+            public void Set(Mesh value)
+            {
+                if (mesh != null && mesh != value)
+                    Destroy(mesh);
+
+                mesh = value;
+            }
+
+            private void OnDestroy()
+            {
+                if (mesh != null)
+                    Destroy(mesh);
             }
         }
 

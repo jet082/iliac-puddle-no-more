@@ -46,7 +46,7 @@ namespace DeepWaters
         private static int SpawnDebris(Vector3 centre, TransientObjectTracker trackedObjects)
         {
             int debrisCount = DeepWaters.Instance.TreasureCove ? ClusterDebrisCount * 2 : ClusterDebrisCount;
-            var rubbleBatches = new Dictionary<Transform, List<DaggerfallBillboardBatch.BasicInfo>>();
+            var rubbleBatches = new Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>>();
 
             for (int i = 0; i < debrisCount; i++)
             {
