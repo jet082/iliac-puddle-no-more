@@ -24,13 +24,12 @@ namespace DeepWaters
         public const int Mover = 4;
         public const int Fog = 5;
         public const int Fish = 6;
-        public const int EnemyPilot = 7;
-        private const int SectionCount = 8;
+        private const int SectionCount = 7;
 
         private static readonly string[] SectionNames =
         {
             "swimDriver", "colliderGate", "swimFixed", "swimAfter",
-            "swimMover", "fogDriver", "fish", "enemyPilot",
+            "swimMover", "fogDriver", "fish",
         };
 
         private const float ReportIntervalSeconds = 10f;

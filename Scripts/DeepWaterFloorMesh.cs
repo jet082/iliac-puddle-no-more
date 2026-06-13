@@ -772,7 +772,6 @@ namespace DeepWaters
             mc.sharedMesh = mesh;
             mc.enabled = true;
             colliderBuildVersion = buildVersion;
-            Physics.SyncTransforms();
 
             // Push to Ignore Raycast so the shore-exit-assist raycast still
             // finds vanilla shore terrain first. The seafloor remains

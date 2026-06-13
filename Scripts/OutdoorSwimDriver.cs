@@ -1525,7 +1525,6 @@ namespace DeepWaters
                 return;
 
             player.transform.position = new Vector3(position.x, minimumY, position.z);
-            Physics.SyncTransforms();
         }
 
         #endregion

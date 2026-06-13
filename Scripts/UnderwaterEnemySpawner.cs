@@ -71,8 +71,6 @@ namespace DeepWaters
         private const float EnemyColumnFractionMin = 0.28f;
         private const float EnemyColumnFractionMax = 0.78f;
         private const int CandidateAttemptsPerSpawn = 8;
-        private const float OutdoorAquaticSwimSpeed = 3.8f;
-        private const float OutdoorAquaticStopDistance = 2.25f;
         private const float TreasureGuardMinDistance = 8f;
         private const float TreasureGuardMaxDistance = 30f;
         private const int MaxTreasureGuardCount = 5;
@@ -360,15 +358,6 @@ namespace DeepWaters
             GameManager gameManager = GameManager.Instance;
             if (motor != null && gameManager != null && gameManager.PlayerEntityBehaviour != null)
                 motor.MakeEnemyHostileToAttacker(gameManager.PlayerEntityBehaviour);
-
-            MobileUnit mobile = enemy.GetComponentInChildren<MobileUnit>();
-            if (mobile != null && mobile.Enemy.Behaviour == MobileBehaviour.Aquatic &&
-                enemy.GetComponent<OutdoorAquaticEnemyPilot>() == null)
-            {
-                enemy.AddComponent<OutdoorAquaticEnemyPilot>();
-            }
-
-            Physics.SyncTransforms();
         }
 
         public static int RollScaledSpawnCount(int fullSpawnCount)
@@ -398,72 +387,6 @@ namespace DeepWaters
             return DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column) &&
                    column.Depth >= MinimumColumnDepth &&
                    position.y <= column.OceanWorldY + 3f;
-        }
-
-        private class OutdoorAquaticEnemyPilot : MonoBehaviour
-        {
-            private CharacterController controller;
-
-            void Awake()
-            {
-                controller = GetComponent<CharacterController>();
-            }
-
-            void Update()
-            {
-                DeepWaterPerf.Begin(DeepWaterPerf.EnemyPilot);
-                try { UpdateCore(); }
-                finally { DeepWaterPerf.End(DeepWaterPerf.EnemyPilot); }
-            }
-
-            private void UpdateCore()
-            {
-                if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
-                    return;
-
-                GameManager gameManager = GameManager.Instance;
-                GameObject player = gameManager != null ? gameManager.PlayerObject : null;
-                if (player == null)
-                    return;
-
-                Vector3 position = transform.position;
-                DeepWaterColumn column;
-                if (!DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column))
-                    return;
-
-                float seafloorWorldY;
-                if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, position.x, position.z, out seafloorWorldY))
-                    return;
-
-                float minY = seafloorWorldY + EnemySeafloorClearance;
-                float maxY = column.OceanWorldY - EnemySurfaceClearance;
-                if (maxY <= minY)
-                    return;
-
-                position.y = Mathf.Clamp(position.y, minY, maxY);
-                Vector3 target = player.transform.position;
-                target.y = Mathf.Clamp(target.y, minY, maxY);
-
-                Vector3 delta = target - position;
-                if (delta.sqrMagnitude <= OutdoorAquaticStopDistance * OutdoorAquaticStopDistance)
-                {
-                    MoveTo(position);
-                    return;
-                }
-
-                Vector3 motion = delta.normalized * OutdoorAquaticSwimSpeed * Time.deltaTime;
-                Vector3 next = position + motion;
-                next.y = Mathf.Clamp(next.y, minY, maxY);
-                MoveTo(next);
-            }
-
-            private void MoveTo(Vector3 worldPosition)
-            {
-                if (controller != null && controller.enabled)
-                    controller.Move(worldPosition - transform.position);
-                else
-                    transform.position = worldPosition;
-            }
         }
 
     }
