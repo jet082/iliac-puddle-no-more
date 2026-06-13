@@ -21,12 +21,7 @@ namespace DeepWaters
     [RequireComponent(typeof(MeshCollider))]
     public class DeepWaterFloorMesh : MonoBehaviour
     {
-        // 65x65 = 4225 verts, 8192 tris per tile. Cell spacing ~12.8m on an
-        // 819m tile. Finer grid (v0.55.43) so the rolling-hill floor reads as
-        // smooth (not faceted into rigid pyramids) and its clipped edge hugs the
-        // carved coastline closely. Heavier MeshCollider cooking, but the
-        // streaming buffer warms tiles ahead so the cost is spread out.
-        public const int VertexGridSize = 65;
+        public const int VertexGridSize = 33;
         private const float WallMinimumDrop = 0.25f;
         private const float ShoreWallSurfaceInset = 0.20f;
         private const float ShoreWallBottomOverlap = 0.10f;
@@ -36,11 +31,9 @@ namespace DeepWaters
         // (shared per-perimeter-vertex bottoms), with a run that widens as the
         // drop deepens so it grades in like natural seabed instead of standing
         // up as a wall.
-        private const float SkirtSlopeTangent = 0.3f;        // ~17deg target grade: run = drop / this
-        private const float SkirtMinWidthMeters = 12.0f;
-        private const float SkirtMaxWidthMeters = 150.0f;
-        private const float SkirtWidthNoisePeriod = 70.0f;  // undulate the toe so it wanders naturally
-        private const float SkirtWidthNoiseAmount = 0.35f;  // +/-35% width variation
+        private const float SkirtSlopeTangent = 0.6f;
+        private const float SkirtMinWidthMeters = 6.0f;
+        private const float SkirtMaxWidthMeters = 40.0f;
 
         private Mesh mesh;
         private MeshCollider meshCollider;
@@ -589,10 +582,7 @@ namespace DeepWaters
                 seafloorTop = meshTop;
             float drop = Mathf.Max(0f, topY - seafloorTop);
 
-            float noise01 = SkirtWidthNoise01(worldX, worldZ);
-            float widthScale = 1f + (noise01 * 2f - 1f) * SkirtWidthNoiseAmount;
-            float skirtWidth = Mathf.Clamp((drop / SkirtSlopeTangent) * widthScale,
-                                           SkirtMinWidthMeters, SkirtMaxWidthMeters);
+            float skirtWidth = Mathf.Clamp(drop / SkirtSlopeTangent, SkirtMinWidthMeters, SkirtMaxWidthMeters);
 
             float bottomLocalX = Mathf.Clamp(localX + inward.x * skirtWidth, 0f, tileWorldSize);
             float bottomLocalZ = Mathf.Clamp(localZ + inward.y * skirtWidth, 0f, tileWorldSize);
@@ -645,14 +635,6 @@ namespace DeepWaters
             float h1 = Mathf.Lerp(heights[z0 + 1, x0], heights[z0 + 1, x0 + 1], tx);
             float h = Mathf.Lerp(h0, h1, tz);
             return (h / oceanThreshold) * oceanLocalY;
-        }
-
-        private float SkirtWidthNoise01(float worldX, float worldZ)
-        {
-            float noiseX, noiseZ;
-            tileData.GetNoiseWorldCoords(worldX, worldZ, out noiseX, out noiseZ);
-            float freq = 1f / Mathf.Max(1f, SkirtWidthNoisePeriod);
-            return Mathf.PerlinNoise(noiseX * freq + 13.7f, noiseZ * freq - 4.2f);
         }
 
         private struct SkirtEdge

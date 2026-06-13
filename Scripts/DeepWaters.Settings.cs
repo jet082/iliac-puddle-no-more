@@ -31,8 +31,6 @@ namespace DeepWaters
         private const float MaxSwimSpeedMultiplier = 30.0f;
         private const float DefaultEncounterMinSpawnDistance = 35f;
         private const float DefaultEncounterMaxSpawnDistance = 55f;
-        private const float ClearWaterEncounterMinSpawnDistance = 90f;
-        private const float ClearWaterEncounterMaxSpawnDistance = 180f;
         private const float EncounterImmediateViewDistance = 55f;
 
         public float WaterDepth { get; private set; } = 200f;
@@ -100,12 +98,12 @@ namespace DeepWaters
 
         public float EncounterSpawnMinDistance
         {
-            get { return Mathf.Lerp(DefaultEncounterMinSpawnDistance, ClearWaterEncounterMinSpawnDistance, EncounterVisibilityExpansion); }
+            get { return DefaultEncounterMinSpawnDistance; }
         }
 
         public float EncounterSpawnMaxDistance
         {
-            get { return Mathf.Lerp(DefaultEncounterMaxSpawnDistance, ClearWaterEncounterMaxSpawnDistance, EncounterVisibilityExpansion); }
+            get { return DefaultEncounterMaxSpawnDistance; }
         }
 
         public float EncounterSpawnViewSafetyDistance
@@ -170,19 +168,6 @@ namespace DeepWaters
             EnableSwimStroke = GetBoolSetting(s, "EnableSwimStroke");
         }
 
-        private float EncounterVisibilityExpansion
-        {
-            get
-            {
-                float surfaceClarity = Mathf.Max(
-                    SurfaceClarity01(WaterSurfaceTopTransparency),
-                    SurfaceClarity01(WaterSurfaceBottomTransparency));
-                float fogRange = AboveMidpoint01(UnderwaterFogDistance);
-                float fogThinness = Mathf.Clamp01((SliderMidpoint - UnderwaterFogStrength) / SliderMidpoint);
-                return Mathf.Clamp01(Mathf.Max(Mathf.Max(surfaceClarity, fogRange), fogThinness));
-            }
-        }
-
         private static float GetScaledSliderSetting(ModSettings settings, string key, float valueAtMidpoint)
         {
             return GetScaledSliderValue(GetFloatSetting(settings, key), valueAtMidpoint);
@@ -202,16 +187,6 @@ namespace DeepWaters
                 ? Mathf.Lerp(1f, 0.98f, slider / 0.1f)
                 : Mathf.Lerp(0.98f, 0f, (slider - 0.1f) / 0.9f);
             return Mathf.Lerp(transparentAlpha, opaqueAlpha, opacity01);
-        }
-
-        private static float SurfaceClarity01(float sliderValue)
-        {
-            return Mathf.Clamp01(sliderValue);
-        }
-
-        private static float AboveMidpoint01(float sliderValue)
-        {
-            return Mathf.Clamp01((Mathf.Clamp01(sliderValue) - SliderMidpoint) / SliderMidpoint);
         }
 
         private static float FogDistanceSliderToMultiplier(float sliderValue)

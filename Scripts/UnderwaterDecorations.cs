@@ -15,15 +15,13 @@ namespace DeepWaters
     /// </summary>
     public static class UnderwaterDecorations
     {
-        private const int MinimumPopulateRadius = 2;
-        private const int MaxPopulateRadius = 3;
+        private const int MinimumPopulateRadius = 1;
+        private const int MaxPopulateRadius = 1;
         private const int MaxTilesPerWorkCycle = 1;
-        private const float PlayerAreaRefreshIntervalSeconds = 2f;
 
         private static readonly Queue<DaggerfallTerrain> workQueue = new Queue<DaggerfallTerrain>();
         private static readonly HashSet<DaggerfallTerrain> queuedTerrains = new HashSet<DaggerfallTerrain>();
         private static GameObject workerObject;
-        private static float nextPlayerAreaRefreshTime;
         private static bool installed;
 
         private class DecorationMarker : MonoBehaviour
@@ -47,13 +45,6 @@ namespace DeepWaters
 
             void Update()
             {
-                if (DeepWaterRuntime.CanRunLightRuntimeWork &&
-                    Time.time >= nextPlayerAreaRefreshTime)
-                {
-                    nextPlayerAreaRefreshTime = Time.time + PlayerAreaRefreshIntervalSeconds;
-                    EnqueueLoadedPlayerArea();
-                }
-
                 ProcessWorkQueue();
             }
 
@@ -105,7 +96,6 @@ namespace DeepWaters
 
             DeepWaterRuntime.OnTransientReset += ResetRuntimeState;
             DaggerfallTerrain.OnPromoteTerrainData += HandlePromote;
-            DeepWaterFloorBuilder.OnFloorRefreshed += HandleFloorRefreshed;
             PlayerGPS.OnMapPixelChanged += HandleMapPixelChanged;
             installed = true;
         }
@@ -123,7 +113,6 @@ namespace DeepWaters
         {
             workQueue.Clear();
             queuedTerrains.Clear();
-            nextPlayerAreaRefreshTime = 0f;
 
             DecorationMarker[] markers = Object.FindObjectsOfType<DecorationMarker>();
             for (int i = 0; i < markers.Length; i++)
@@ -146,7 +135,6 @@ namespace DeepWaters
                 return;
 
             DeepWaterTerrainLookup.Clear();
-            nextPlayerAreaRefreshTime = 0f;
             EnqueueAroundMapPixel(mapPixel);
         }
 
@@ -210,27 +198,6 @@ namespace DeepWaters
                     return;
             }
             
-            Enqueue(sender);
-        }
-
-        private static void HandleFloorRefreshed(DaggerfallTerrain sender)
-        {
-            if (sender == null)
-                return;
-
-            if (!DeepWaterRuntime.CanRunLightRuntimeWork)
-                return;
-
-            var pgps = GameManager.Instance?.PlayerGPS;
-            if (pgps != null)
-            {
-                int populateRadius = GetPopulateRadius(GameManager.Instance?.StreamingWorld);
-                int dx = sender.MapPixelX - pgps.CurrentMapPixel.X;
-                int dy = sender.MapPixelY - pgps.CurrentMapPixel.Y;
-                if (System.Math.Abs(dx) > populateRadius || System.Math.Abs(dy) > populateRadius)
-                    return;
-            }
-
             Enqueue(sender);
         }
 

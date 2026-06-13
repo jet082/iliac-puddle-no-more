@@ -16,17 +16,17 @@ namespace DeepWaters
         public static readonly int[] CustomItemTemplateIndices = PassiveFishSpeciesCatalog.CustomItemTemplateIndices;
         public const ItemGroups FishItemGroup = PassiveFishSpeciesCatalog.FishItemGroup;
 
-        private const int FullFishCount = UnderwaterEnemySpawner.FullSpawnCount * 3;
-        private const int NormalMaxLiveFish = 72;
-        private const int FishParadiseMaxLiveFish = 180;
-        private const int LocationMaxLiveFish = 36;
-        private const int LocationFishParadiseMaxLiveFish = 72;
+        private const int FullFishCount = UnderwaterEnemySpawner.FullSpawnCount * 2;
+        private const int NormalMaxLiveFish = 36;
+        private const int FishParadiseMaxLiveFish = 72;
+        private const int LocationMaxLiveFish = 24;
+        private const int LocationFishParadiseMaxLiveFish = 36;
         private const float FishParadiseSpawnMultiplier = 4f;
         private const float FishParadisePulseIntervalMultiplier = 0.5f;
         private const float SpawnViewportMargin = 0.08f;
         private const float MinFishPulseIntervalSeconds = 10f;
         private const float FailedFishRetrySeconds = 4f;
-        private const float DespawnDistance = 140f;
+        private const float DespawnDistance = 100f;
         private const float ShoreFishPulseMultiplier = 0.5f;
 
         private static readonly TransientObjectTracker liveFish = new TransientObjectTracker();
@@ -303,4 +303,3 @@ namespace DeepWaters
     }
 
 }
-

@@ -101,9 +101,10 @@ namespace DeepWaters
         // Pure transform/flag math, so the set cannot collapse during the
         // map-pixel streaming stalls that starve per-frame water lookups, and
         // no swim speed (multiplier + strokes) can outrun it between frames.
-        private const float ColliderGateTileProximityMeters = 250f;
+        private const float ColliderGateTileProximityMeters = 96f;
+        private const float ColliderGateRefreshIntervalSeconds = 0.15f;
         private const float ColliderGateEjectGuardMargin = 0.5f;
-        private const float ColliderGateEjectGuardPaddingMeters = 300f;
+        private const float ColliderGateEjectGuardPaddingMeters = 96f;
 
         // Boats.
         private const float BoatBoardingSurfaceClearance = 1.10f;
@@ -927,6 +928,7 @@ namespace DeepWaters
         /// vote in the swim-state decision.
         /// </summary>
         private int gateLastRunFrame = -1;
+        private float nextGateRefreshTime;
         private int fixedStateFrame = -1;
         private float fixedOceanSurfaceY;
         private bool fixedIsSwimming;
@@ -939,7 +941,12 @@ namespace DeepWaters
             // is enough (the second run used to double the gate's cost).
             if (gateLastRunFrame == Time.frameCount)
                 return;
+
+            if (Time.realtimeSinceStartup < nextGateRefreshTime)
+                return;
+
             gateLastRunFrame = Time.frameCount;
+            nextGateRefreshTime = Time.realtimeSinceStartup + ColliderGateRefreshIntervalSeconds;
 
             DeepWaterPerf.Begin(DeepWaterPerf.Gate);
             try { UpdateWaterTerrainColliderGateCore(oceanSurfaceY); }

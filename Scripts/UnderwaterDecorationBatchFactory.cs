@@ -33,6 +33,8 @@ namespace DeepWaters
         private static bool loggedMissingUnderwaterDecorationShader;
         private static readonly int ColorProperty = Shader.PropertyToID("_Color");
         private static readonly int CutoffProperty = Shader.PropertyToID("_Cutoff");
+        private static readonly Dictionary<Material, Material> underwaterMaterialCache = new Dictionary<Material, Material>();
+        private static readonly HashSet<Material> cachedUnderwaterMaterials = new HashSet<Material>();
 
         public static GameObject Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {
@@ -372,18 +374,19 @@ namespace DeepWaters
             }
 
             renderer.sharedMaterial = underwaterMaterial;
-
-            var owner = renderer.GetComponent<OwnedUnderwaterDecorationMaterial>();
-            if (owner == null)
-                owner = renderer.gameObject.AddComponent<OwnedUnderwaterDecorationMaterial>();
-
-            owner.Set(underwaterMaterial);
         }
 
         private static Material CreateUnderwaterDecorationMaterial(Material sourceMaterial)
         {
             if (sourceMaterial == null)
                 return null;
+
+            if (cachedUnderwaterMaterials.Contains(sourceMaterial))
+                return sourceMaterial;
+
+            Material cached;
+            if (underwaterMaterialCache.TryGetValue(sourceMaterial, out cached) && cached != null)
+                return cached;
 
             Shader shader = LoadUnderwaterDecorationShader();
             if (shader == null)
@@ -396,6 +399,8 @@ namespace DeepWaters
 
             CopyTextureAndTransform(sourceMaterial, material, Uniforms.MainTex);
             ConfigureUnderwaterDecorationMaterial(material, sourceMaterial);
+            underwaterMaterialCache[sourceMaterial] = material;
+            cachedUnderwaterMaterials.Add(material);
             return material;
         }
 
@@ -453,25 +458,6 @@ namespace DeepWaters
                     cutoff = sourceMaterial.GetFloat(CutoffProperty);
 
                 material.SetFloat(CutoffProperty, cutoff);
-            }
-        }
-
-        private sealed class OwnedUnderwaterDecorationMaterial : MonoBehaviour
-        {
-            private Material material;
-
-            public void Set(Material value)
-            {
-                if (material != null && material != value)
-                    Destroy(material);
-
-                material = value;
-            }
-
-            private void OnDestroy()
-            {
-                if (material != null)
-                    Destroy(material);
             }
         }
 

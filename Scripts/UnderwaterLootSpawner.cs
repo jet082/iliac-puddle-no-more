@@ -28,15 +28,15 @@ namespace DeepWaters
         private const float LootPulseDistance = 90f;
         private const float MinPulseIntervalSeconds = 8f;
         private const float FailedPulseRetrySeconds = 3f;
-        private const float DespawnDistance = 220f;
+        private const float DespawnDistance = 140f;
 
         // Rate 1.0 means up to this many stray finds per pulse. Fractional
         // counts are rolled, matching the enemy spawner's smooth scaling style.
         private const int FullStrayLootPerPulse = 2;
         private const float NormalLootMultiplier = 2f;
         private const float TreasureCoveStrayMultiplier = 3f;
-        private const int MaxNormalStrayLootPerPulse = 8;
-        private const int MaxCoveStrayLootPerPulse = 12;
+        private const int MaxNormalStrayLootPerPulse = 4;
+        private const int MaxCoveStrayLootPerPulse = 6;
 
         // Treasure clusters are event-like, so the setting maps directly to a
         // per-pulse chance rather than a count.
@@ -48,12 +48,6 @@ namespace DeepWaters
         private const float LooseLootDebrisMinRadius = 1.5f;
         private const float LooseLootDebrisMaxRadius = 5.0f;
         private const int LooseLootDebrisSpotAttempts = 4;
-        private const float SpawnVisibilityMultiplier = 1.25f;
-        private const float ClusterVisibilityMargin = 24f;
-        private const float SpawnRangeVisibilityMultiplier = 0.50f;
-        private const float MinDynamicSpawnRange = 30f;
-        private const float DespawnVisibilityMultiplier = 2.35f;
-        private const float DespawnVisibilityMargin = 90f;
 
         // Height and placement checks.
         private const float SurfaceLootOriginClearance = 8f;
@@ -322,20 +316,13 @@ namespace DeepWaters
 
         private static void GetLootSpawnDistanceRange(out float minDistance, out float maxDistance)
         {
-            float visionDistance = DeepWaterWorld.UnderwaterVisionDistance;
-            minDistance = Mathf.Max(
-                UnderwaterLootPlacement.MinSpawnDistance,
-                visionDistance * SpawnVisibilityMultiplier + ClusterVisibilityMargin);
-
-            float dynamicRange = Mathf.Max(MinDynamicSpawnRange, visionDistance * SpawnRangeVisibilityMultiplier);
-            maxDistance = Mathf.Max(UnderwaterLootPlacement.MaxSpawnDistance, minDistance + dynamicRange);
+            minDistance = UnderwaterLootPlacement.MinSpawnDistance;
+            maxDistance = UnderwaterLootPlacement.MaxSpawnDistance;
         }
 
         private static float GetLootDespawnDistance()
         {
-            return Mathf.Max(
-                DespawnDistance,
-                DeepWaterWorld.UnderwaterVisionDistance * DespawnVisibilityMultiplier + DespawnVisibilityMargin);
+            return DespawnDistance;
         }
 
     }

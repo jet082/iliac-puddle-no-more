@@ -21,7 +21,7 @@ namespace DeepWaters
         private const string TopSurfaceChildName = "DeepWaters_Surface_Top";
         private const string UndersideSurfaceChildName = "DeepWaters_Surface_Underside";
         private const string GeneratedMeshName = "DeepWaters.SurfaceMesh";
-        private const int SurfaceGridResolution = 64;
+        private const int SurfaceGridResolution = 16;
 
         private static bool installed;
 
@@ -38,11 +38,17 @@ namespace DeepWaters
         {
             DaggerfallTerrain[] terrains = Object.FindObjectsOfType<DaggerfallTerrain>();
             for (int i = 0; i < terrains.Length; i++)
-            {
-                Terrain terrain = terrains[i].GetComponent<Terrain>();
-                if (terrain != null && terrain.terrainData != null)
-                    HandlePromoteCore(terrains[i], terrain.terrainData, false);
-            }
+                RefreshLoadedSurface(terrains[i]);
+        }
+
+        public static void RefreshLoadedSurface(DaggerfallTerrain dfTerrain)
+        {
+            if (dfTerrain == null)
+                return;
+
+            Terrain terrain = dfTerrain.GetComponent<Terrain>();
+            if (terrain != null && terrain.terrainData != null)
+                HandlePromoteCore(dfTerrain, terrain.terrainData, false);
         }
 
         private static void HandlePromote(DaggerfallTerrain sender, TerrainData terrainData)
@@ -260,7 +266,6 @@ namespace DeepWaters
             mesh.SetUVs(0, uvs);
             mesh.SetTriangles(triangles, 0);
             mesh.RecalculateBounds();
-            mesh.RecalculateNormals();
             return mesh;
         }
 

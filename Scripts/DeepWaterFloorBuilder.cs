@@ -74,11 +74,17 @@ namespace DeepWaters
         {
             DaggerfallTerrain[] terrains = Object.FindObjectsOfType<DaggerfallTerrain>();
             for (int i = 0; i < terrains.Length; i++)
-            {
-                Terrain unityTerrain = terrains[i].GetComponent<Terrain>();
-                if (unityTerrain != null && unityTerrain.terrainData != null)
-                    HandlePromote(terrains[i], unityTerrain.terrainData, force);
-            }
+                RefreshLoadedTile(terrains[i], force);
+        }
+
+        public static void RefreshLoadedTile(DaggerfallTerrain dfTerrain, bool force = false)
+        {
+            if (dfTerrain == null)
+                return;
+
+            Terrain unityTerrain = dfTerrain.GetComponent<Terrain>();
+            if (unityTerrain != null && unityTerrain.terrainData != null)
+                HandlePromote(dfTerrain, unityTerrain.terrainData, force);
         }
 
         // API surface used by DeepWaterStreamingBuffer to warm the
