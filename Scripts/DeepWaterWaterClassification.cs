@@ -24,6 +24,15 @@ namespace DeepWaters
             return HeightmapHasWater(mapData.heightmapSamples);
         }
 
+        public static bool MapDataFullySubmerged(MapPixelData mapData)
+        {
+            float waterThreshold;
+            if (!TryGetWaterThreshold(out waterThreshold))
+                return false;
+
+            return HeightmapFullyBelowThreshold(mapData.heightmapSamples, waterThreshold);
+        }
+
         public static bool IsLocalPointWater(MapPixelData mapData, float fracX, float fracZ)
         {
             float carveWaterThreshold;
@@ -44,6 +53,32 @@ namespace DeepWaters
         // removed; anything narrower leaves a bare seabed band along shores.
         public static bool CellContainsPureWaterTile(MapPixelData mapData, int cellX, int cellY, int cellResolution)
         {
+            return CellContainsTileMatching(mapData, cellX, cellY, cellResolution, true);
+        }
+
+        public static bool CellContainsWaterTile(MapPixelData mapData, int cellX, int cellY, int cellResolution)
+        {
+            return CellContainsTileMatching(mapData, cellX, cellY, cellResolution, false);
+        }
+
+        public static bool IsLocalPointPureWaterTile(MapPixelData mapData, float fracX, float fracZ)
+        {
+            byte[,] tilemap = mapData.tilemapSamples;
+            if (tilemap == null)
+                return false;
+
+            int rows = tilemap.GetLength(0);
+            int cols = tilemap.GetLength(1);
+            if (rows <= 0 || cols <= 0)
+                return false;
+
+            int x = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracX) * cols), 0, cols - 1);
+            int y = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracZ) * rows), 0, rows - 1);
+            return (tilemap[y, x] & 0x3F) == 0;
+        }
+
+        private static bool CellContainsTileMatching(MapPixelData mapData, int cellX, int cellY, int cellResolution, bool pureOnly)
+        {
             byte[,] tilemap = mapData.tilemapSamples;
             if (tilemap == null || cellResolution <= 0)
                 return false;
@@ -62,7 +97,7 @@ namespace DeepWaters
             {
                 for (int x = x0; x <= x1; x++)
                 {
-                    if ((tilemap[y, x] & 0x3F) == 0)
+                    if (pureOnly ? (tilemap[y, x] & 0x3F) == 0 : TileValueContainsWater(tilemap[y, x]))
                         return true;
                 }
             }
@@ -80,6 +115,16 @@ namespace DeepWaters
             float waterThreshold;
             if (!TryGetWaterThreshold(out waterThreshold))
                 return false;
+
+            return HeightmapCellBelowThreshold(
+                mapData.heightmapSamples, cellX, cellY, cellResolution, waterThreshold);
+        }
+
+        public static bool IsCellVisuallyWet(MapPixelData mapData, int cellX, int cellY, int cellResolution)
+        {
+            float waterThreshold;
+            if (!TryGetVisualWaterThreshold(out waterThreshold))
+                return IsCellPartiallySubmerged(mapData, cellX, cellY, cellResolution);
 
             return HeightmapCellBelowThreshold(
                 mapData.heightmapSamples, cellX, cellY, cellResolution, waterThreshold);
@@ -177,6 +222,21 @@ namespace DeepWaters
             }
 
             return false;
+        }
+
+        private static bool HeightmapFullyBelowThreshold(float[,] heights, float threshold)
+        {
+            if (heights == null)
+                return false;
+
+            int rows = heights.GetLength(0);
+            int cols = heights.GetLength(1);
+            for (int y = 0; y < rows; y++)
+                for (int x = 0; x < cols; x++)
+                    if (heights[y, x] > threshold)
+                        return false;
+
+            return rows > 0 && cols > 0;
         }
 
         private static bool HeightmapPointBelowThreshold(

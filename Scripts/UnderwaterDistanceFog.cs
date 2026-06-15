@@ -41,6 +41,7 @@ namespace DeepWaters
             float oceanSurfaceY;
             bool underwaterPresentation = TryGetUnderwaterPresentation(gameManager, gameManager.MainCamera, out oceanSurfaceY);
             SetUnderwaterShaderGlobals(underwaterPresentation, oceanSurfaceY);
+            WaterSurfaceResources.RefreshDynamicMaterialSettings();
 
             if (ShouldRequireDepthTexture(gameManager))
                 gameManager.MainCamera.depthTextureMode |= DepthTextureMode.Depth;

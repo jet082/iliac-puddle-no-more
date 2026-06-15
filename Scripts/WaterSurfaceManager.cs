@@ -21,7 +21,11 @@ namespace DeepWaters
         private const string TopSurfaceChildName = "DeepWaters_Surface_Top";
         private const string UndersideSurfaceChildName = "DeepWaters_Surface_Underside";
         private const string GeneratedMeshName = "DeepWaters.SurfaceMesh";
-        private const int SurfaceGridResolution = 16;
+        private static readonly bool RenderFullWaterTileSurface = true;
+        private const int SurfaceGridResolution = 128;
+        private const int ShorelineSeedScanCells = 32;
+        private const int ShorelineSurfaceFeatherCells = 4;
+        private const float SurfaceRenderYOffset = 0.03f;
 
         private static bool installed;
 
@@ -75,7 +79,7 @@ namespace DeepWaters
 
                 if (DeepWaters.Instance == null ||
                     !DeepWaters.Instance.SpawnWaterSurfaces ||
-                    !HasWaterTile(sender.MapData))
+                    !ShouldHaveSurface(sender))
                 {
                     RemoveExisting(sender);
                     return;
@@ -94,13 +98,6 @@ namespace DeepWaters
             {
                 DeepWaterRuntime.LogProfile(profile, "surface-promote", sender);
             }
-        }
-
-        // Use the same promoted tilemap/heightmap test as the hole builder so
-        // the visible water plane and carved seabed cover the same map pixels.
-        private static bool HasWaterTile(MapPixelData mapData)
-        {
-            return DeepWaterWaterClassification.MapDataHasWater(mapData);
         }
 
         private static void EnsureVisibleSurface(DaggerfallTerrain terrain, TerrainData terrainData, Mesh surfaceMesh)
@@ -135,7 +132,7 @@ namespace DeepWaters
             ReplaceSurfaceMesh(topFilter, undersideFilter, surfaceMesh);
 
             WaterSurfaceResources.ApplyMaterialSettings();
-            visualGO.transform.localPosition = new Vector3(0f, oceanY, 0f);
+            visualGO.transform.localPosition = new Vector3(0f, oceanY + SurfaceRenderYOffset, 0f);
             visualGO.transform.localScale    = Vector3.one;
             visualGO.transform.localRotation = Quaternion.identity;
         }
@@ -190,91 +187,466 @@ namespace DeepWaters
             int n = SurfaceGridResolution;
             float sizeX = terrainData.size.x;
             float sizeZ = terrainData.size.z;
+            bool hasOwnWater = DeepWaterWaterClassification.MapDataHasWater(terrain.MapData);
+            bool hasBakedWater =
+                DeepWaterDistanceBake.IsLoaded &&
+                DeepWaterDistanceBake.MapPixelHasWaterCells(terrain.MapPixelX, terrain.MapPixelY);
 
-            var vertices = new List<Vector3>(n * n * 4);
-            var uvs = new List<Vector2>(n * n * 4);
-            var triangles = new List<int>(n * n * 6);
+            var vertices = new List<Vector3>();
+            var uvs = new List<Vector2>();
+            var triangles = new List<int>();
 
-            int mapPixelX = terrain.MapPixelX;
-            int mapPixelY = terrain.MapPixelY;
-            bool useBakeMask = DeepWaterDistanceBake.HasFineWaterMask;
+            if (ShouldRenderFullTileSurface(terrain, hasOwnWater))
+            {
+                AppendSurfaceQuad(
+                    0f, 1f,
+                    0f, 1f,
+                    sizeX,
+                    sizeZ,
+                    vertices,
+                    uvs,
+                    triangles);
+                return CreateSurfaceMesh(vertices, uvs, triangles);
+            }
 
-            // Ocean-connected tiles get the terrain water-texel clip (the
-            // painted sea-level water is discarded by the clip shader), so the
-            // surface film must cover every cell containing a pure-water tile —
-            // the exact area the clip uncovered. Anything narrower shows a bare
-            // seabed band between the film's edge and the shoreline. Other
-            // tiles (inland lakes/rivers, never clipped) keep the conservative
-            // legacy criteria so their painted vanilla water stays untouched.
+            bool[,] cells = new bool[n, n];
+            bool[,] used = new bool[n, n];
             DeepWaterTileData tile = terrain.GetComponent<DeepWaterTileData>();
-            bool matchWaterTexelClip = tile != null && tile.IsOceanConnected && tile.HasDistanceField;
 
             for (int z = 0; z < n; z++)
             {
-                float fracZ0 = z / (float)n;
-                float fracZ1 = (z + 1) / (float)n;
-                float fracZMid = (z + 0.5f) / n;
                 for (int x = 0; x < n; x++)
                 {
-                    float fracX0 = x / (float)n;
-                    float fracX1 = (x + 1) / (float)n;
-                    float fracXMid = (x + 0.5f) / n;
+                    cells[z, x] = (hasOwnWater || hasBakedWater) &&
+                        IsSurfaceCellWater(terrain, terrainData, tile, x, z, n);
+                }
+            }
 
-                    // Carve-aligned coverage (partially submerged + bake-carved):
-                    // film over every cell whose ground dips below the
-                    // waterline. Cells fully above the surface get no film;
-                    // ground poking above the film occludes it via the depth
-                    // test, so the waterline follows the terrain/ocean
-                    // intersection without bare shore bands.
-                    bool carveAligned =
-                        DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, fracXMid, fracZMid) &&
-                        (!useBakeMask || DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracXMid, fracZMid)) &&
-                        DeepWaterWaterClassification.IsCellPartiallySubmerged(terrain.MapData, x, z, n);
+            AddNeighborWaterConnectedShoreline(terrain, cells, n);
+            AddLocalShorelineFeather(terrain, cells, n);
 
-                    // Clip-aligned coverage: on clipped (ocean-connected) tiles
-                    // the film must also cover every pure-water texel whose
-                    // painted vanilla water the clip shader removed, or a bare
-                    // band appears along the shoreline.
-                    bool clipAligned = matchWaterTexelClip &&
-                        DeepWaterWaterClassification.CellContainsPureWaterTile(terrain.MapData, x, z, n);
-
-                    if (!carveAligned && !clipAligned)
+            for (int z = 0; z < n; z++)
+            {
+                for (int x = 0; x < n; x++)
+                {
+                    if (!cells[z, x] || used[z, x])
                         continue;
 
-                    float x0 = fracX0 * sizeX;
-                    float x1 = fracX1 * sizeX;
-                    float z0 = fracZ0 * sizeZ;
-                    float z1 = fracZ1 * sizeZ;
+                    int width = 1;
+                    while (x + width < n && cells[z, x + width] && !used[z, x + width])
+                        width++;
 
-                    int start = vertices.Count;
-                    vertices.Add(new Vector3(x0, 0f, z0));
-                    vertices.Add(new Vector3(x1, 0f, z0));
-                    vertices.Add(new Vector3(x1, 0f, z1));
-                    vertices.Add(new Vector3(x0, 0f, z1));
+                    int height = 1;
+                    bool canGrow = true;
+                    while (z + height < n && canGrow)
+                    {
+                        for (int xx = x; xx < x + width; xx++)
+                        {
+                            if (!cells[z + height, xx] || used[z + height, xx])
+                            {
+                                canGrow = false;
+                                break;
+                            }
+                        }
 
-                    uvs.Add(new Vector2(fracX0, fracZ0));
-                    uvs.Add(new Vector2(fracX1, fracZ0));
-                    uvs.Add(new Vector2(fracX1, fracZ1));
-                    uvs.Add(new Vector2(fracX0, fracZ1));
+                        if (canGrow)
+                            height++;
+                    }
 
-                    triangles.Add(start);
-                    triangles.Add(start + 2);
-                    triangles.Add(start + 1);
-                    triangles.Add(start);
-                    triangles.Add(start + 3);
-                    triangles.Add(start + 2);
+                    for (int zz = z; zz < z + height; zz++)
+                        for (int xx = x; xx < x + width; xx++)
+                            used[zz, xx] = true;
+
+                    AppendSurfaceQuad(
+                        x / (float)n,
+                        (x + width) / (float)n,
+                        z / (float)n,
+                        (z + height) / (float)n,
+                        sizeX,
+                        sizeZ,
+                        vertices,
+                        uvs,
+                        triangles);
                 }
             }
 
             if (vertices.Count == 0)
                 return null;
 
+            return CreateSurfaceMesh(vertices, uvs, triangles);
+        }
+
+        private static bool ShouldRenderFullTileSurface(DaggerfallTerrain terrain, bool hasOwnWater)
+        {
+            if (!RenderFullWaterTileSurface || !hasOwnWater || terrain == null)
+                return false;
+
+            if (!DeepWaterDistanceBake.IsLoaded)
+                return true;
+
+            if (!DeepWaterDistanceBake.MapPixelHasWaterCells(terrain.MapPixelX, terrain.MapPixelY) ||
+                DeepWaterDistanceBake.MapPixelHasLandCells(terrain.MapPixelX, terrain.MapPixelY))
+                return false;
+
+            return DeepWaterWaterClassification.MapDataFullySubmerged(terrain.MapData);
+        }
+
+        private static bool ShouldHaveSurface(DaggerfallTerrain terrain)
+        {
+            if (terrain == null)
+                return false;
+
+            if (DeepWaterWaterClassification.MapDataHasWater(terrain.MapData))
+                return true;
+
+            if (!DeepWaterDistanceBake.IsLoaded)
+                return false;
+
+            int px = terrain.MapPixelX;
+            int py = terrain.MapPixelY;
+            return DeepWaterDistanceBake.MapPixelHasWaterCells(px, py) ||
+                   DeepWaterDistanceBake.MapPixelHasWaterCells(px - 1, py) ||
+                   DeepWaterDistanceBake.MapPixelHasWaterCells(px + 1, py) ||
+                   DeepWaterDistanceBake.MapPixelHasWaterCells(px, py - 1) ||
+                   DeepWaterDistanceBake.MapPixelHasWaterCells(px, py + 1);
+        }
+
+        private static bool IsSurfaceCellWater(
+            DaggerfallTerrain terrain,
+            TerrainData terrainData,
+            DeepWaterTileData tile,
+            int cellX,
+            int cellZ,
+            int resolution)
+        {
+            if (terrain == null ||
+                terrainData == null)
+            {
+                return false;
+            }
+
+            if (CellContainsPromotedClippedWaterTile(terrain, cellX, cellZ, resolution) ||
+                DeepWaterWaterClassification.CellContainsWaterTile(terrain.MapData, cellX, cellZ, resolution))
+                return true;
+
+            if (!DeepWaterWaterClassification.IsCellVisuallyWet(terrain.MapData, cellX, cellZ, resolution))
+                return false;
+
+            float x0 = cellX / (float)resolution;
+            float x1 = (cellX + 1) / (float)resolution;
+            float z0 = cellZ / (float)resolution;
+            float z1 = (cellZ + 1) / (float)resolution;
+            if (IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.5f), Mathf.Lerp(z0, z1, 0.5f)) ||
+                IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.25f), Mathf.Lerp(z0, z1, 0.25f)) ||
+                IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.75f), Mathf.Lerp(z0, z1, 0.25f)) ||
+                IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.25f), Mathf.Lerp(z0, z1, 0.75f)) ||
+                IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.75f), Mathf.Lerp(z0, z1, 0.75f)))
+            {
+                return true;
+            }
+
+            return IsSurfaceSampleWater(terrain, terrainData, tile, Mathf.Lerp(x0, x1, 0.25f), Mathf.Lerp(z0, z1, 0.25f)) ||
+                   IsSurfaceSampleWater(terrain, terrainData, tile, Mathf.Lerp(x0, x1, 0.75f), Mathf.Lerp(z0, z1, 0.25f)) ||
+                   IsSurfaceSampleWater(terrain, terrainData, tile, Mathf.Lerp(x0, x1, 0.25f), Mathf.Lerp(z0, z1, 0.75f)) ||
+                   IsSurfaceSampleWater(terrain, terrainData, tile, Mathf.Lerp(x0, x1, 0.75f), Mathf.Lerp(z0, z1, 0.75f));
+        }
+
+        private static bool IsBakedSurfaceWater(DaggerfallTerrain terrain, float fracX, float fracZ)
+        {
+            return terrain != null &&
+                DeepWaterDistanceBake.IsLoaded &&
+                DeepWaterDistanceBake.IsWaterAt(terrain.MapPixelX, terrain.MapPixelY, fracX, fracZ);
+        }
+
+        private static bool CellContainsPromotedClippedWaterTile(
+            DaggerfallTerrain terrain,
+            int cellX,
+            int cellZ,
+            int resolution)
+        {
+            if (terrain == null || terrain.TileMap == null || resolution <= 0)
+                return false;
+
+            Color32[] tileMap = terrain.TileMap;
+            int dim = Mathf.RoundToInt(Mathf.Sqrt(tileMap.Length));
+            if (dim <= 0 || dim * dim != tileMap.Length)
+                return false;
+
+            int x0 = Mathf.Clamp(cellX * dim / resolution, 0, dim - 1);
+            int x1 = Mathf.Clamp(((cellX + 1) * dim - 1) / resolution, 0, dim - 1);
+            int z0 = Mathf.Clamp(cellZ * dim / resolution, 0, dim - 1);
+            int z1 = Mathf.Clamp(((cellZ + 1) * dim - 1) / resolution, 0, dim - 1);
+            bool textureArray = TerrainUsesTextureArrayShader(terrain);
+
+            for (int z = z0; z <= z1; z++)
+            {
+                for (int x = x0; x <= x1; x++)
+                {
+                    if (DeepWaterTerrainCapRenderer.ShouldClipPromotedWaterTexel(
+                        terrain,
+                        tileMap[z * dim + x].a,
+                        textureArray,
+                        x,
+                        z,
+                        dim))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TerrainUsesTextureArrayShader(DaggerfallTerrain terrain)
+        {
+            Terrain unityTerrain = terrain != null ? terrain.GetComponent<Terrain>() : null;
+            Material material = unityTerrain != null ? unityTerrain.materialTemplate : null;
+            Shader shader = material != null ? material.shader : null;
+            string name = shader != null ? shader.name : null;
+            return name == "Daggerfall/TilemapTextureArray" ||
+                   name == "DeepWaters/TilemapTextureArrayClipWater";
+        }
+
+        private static bool IsSurfaceSampleWater(
+            DaggerfallTerrain terrain,
+            TerrainData terrainData,
+            DeepWaterTileData tile,
+            float fracX,
+            float fracZ)
+        {
+            if (DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, fracX, fracZ))
+                return true;
+
+            if (tile == null || !tile.IsOceanConnected || !tile.HasDistanceField)
+                return false;
+
+            float worldX = terrain.transform.position.x + fracX * terrainData.size.x;
+            float worldZ = terrain.transform.position.z + fracZ * terrainData.size.z;
+            return
+                DeepWaterWaterClassification.IsLocalPointPureWaterTile(terrain.MapData, fracX, fracZ) &&
+                tile.IsBakedWater(worldX, worldZ);
+        }
+
+        private static void AddNeighborWaterConnectedShoreline(DaggerfallTerrain terrain, bool[,] cells, int n)
+        {
+            if (terrain == null || !DeepWaterDistanceBake.IsLoaded)
+                return;
+
+            DeepWaterTileData tile = terrain.GetComponent<DeepWaterTileData>();
+            if (tile == null || !tile.IsOceanConnected)
+                return;
+
+            int px = terrain.MapPixelX;
+            int py = terrain.MapPixelY;
+            bool westWater = NeighborHasWater(px - 1, py);
+            bool eastWater = NeighborHasWater(px + 1, py);
+            bool northWater = NeighborHasWater(px, py - 1);
+            bool southWater = NeighborHasWater(px, py + 1);
+            if (!westWater && !eastWater && !northWater && !southWater)
+                return;
+
+            bool[,] visited = new bool[n, n];
+            var queue = new Queue<int>();
+
+            if (westWater)
+                for (int z = 0; z < n; z++)
+                    EnqueueFirstSubmergedShoreCell(terrain, visited, queue, 0, 1, z, 0, n);
+
+            if (eastWater)
+                for (int z = 0; z < n; z++)
+                    EnqueueFirstSubmergedShoreCell(terrain, visited, queue, n - 1, -1, z, 0, n);
+
+            if (northWater)
+                for (int x = 0; x < n; x++)
+                    EnqueueFirstSubmergedShoreCell(terrain, visited, queue, x, 0, 0, 1, n);
+
+            if (southWater)
+                for (int x = 0; x < n; x++)
+                    EnqueueFirstSubmergedShoreCell(terrain, visited, queue, x, 0, n - 1, -1, n);
+
+            while (queue.Count > 0)
+            {
+                int encoded = queue.Dequeue();
+                int x = encoded & 0xffff;
+                int z = encoded >> 16;
+                cells[z, x] = true;
+
+                EnqueueShoreCell(terrain, visited, queue, x - 1, z, n);
+                EnqueueShoreCell(terrain, visited, queue, x + 1, z, n);
+                EnqueueShoreCell(terrain, visited, queue, x, z - 1, n);
+                EnqueueShoreCell(terrain, visited, queue, x, z + 1, n);
+            }
+        }
+
+        private static void AddLocalShorelineFeather(DaggerfallTerrain terrain, bool[,] cells, int n)
+        {
+            if (terrain == null || cells == null || n <= 0 || ShorelineSurfaceFeatherCells <= 0)
+                return;
+
+            bool[,] source = new bool[n, n];
+            for (int z = 0; z < n; z++)
+                for (int x = 0; x < n; x++)
+                    source[z, x] = cells[z, x];
+
+            for (int pass = 0; pass < ShorelineSurfaceFeatherCells; pass++)
+            {
+                bool changed = false;
+                bool[,] next = new bool[n, n];
+                for (int z = 0; z < n; z++)
+                {
+                    for (int x = 0; x < n; x++)
+                    {
+                        next[z, x] = source[z, x];
+                        if (source[z, x] ||
+                            !HasAdjacentSurfaceCell(source, x, z, n) ||
+                            (!DeepWaterWaterClassification.IsCellVisuallyWet(terrain.MapData, x, z, n) &&
+                             !IsBakedShoreSurfaceCell(terrain, x, z, n)))
+                        {
+                            continue;
+                        }
+
+                        next[z, x] = true;
+                        changed = true;
+                    }
+                }
+
+                source = next;
+                if (!changed)
+                    break;
+            }
+
+            for (int z = 0; z < n; z++)
+                for (int x = 0; x < n; x++)
+                    cells[z, x] = source[z, x];
+        }
+
+        private static bool HasAdjacentSurfaceCell(bool[,] cells, int x, int z, int n)
+        {
+            for (int dz = -1; dz <= 1; dz++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dz == 0)
+                        continue;
+
+                    int xx = x + dx;
+                    int zz = z + dz;
+                    if (xx >= 0 && zz >= 0 && xx < n && zz < n && cells[zz, xx])
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsBakedShoreSurfaceCell(DaggerfallTerrain terrain, int cellX, int cellZ, int resolution)
+        {
+            if (terrain == null || !DeepWaterDistanceBake.IsLoaded || resolution <= 0)
+                return false;
+
+            float x0 = cellX / (float)resolution;
+            float x1 = (cellX + 1) / (float)resolution;
+            float z0 = cellZ / (float)resolution;
+            float z1 = (cellZ + 1) / (float)resolution;
+            return IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.5f), Mathf.Lerp(z0, z1, 0.5f)) ||
+                   IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.25f), Mathf.Lerp(z0, z1, 0.25f)) ||
+                   IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.75f), Mathf.Lerp(z0, z1, 0.25f)) ||
+                   IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.25f), Mathf.Lerp(z0, z1, 0.75f)) ||
+                   IsBakedSurfaceWater(terrain, Mathf.Lerp(x0, x1, 0.75f), Mathf.Lerp(z0, z1, 0.75f));
+        }
+
+        private static bool NeighborHasWater(int mapPixelX, int mapPixelY)
+        {
+            return DeepWaterDistanceBake.MapPixelHasWaterCells(mapPixelX, mapPixelY) ||
+                   DeepWaterDistanceBake.MapPixelHasFineWaterCells(mapPixelX, mapPixelY);
+        }
+
+        private static void EnqueueFirstSubmergedShoreCell(
+            DaggerfallTerrain terrain,
+            bool[,] visited,
+            Queue<int> queue,
+            int startX,
+            int stepX,
+            int startZ,
+            int stepZ,
+            int n)
+        {
+            int maxScan = Mathf.Min(ShorelineSeedScanCells, n);
+            for (int i = 0; i < maxScan; i++)
+            {
+                int x = startX + stepX * i;
+                int z = startZ + stepZ * i;
+                if (x < 0 || z < 0 || x >= n || z >= n)
+                    break;
+
+                if (DeepWaterWaterClassification.IsCellVisuallyWet(terrain.MapData, x, z, n))
+                {
+                    EnqueueShoreCell(terrain, visited, queue, x, z, n);
+                    break;
+                }
+            }
+        }
+
+        private static void EnqueueShoreCell(
+            DaggerfallTerrain terrain,
+            bool[,] visited,
+            Queue<int> queue,
+            int x,
+            int z,
+            int n)
+        {
+            if (x < 0 || z < 0 || x >= n || z >= n || visited[z, x])
+                return;
+
+            visited[z, x] = true;
+            if (DeepWaterWaterClassification.IsCellVisuallyWet(terrain.MapData, x, z, n))
+                queue.Enqueue((z << 16) | x);
+        }
+
+        private static Mesh CreateSurfaceMesh(List<Vector3> vertices, List<Vector2> uvs, List<int> triangles)
+        {
             var mesh = new Mesh { name = GeneratedMeshName };
             mesh.SetVertices(vertices);
             mesh.SetUVs(0, uvs);
             mesh.SetTriangles(triangles, 0);
             mesh.RecalculateBounds();
             return mesh;
+        }
+
+        private static void AppendSurfaceQuad(
+            float fracX0,
+            float fracX1,
+            float fracZ0,
+            float fracZ1,
+            float sizeX,
+            float sizeZ,
+            List<Vector3> vertices,
+            List<Vector2> uvs,
+            List<int> triangles)
+        {
+            float x0 = fracX0 * sizeX;
+            float x1 = fracX1 * sizeX;
+            float z0 = fracZ0 * sizeZ;
+            float z1 = fracZ1 * sizeZ;
+
+            int start = vertices.Count;
+            vertices.Add(new Vector3(x0, 0f, z0));
+            vertices.Add(new Vector3(x1, 0f, z0));
+            vertices.Add(new Vector3(x1, 0f, z1));
+            vertices.Add(new Vector3(x0, 0f, z1));
+
+            uvs.Add(new Vector2(fracX0, fracZ0));
+            uvs.Add(new Vector2(fracX1, fracZ0));
+            uvs.Add(new Vector2(fracX1, fracZ1));
+            uvs.Add(new Vector2(fracX0, fracZ1));
+
+            triangles.Add(start);
+            triangles.Add(start + 2);
+            triangles.Add(start + 1);
+            triangles.Add(start);
+            triangles.Add(start + 3);
+            triangles.Add(start + 2);
         }
 
         private static void ReplaceSurfaceMesh(MeshFilter topFilter, MeshFilter undersideFilter, Mesh newMesh)

@@ -35,6 +35,9 @@ namespace DeepWaters
         private static Texture sharedSurfaceTexture;
         private static readonly Color SurfaceTint = new Color(0.519f, 0.527f, 0.467f, 1f);
         private static readonly Color FallbackSurfaceColor = new Color(0.075f, 0.24f, 0.38f, 1f);
+        private const float TopSurfaceVisionMultiplier = 3.0f;
+        private const float TopSurfaceFogStrengthMultiplier = 0.35f;
+        private const float TopSurfaceFalloffMultiplier = 0.45f;
 
         public const float SurfaceTextureTiling = 128f;
 
@@ -88,6 +91,8 @@ namespace DeepWaters
         {
             if (sharedUndersideMaterial != null && sharedUndersideMaterial.HasProperty(HorizonColorProperty))
                 sharedUndersideMaterial.SetColor(HorizonColorProperty, color);
+
+            ApplyDynamicUndersideSettings(sharedUndersideMaterial);
         }
 
         public static Texture GetSurfaceTexture()
@@ -111,6 +116,11 @@ namespace DeepWaters
 
             ConfigureTopMaterial(sharedTopMaterial);
             ConfigureUndersideMaterial(sharedUndersideMaterial);
+        }
+
+        public static void RefreshDynamicMaterialSettings()
+        {
+            ApplyDynamicUndersideSettings(sharedUndersideMaterial);
         }
 
         private static Material CreateMaterial(string shaderName, string shaderAssetName, string materialName)
@@ -156,6 +166,18 @@ namespace DeepWaters
             }
 
             ApplySharedWaterProperties(material);
+
+            if (material.HasProperty(WaterColumnFogStrengthProperty))
+                material.SetFloat(WaterColumnFogStrengthProperty, Mathf.Clamp01(GetWaterColumnFogStrength() * TopSurfaceFogStrengthMultiplier));
+            if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
+                material.SetFloat(WaterSurfaceVisionDistanceProperty, DeepWaters.Instance.UnderwaterVisionDistance * TopSurfaceVisionMultiplier);
+            if (material.HasProperty(WaterSurfaceFalloffProperty))
+                material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff * TopSurfaceFalloffMultiplier));
+
+            if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
+                material.SetFloat(SurfaceOpaqueFadeStartProperty, DeepWaters.Instance.UnderwaterVisionDistance * 2.2f);
+            if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
+                material.SetFloat(SurfaceOpaqueFadeEndProperty, DeepWaters.Instance.UnderwaterVisionDistance * 4.5f);
         }
 
         private static void ConfigureUndersideMaterial(Material material)
@@ -168,10 +190,41 @@ namespace DeepWaters
             if (material.HasProperty(ColorProperty))
                 material.SetColor(ColorProperty, SurfaceTint);
 
-            if (material.HasProperty(UndersideAlphaProperty))
-                material.SetFloat(UndersideAlphaProperty, DeepWaters.Instance.WaterSurfaceBottomAlpha);
-
             ApplySharedWaterProperties(material);
+            ApplyDynamicUndersideSettings(material);
+        }
+
+        private static void ApplyDynamicUndersideSettings(Material material)
+        {
+            if (material == null || DeepWaters.Instance == null)
+                return;
+
+            float shallow = GetPlayerShallowWaterFactor();
+            float bottomAlpha = DeepWaters.Instance.WaterSurfaceBottomAlpha;
+            if (material.HasProperty(UndersideAlphaProperty))
+                material.SetFloat(UndersideAlphaProperty, Mathf.Lerp(bottomAlpha, bottomAlpha * 0.35f, shallow));
+
+            // Near shore, a close opaque curtain reads as a hard dark strip at
+            // the waterline. Keep the void guard in deep water; push it out in
+            // shallow columns where terrain already closes the horizon.
+            float curtainVision = DeepWaters.Instance.UnderwaterVisionDistance;
+            if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
+                material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * Mathf.Lerp(1.7f, 4.0f, shallow));
+            if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
+                material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * Mathf.Lerp(3.8f, 8.0f, shallow));
+        }
+
+        private static float GetPlayerShallowWaterFactor()
+        {
+            Vector3 position;
+            DeepWaterColumn column;
+            if (!DeepWaterWorld.TryGetPlayerPosition(out position) ||
+                !DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column))
+            {
+                return 0f;
+            }
+
+            return 1f - Mathf.InverseLerp(3f, 12f, column.Depth);
         }
 
         private static void ApplySharedWaterProperties(Material material)

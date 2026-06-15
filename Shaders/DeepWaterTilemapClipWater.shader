@@ -2,8 +2,7 @@
 // License:         MIT
 //
 // Copy of DFU's classic Daggerfall/Tilemap terrain shader with ONE addition:
-// pure-water texels (tile record 0 in the low 6 index bits; the high bits
-// carry the rotation variant) are clipped, punching render-side holes in the
+// water texels are clipped, punching render-side holes in the
 // sea-level terrain cap so the carved underwater world is visible through the
 // transparent water surface on mixed land/water map pixels. Real TerrainData
 // holes native-crash Unity 2019.4; fragment discard touches neither terrain
@@ -59,12 +58,16 @@ Shader "DeepWaters/TilemapClipWater" {
 			// Get offset to tile in atlas
 			uint index = tex2D(_TilemapTex, floor(unwrappedUV) / _TilemapDim).a * _MaxIndex + 0.5;
 
-			// DeepWaters: discard pure-water texels (record 0 in the low 6
-			// bits; rotation variants live in the high bits). Shore transition
-			// tiles keep rendering, so the beach fringe stays solid while the
-			// painted sea-level water cap disappears, revealing the carved
-			// seafloor below.
-			clip((index & 0x3F) == 0 ? -1.0 : 1.0);
+			// DeepWaters: discard the same water-like terrain records used by
+			// DeepWaterWaterClassification. Keeping shore-water transition
+			// texels opaque leaves a hard rectangular cap beside the generated
+			// water surface on mixed shoreline tiles.
+			uint tileIndex = index & 0x3F;
+			bool isWaterTile =
+				tileIndex == 0 ||
+				(tileIndex >= 5 && tileIndex <= 7) ||
+				tileIndex == 48;
+			clip(isWaterTile ? -1.0 : 1.0);
 
 			uint xpos = index % _TilesetDim;
 			uint ypos = index / _TilesetDim;

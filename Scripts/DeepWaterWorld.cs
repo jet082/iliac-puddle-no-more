@@ -255,11 +255,20 @@ namespace DeepWaters
             if (tile == null || !tile.IsOceanConnected || !tile.HasDistanceField)
                 return false;
 
-            if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ))
-                return false;
-
-            if (DeepWaterDistanceBake.HasFineWaterMask && !tile.IsCarvedWater(worldX, worldZ))
-                return false;
+            if (DeepWaterDistanceBake.HasFineWaterMask)
+            {
+                if (!tile.IsCarvedWater(worldX, worldZ))
+                    return false;
+            }
+            else
+            {
+                bool pureBakedWater =
+                    DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&
+                    tile.IsBakedWater(worldX, worldZ);
+                if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) &&
+                    !pureBakedWater)
+                    return false;
+            }
 
             float[,] heights = dfTerrain.MapData.heightmapSamples;
             int hDim0 = heights.GetLength(0);

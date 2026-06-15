@@ -120,11 +120,12 @@ namespace DeepWaters
 
         // Mid layer: rolling hills and hummocks.
         private const float MidPeriodMeters    = 330f;
-        private const float MidAmplitudeMeters = 18f;
+        private const float MidAmplitudeMeters = 24f;
 
-        // High layer: micro-roughness.
-        private const float HighPeriodMeters    = 24f;
-        private const float HighAmplitudeMeters = 3.5f;
+        // High layer: visible local undulation. Keep the wavelength above the
+        // runtime seafloor mesh spacing so it survives into the rendered floor.
+        private const float HighPeriodMeters    = 80f;
+        private const float HighAmplitudeMeters = 6f;
 
         // Abyssal layer: small, persistent deep-sea relief. The previous deep
         // basin often saturated at WaterDepth, clipping ordinary noise into a
@@ -142,6 +143,8 @@ namespace DeepWaters
         // contact, then ramp to a hard offshore minimum depth.
         private const float MinimumOffshoreNavigableDepthMeters = 11.2f;
         private const float NoStandDepthRampMeters = 128f;
+        private const float ShallowFloorReliefPeriodMeters = 150f;
+        private const float ShallowFloorReliefMeters = 8f;
 
         // Ravine layer: sparse linear-feeling deep cuts. Start well offshore so
         // trenches only cut the deep slope/abyss, not the shallow shelf. Scaled
@@ -233,7 +236,8 @@ namespace DeepWaters
             // shallow. Use 200m as the authoring baseline, then clamp the
             // final value to the configured maximum.
             float scaledDepth = rawDepth * scale;
-            return Mathf.Clamp(scaledDepth, minimumDepth, userMax);
+            float safetyFloorRelief = ComputeSafetyFloorRelief(worldX, worldZ, distanceToCoastMeters, userMax);
+            return Mathf.Clamp(Mathf.Max(scaledDepth, minimumDepth + safetyFloorRelief), minimumDepth, userMax);
         }
 
         public static float DepthBand01(float depthMeters)
@@ -367,6 +371,18 @@ namespace DeepWaters
             float t = Mathf.Clamp01(distanceToCoastMeters / NoStandDepthRampMeters);
             float smooth = t * t * (3f - 2f * t);
             return Mathf.Lerp(effectiveShelfMin, noStandDepth, smooth);
+        }
+
+        private static float ComputeSafetyFloorRelief(float worldX, float worldZ, float distanceToCoastMeters, float userMaxDepth)
+        {
+            float t = Mathf.Clamp01(distanceToCoastMeters / NoStandDepthRampMeters);
+            if (t <= 0f)
+                return 0f;
+
+            float smooth = t * t * (3f - 2f * t);
+            float amplitude = Mathf.Min(ShallowFloorReliefMeters, userMaxDepth * 0.12f) * smooth;
+            float relief01 = SampleSignedPerlin(worldX, worldZ, ShallowFloorReliefPeriodMeters, -1700f, 3100f) * 0.5f + 0.5f;
+            return amplitude * relief01;
         }
 
         private static float ComputeDeepOcean01(float distanceToCoastMeters)

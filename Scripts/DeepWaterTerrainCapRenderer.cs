@@ -21,9 +21,12 @@ namespace DeepWaters
             public bool OriginalDrawHeightmap;
             public bool Hidden;
             public Shader OriginalShader;
+            public Texture OriginalTilemapTexture;
+            public Texture2D PatchedTilemapTexture;
             public bool WaterTexelsClipped;
         }
 
+        private static readonly int TilemapTexProperty = Shader.PropertyToID("_TilemapTex");
         private static Shader tilemapTextureArrayClipShader;
         private static Shader tilemapClipShader;
         private static bool clipShadersResolved;
@@ -104,15 +107,20 @@ namespace DeepWaters
                 {
                     if (marker.OriginalShader != null)
                         material.shader = marker.OriginalShader;
+                    RestoreTilemapTexture(material, marker);
                     marker.WaterTexelsClipped = false;
                 }
                 return;
             }
 
             if (marker != null && marker.WaterTexelsClipped)
+            {
+                ApplyTilemapTextureClip(dfTerrain, material, marker);
                 return;
+            }
 
-            Shader clipShader = ResolveClipShader(material.shader.name);
+            string originalShaderName = material.shader.name;
+            Shader clipShader = ResolveClipShader(originalShaderName);
             if (clipShader == null)
                 return;
 
@@ -122,6 +130,134 @@ namespace DeepWaters
             marker.OriginalShader = material.shader;
             material.shader = clipShader;
             marker.WaterTexelsClipped = true;
+            ApplyTilemapTextureClip(dfTerrain, material, marker);
+        }
+
+        private static void ApplyTilemapTextureClip(DaggerfallTerrain dfTerrain, Material material, HiddenCapMarker marker)
+        {
+            if (dfTerrain == null || material == null || marker == null)
+                return;
+
+            Color32[] source = dfTerrain.TileMap;
+            if (source == null || source.Length == 0)
+                return;
+
+            int dim = Mathf.RoundToInt(Mathf.Sqrt(source.Length));
+            if (dim <= 0 || dim * dim != source.Length)
+                return;
+
+            bool textureArray =
+                (marker.OriginalShader != null && marker.OriginalShader.name == "Daggerfall/TilemapTextureArray") ||
+                (material.shader != null && material.shader.name == "DeepWaters/TilemapTextureArrayClipWater");
+
+            var pixels = new Color32[source.Length];
+            bool changed = false;
+            for (int z = 0; z < dim; z++)
+            {
+                for (int x = 0; x < dim; x++)
+                {
+                    int i = z * dim + x;
+                    Color32 color = source[i];
+                    if (ShouldClipPromotedWaterTexel(dfTerrain, color.a, textureArray, x, z, dim))
+                    {
+                        color.r = 0;
+                        color.a = 0;
+                        changed = true;
+                    }
+                    pixels[i] = color;
+                }
+            }
+
+            if (!changed)
+                return;
+
+            if (marker.OriginalTilemapTexture == null)
+                marker.OriginalTilemapTexture = material.GetTexture(TilemapTexProperty);
+
+            if (marker.PatchedTilemapTexture != null)
+                Object.Destroy(marker.PatchedTilemapTexture);
+
+            Texture2D texture = new Texture2D(dim, dim, TextureFormat.RGBA32, false);
+            texture.name = "DeepWaters_ClippedTilemap_" + dfTerrain.MapPixelX + "_" + dfTerrain.MapPixelY;
+            texture.filterMode = FilterMode.Point;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            texture.SetPixels32(pixels);
+            texture.Apply(false, true);
+
+            marker.PatchedTilemapTexture = texture;
+            material.SetTexture(TilemapTexProperty, texture);
+        }
+
+        private static void RestoreTilemapTexture(Material material, HiddenCapMarker marker)
+        {
+            if (material != null && marker.OriginalTilemapTexture != null)
+                material.SetTexture(TilemapTexProperty, marker.OriginalTilemapTexture);
+
+            if (marker.PatchedTilemapTexture != null)
+            {
+                Object.Destroy(marker.PatchedTilemapTexture);
+                marker.PatchedTilemapTexture = null;
+            }
+
+            marker.OriginalTilemapTexture = null;
+        }
+
+        internal static bool IsClippedWaterTileData(byte tileData, bool textureArray)
+        {
+            int tileIndex = textureArray ? tileData >> 2 : tileData & 0x3f;
+            return tileIndex == 0 ||
+                   (tileIndex >= 5 && tileIndex <= 7) ||
+                   tileIndex == 48;
+        }
+
+        internal static bool ShouldClipPromotedWaterTexel(
+            DaggerfallTerrain terrain,
+            byte tileData,
+            bool textureArray,
+            int texelX,
+            int texelZ,
+            int texelDim)
+        {
+            return IsClippedWaterTileData(tileData, textureArray) &&
+                   IsPromotedTerrainTexelSafeToClip(terrain, texelX, texelZ, texelDim);
+        }
+
+        private static bool IsPromotedTerrainTexelSafeToClip(
+            DaggerfallTerrain terrain,
+            int texelX,
+            int texelZ,
+            int texelDim)
+        {
+            if (terrain == null || terrain.MapData.heightmapSamples == null || texelDim <= 0)
+                return true;
+
+            DaggerfallUnity dfu = DaggerfallUnity.Instance;
+            if (dfu == null || dfu.TerrainSampler == null)
+                return true;
+
+            float threshold = dfu.TerrainSampler.OceanElevation /
+                              dfu.TerrainSampler.MaxTerrainHeight + 1e-5f;
+            float[,] heights = terrain.MapData.heightmapSamples;
+            int rows = heights.GetLength(0);
+            int cols = heights.GetLength(1);
+            if (rows <= 0 || cols <= 0)
+                return true;
+
+            int x0 = Mathf.Clamp(Mathf.FloorToInt(texelX * (cols - 1) / (float)texelDim), 0, cols - 1);
+            int x1 = Mathf.Clamp(Mathf.CeilToInt((texelX + 1) * (cols - 1) / (float)texelDim), 0, cols - 1);
+            int z0 = Mathf.Clamp(Mathf.FloorToInt(texelZ * (rows - 1) / (float)texelDim), 0, rows - 1);
+            int z1 = Mathf.Clamp(Mathf.CeilToInt((texelZ + 1) * (rows - 1) / (float)texelDim), 0, rows - 1);
+
+            for (int z = z0; z <= z1; z++)
+            {
+                for (int x = x0; x <= x1; x++)
+                {
+                    if (heights[z, x] > threshold)
+                        return false;
+                }
+            }
+
+            return true;
         }
 
         private static Shader ResolveClipShader(string currentShaderName)
@@ -189,7 +325,8 @@ namespace DeepWaters
             if (DeepWaterDistanceBake.MapPixelHasLandCells(dfTerrain.MapPixelX, dfTerrain.MapPixelY))
                 return false;
 
-            return DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData);
+            return DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData) &&
+                   DeepWaterWaterClassification.MapDataFullySubmerged(dfTerrain.MapData);
         }
     }
 }

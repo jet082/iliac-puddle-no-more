@@ -15,10 +15,21 @@ namespace DeepWaters
         private const float MinimumForwardInput = 0.02f;
         private const float MinimumLandingNormalY = 0.45f;
         private const float ShoreLandingWaterMargin = 0.25f;
+        private const float MaximumLandingAboveOcean = 8f;
 
-        public static bool TryMoveToShore(PlayerEnterExit pex, float oceanY)
+        public static bool TryMoveToShore(
+            PlayerEnterExit pex,
+            float oceanY,
+            bool requireSwimming = true,
+            bool requireForwardInput = true)
         {
-            if (pex == null || !pex.IsPlayerSwimming || InputManager.Instance.Vertical <= MinimumForwardInput)
+            if (pex == null)
+                return false;
+
+            if (requireSwimming && !pex.IsPlayerSwimming)
+                return false;
+
+            if (requireForwardInput && InputManager.Instance.Vertical <= MinimumForwardInput)
                 return false;
 
             var controller = GameManager.Instance.PlayerController;
@@ -33,7 +44,19 @@ namespace DeepWaters
 
             forward.Normalize();
 
-            Vector3 probe = controller.transform.position + forward * ForwardProbeDistance;
+            if (TryMoveToLanding(controller, forward, forward * 0.5f, oceanY))
+                return true;
+
+            return TryMoveToLanding(controller, Vector3.zero, Vector3.zero, oceanY);
+        }
+
+        private static bool TryMoveToLanding(
+            CharacterController controller,
+            Vector3 probeOffset,
+            Vector3 landingOffset,
+            float oceanY)
+        {
+            Vector3 probe = controller.transform.position + probeOffset;
             probe.y = oceanY + ProbeHeightAboveOcean;
 
             RaycastHit hit;
@@ -44,9 +67,11 @@ namespace DeepWaters
                 return false;
 
             float landingY = hit.point.y;
-            if (landingY >= oceanY - 1f && landingY <= oceanY + 12f && landingY > controller.transform.position.y - 0.1f)
+            if (landingY >= oceanY - 1f &&
+                landingY <= oceanY + MaximumLandingAboveOcean &&
+                landingY > controller.transform.position.y - 0.1f)
             {
-                controller.Move(hit.point + Vector3.up * 1.5f + forward * 0.5f - controller.transform.position);
+                controller.Move(hit.point + Vector3.up * 1.5f + landingOffset - controller.transform.position);
                 return true;
             }
 
@@ -81,6 +106,13 @@ namespace DeepWaters
             if (collider == null)
                 return false;
 
+            if (collider.isTrigger)
+                return false;
+
+            var player = GameManager.Instance != null ? GameManager.Instance.PlayerObject : null;
+            if (player != null && collider.transform.IsChildOf(player.transform))
+                return false;
+
             if (collider.GetComponent<PassiveFishBehaviour>() != null)
                 return false;
 
@@ -93,9 +125,16 @@ namespace DeepWaters
             if (collider.GetComponentInParent<DaggerfallEnemy>() != null)
                 return false;
 
-            return collider.GetComponent<Terrain>() != null ||
-                   collider.GetComponentInParent<Terrain>() != null ||
-                   HasStaticGeometryTag(collider.transform);
+            if (collider.GetComponentInParent<DaggerfallLoot>() != null ||
+                collider.GetComponentInParent<DaggerfallBillboard>() != null)
+            {
+                return false;
+            }
+
+            // DFU shoreline/location colliders are not consistently tagged.
+            // After excluding water, actors, loot, and billboards, an upward
+            // solid hit above the waterline is shore enough for this handoff.
+            return true;
         }
 
         private static bool HasStaticGeometryTag(Transform transform)

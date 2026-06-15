@@ -39,10 +39,13 @@ namespace DeepWaters
             if (material.HasProperty("_Cutoff"))
                 material.SetFloat("_Cutoff", 0.1f);
 
+            MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+            UnderwaterDecorationBatchFactory.ApplyUnderwaterDecorationMaterial(renderer);
+
             go.transform.position = worldPos;
             DeepWaterRendering.FaceMainCamera(go.transform);
             AddClickCollider(go, billboardSize);
-            DeepWaterRendering.DisableShadows(go.GetComponent<MeshRenderer>());
+            DeepWaterRendering.DisableShadows(renderer);
 
             DaggerfallLoot loot = go.AddComponent<DaggerfallLoot>();
             loot.ContainerType = LootContainerTypes.DroppedLoot;

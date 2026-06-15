@@ -23,9 +23,11 @@ namespace DeepWaters
         // World-meters per texture tile. DFU terrain dirt tile reads as one
         // tile every ~6.4m of world space, so 1/6.4 = 0.15625.
         private const float TerrainTextureWorldScale = 0.15625f;
+        private const float TerrainTextureStrength = 0.25f;
 
         private static readonly int MainTexProperty = Shader.PropertyToID("_MainTex");
         private static readonly int TextureWorldScaleProperty = Shader.PropertyToID("_TextureWorldScale");
+        private static readonly int TextureStrengthProperty = Shader.PropertyToID("_TextureStrength");
         private static readonly Dictionary<int, Material> materials = new Dictionary<int, Material>();
 
         public static Material GetMaterial(int worldClimate)
@@ -97,6 +99,7 @@ namespace DeepWaters
 
                 material.SetTexture(MainTexProperty, texture);
                 material.SetFloat(TextureWorldScaleProperty, TerrainTextureWorldScale);
+                material.SetFloat(TextureStrengthProperty, TerrainTextureStrength);
             }
             catch (System.Exception ex)
             {

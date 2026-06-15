@@ -332,17 +332,22 @@ namespace DeepWaters
                 for (int hx = 0; hx < holeRes; hx++)
                 {
                     holes[hy, hx] = true;
+                    float fracX = (hx + 0.5f) * invHoleRes;
+                    bool pureBakedWater = !useBakeMask &&
+                        DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&
+                        DeepWaterDistanceBake.IsWaterAt(mapPixelX, mapPixelY, fracX, fracZ);
 
                     // Reject cells with any shore relief (see crash-fix note):
                     // a holed patch with relief subdivides and crashes the render
                     // thread. Flat ocean cells never subdivide.
-                    if (heights[hy, hx]         > oceanThreshold + oceanThresholdEps ||
-                        heights[hy, hx + 1]     > oceanThreshold + oceanThresholdEps ||
-                        heights[hy + 1, hx]     > oceanThreshold + oceanThresholdEps ||
-                        heights[hy + 1, hx + 1] > oceanThreshold + oceanThresholdEps)
+                    bool flatOceanCell =
+                        heights[hy, hx]         <= oceanThreshold + oceanThresholdEps &&
+                        heights[hy, hx + 1]     <= oceanThreshold + oceanThresholdEps &&
+                        heights[hy + 1, hx]     <= oceanThreshold + oceanThresholdEps &&
+                        heights[hy + 1, hx + 1] <= oceanThreshold + oceanThresholdEps;
+                    if (!flatOceanCell && !pureBakedWater)
                         continue;
 
-                    float fracX = (hx + 0.5f) * invHoleRes;
                     bool isWater = true;
                     if (isWater && useBakeMask)
                     {
@@ -412,11 +417,13 @@ namespace DeepWaters
         {
             bool hidePureOceanCap = DeepWaterTerrainCapRenderer.ShouldHidePureOceanCap(dfTerrain);
             DeepWaterTerrainCapRenderer.Apply(dfTerrain, hidePureOceanCap);
-            // Mixed land/water tiles can't hide the whole heightmap renderer,
-            // so clip just the painted water texels instead. Only reached for
-            // tiles with a carved seafloor (callers gate on the floor build),
-            // so there is real underwater world to reveal beneath.
-            DeepWaterTerrainCapRenderer.ApplyWaterTexelClip(dfTerrain, !hidePureOceanCap);
+            // Mixed land/water tiles still need their land terrain, but the
+            // pure-water texels are an opaque square cap over the generated
+            // shore floor. Clip only those texels; shore transition tiles keep
+            // rendering normally.
+            DeepWaterTerrainCapRenderer.ApplyWaterTexelClip(
+                dfTerrain,
+                !hidePureOceanCap && DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData));
         }
     }
 }

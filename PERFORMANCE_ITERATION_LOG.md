@@ -782,3 +782,171 @@ Validation:
 - `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
 - Packed both playable `.dfmod` files.
 - Read back installed `StreamingAssets\Mods\iliac puddle no more.dfmod` and confirmed the changed constants and settings are present.
+
+## Targeted Saves DDD/EEE/FFF Shoreline Pass
+
+Problem:
+
+- `eee` reproduced a hard coastal visual seam where the water surface did not meet the shoreline cleanly.
+- `fff` had previously been sensitive to saved camera yaw; with the corrected save-loader orientation it now loads facing the expected shallow-water shoreline.
+- `ddd` reproduced the shore-exit failure during a longer straight swim: after reaching land, the player jumped from about `Y=105.95` to `Y=112.99` and ended pressed into/through city wall geometry.
+
+Change:
+
+- Mixed coastal terrain cap clipping now patches the promoted DFU `DaggerfallTerrain.TileMap` texture rather than relying only on the shader source, because the shipped `.dfmod` still contains the old compiled shader.
+- Water surface generation no longer uses full-tile quads for mixed ocean-connected coastal pixels. Full quads are now restricted to landless ocean pixels.
+- Mixed-tile water surface cells now follow the same promoted tilemap texels that the terrain cap clip removes, avoiding mismatches between `MapData.tilemapSamples` and the actual promoted terrain texture.
+- Terrain cap clipping now requires the promoted water-like texel to be fully submerged. This avoids punching holes in raised shoreline/city terrain and removes the large dark under-land water sheet seen in `eee`.
+- `OutdoorShoreExitAssist` now rejects landing probes more than `8m` above the ocean surface. This keeps normal beach/shore exits working while preventing the `ddd` probe from treating the top of a city wall as a valid shore landing.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- `eee,fff` diagnostics completed normally:
+  - `eee` latest shoreline screenshot: `DeepWatersDiagnostics\deep-waters-eee-shoreline-hold-20260615-082252.png`.
+  - `eee` mixed shoreline tiles changed from full slabs (`verts=4`) to clipped meshes (`verts=300..524` on the visible coastal tiles).
+  - `fff` latest load/probe screenshots remained visually aligned with the user-confirmed correct load (`deep-waters-fff-after-load-20260615-082259.png`, `deep-waters-fff-fff_straight_seam_probe-5s-20260615-082304.png`).
+- `ddd` 45-second straight run before shore-assist cap reproduced the bad jump:
+  - at `29s`, player was at `Y=112.99` and the screenshot showed wall-top/inside-wall geometry.
+- `ddd` 45-second straight run after shore-assist cap no longer jumped:
+  - after load: `playerY=97.06`, `playerSwimming=1`.
+  - shore transition: `playerY=105.80`, `playerSwimming=0`.
+  - end: `playerY=105.95`, `playerSwimming=0`, no `Y=112.99` launch.
+  - latest end screenshot: `DeepWatersDiagnostics\deep-waters-ddd-ddd_straight_shore_entry-end-20260615-083521.png`.
+
+Notes:
+
+- The remaining `ComeSailAway` nullrefs during forward shore/seam probes are still from `ComeSailAwayMod.ComeSailAway.FixedUpdate()` and appear unrelated to Deep Waters terrain/surface generation.
+- `eee` is improved from a full dark under-land sheet to a clipped shoreline strip, but it still has a visibly hard coast transition. The next visual pass should target water/shore material blending or a narrow shoreline surface feather, not broad full-tile coverage.
+
+## GGG/HHH Boundary Wall Follow-Up
+
+Problem:
+
+- `iii` was manually confirmed fixed.
+- `hhh` still showed a see-through dark side gap between the carved water tile and the raised shore. The key diagnostic was tile `(207,222)`: it was fully carved (`16384/16384` holes) but only generated `28` boundary wall segments, so the bake-only neighbor test was skipping most of the vertical stitch.
+- Disabling the water top surface did not change the image, and clamping the near-shore seafloor up to the shallow swimmable floor (`renderedSeafloorY 95.78 -> 97.31`) changed the numeric column but not the visual hole. That proved the remaining issue was a missing wall/stitch, not water film, fog, or bathymetry depth.
+
+Change:
+
+- Kept the shallow vanilla shore-floor clamp so generated seabed and water-column queries agree near shore while preserving the `2.7m` minimum swim depth.
+- Boundary wall generation now keeps a wall when the cross-pixel bake sample is carved water but the neighboring map pixel is a mixed near-shore pixel with land cells. This fixes the false assumption that "neighbor is carved" always means "neighbor has no visible raised terrain side to stitch."
+- Pure-ocean cap hiding was restored to the stricter fully-submerged rule after the diagnostic test.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- `hhh` after the boundary-wall fix:
+  - `(207,222)` boundary walls increased from `28` to `256`.
+  - `(208,222)` generated `69` boundary walls.
+  - 10-second visual hold: `128.60 FPS`.
+  - column depth: `2.70m`, `renderedSeafloorY=97.31`, `carvedSeafloorY=97.31`.
+  - latest screenshot: `DeepWatersDiagnostics\deep-waters-hhh-shoreline-hold-20260615-155408.png`.
+- `ggg` sanity run:
+  - 10-second visual hold: `117.66 FPS`.
+  - no obvious invisible-floor slab or see-through side gap in `DeepWatersDiagnostics\deep-waters-ggg-shoreline-hold-20260615-155701.png`.
+
+## JJJ/KKKK/LLL Water Mask And Shore Handoff Sweep
+
+Problem:
+
+- `jjj` showed the undersea world flattening into the minimum safety floor.
+- `kkkk` reproduced the shoreline bobbing problem from `iii`: moving straight toward shore could flip swim state during the transition instead of cleanly handing off to land.
+- `lll` reproduced the `ggg` trouble corner where the player could swim through visible land. Diagnostics showed this was caused by water-column logic still treating legacy baked-water samples as valid even where the fine carved-water mask said the cell was land.
+
+Change:
+
+- The fine carved-water mask is now authoritative wherever it exists:
+  - `DeepWaterWorld.TryGetWaterColumn()` rejects columns outside carved water instead of falling back to pure baked water.
+  - `DeepWaterFloorBuilder.ComputeHoleMask()` only uses the broad pure-baked-water fallback for legacy/no-fine-mask tiles.
+  - `OutdoorSwimDriver.IsSolidShoreForColliderGate()` uses carved water for water-like checks when fine mask data is available.
+- Shore standing now wins over recent water contact:
+  - standing-on-shore is computed before the water-collider gate in `Update`, `FixedUpdate`, and post-phase restore.
+  - `HasRecentCenterWaterContact()` clears water contact immediately when the player is grounded on shore.
+- The DFU swim surface offset now matches the Deep Waters shore-exit clearance (`0.75m`) so vanilla swim detection and the mod's exit gate stop fighting each other on alternating frames.
+- Restored visible seabed detail:
+  - raised seabed mesh resolution from `33x33` to `65x65`.
+  - added positive shallow safety-floor relief so minimum-depth zones are not perfectly flat.
+  - adjusted seabed vertex color bands so the shelf color boost no longer washes out the whole coastal shelf.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Full diagnostics sweep: `DeepWatersDiagnostics\deep-waters-diagnostics-20260615-183140.csv`.
+- `jjj`:
+  - 10-second visual hold: `73.68 FPS`.
+  - diagnostics reported `decorations=1152`, `fish=144`, `depth=14.01m`.
+  - latest screenshot: `DeepWatersDiagnostics\deep-waters-jjj-shoreline-hold-20260615-183206.png`.
+- `kkkk`:
+  - `201` sampled frames.
+  - `swimToggles=1`, matching the real water-to-land exit.
+  - `swimWhileGrounded=0`.
+  - `ghostColumnFrames=0`.
+  - latest transition screenshot: `DeepWatersDiagnostics\deep-waters-kkkk-kkkk_straight_shore_entry-17s-20260615-183230.png`.
+- `lll`:
+  - `523` sampled frames.
+  - `swimToggles=1`.
+  - `ghostColumnFrames=0`.
+  - the later large `Y` jump happened after the player was already out of water with no active water column or collider gate, so it is no longer the old through-visible-land water-volume bug.
+  - latest early probe screenshot: `DeepWatersDiagnostics\deep-waters-lll-lll_straight_shore_probe-5s-20260615-183301.png`.
+- `ggg` sanity run:
+  - 10-second visual hold: `102.70 FPS`.
+  - latest screenshot: `DeepWatersDiagnostics\deep-waters-ggg-shoreline-hold-20260615-183350.png`.
+- `hhh` sanity run:
+  - 10-second visual hold: `93.84 FPS`.
+  - latest screenshot: `DeepWatersDiagnostics\deep-waters-hhh-shoreline-hold-20260615-183409.png`.
+
+Notes:
+
+- This pass removes the ghost water columns at the trouble corner and fixes the swim/grounded fight in `kkkk`.
+- `jjj` is no longer at the exact safety-minimum table depth, but the current packed build still uses the shipped unlit seabed material path. If the manual view still reads too flat, the next likely fix is either stronger bathymetry relief or a proper material/shader rebuild rather than another water-volume patch.
+
+## MMM/NNN/OOO Shoreline Diagnostics
+
+Problem:
+
+- `mmm` reproduced a walk-forward water entry where the player could fall into a shoreline crack and swim into the steep inside face of the shore.
+- `nnn` reproduced a bizarre vertical wall between map pixels while already swimming.
+- `ooo` showed broken shoreline seams where the camera could see beneath land near the waterline.
+- During long swims the test character could die, invalidating later movement samples.
+
+Diagnostics:
+
+- The test harness now enables `PlayerEntity.GodMode` and tops health, fatigue, and magicka at diagnostic start. This is intentionally limited to the `-deepWatersTest` path.
+- Added shore-profile logging for screenshots. Each capture now samples forward from the camera and logs terrain pixel, local fraction, terrain height, baked water, carved water, water-column presence, floor height, and downward ray hit.
+- `ooo` profile showed the seam is exactly at a carved-water to baked-shore transition: `d=0` is carved water with `depth=3.08m`; `d=24m` is `baked=1` but `carved=0` with rising terrain and no water column.
+- Material/top-surface/cap-clipping probes did not remove the `ooo` slit, so the visible failure was a geometry stitch problem rather than only a water shader problem.
+
+Change:
+
+- Raised the shore skirt top from slightly below the water plane to slightly above it by changing `ShoreWallSurfaceInset` from `0.20m` to `-0.05m`. This lets the vertical stitch cover the thin look-under-land gap at shallow carved-water edges.
+- Kept the boundary-wall guard from the previous pass: walls are preserved when the adjacent loaded terrain sample is land/mixed shore, but not when the adjacent sample is actually water. This avoids recreating the `nnn` between-pixel wall.
+- Added a shallow underside-water fade refresh so near-shore water curtains are less likely to read as a hard dark strip.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files before the diagnostic sweep.
+- Full diagnostics sweep: `DeepWatersDiagnostics\deep-waters-diagnostics-20260615-212429.csv`.
+- `mmm`:
+  - Started in pixel `207:223` with a `4.23m` column.
+  - Crossed to pixel `207:222`.
+  - Ended with a valid water column at `16.02m` depth.
+  - Latest screenshot: `DeepWatersDiagnostics\deep-waters-mmm-mmm_straight_water_entry-end-20260615-212523.png`.
+- `nnn`:
+  - 10-second visual hold: `82.15 FPS`.
+  - Shore profile stayed carved water across the tested map-pixel boundary out to `360m`.
+  - Latest screenshot: `DeepWatersDiagnostics\deep-waters-nnn-shoreline-hold-20260615-212542.png`.
+- `ooo`:
+  - 10-second visual hold: `90.03 FPS`.
+  - The obvious see-through shoreline slit is no longer present in the latest screenshot; a dark shallow band remains.
+  - Latest screenshot: `DeepWatersDiagnostics\deep-waters-ooo-shoreline-hold-20260615-212602.png`.
+- `ggg` sanity run:
+  - 10-second visual hold: `106.14 FPS`.
+  - Player has no active water column on land.
+- `hhh` sanity run:
+  - 10-second visual hold: `95.56 FPS`.
+  - The seam is still visually abrupt, but the through-world hole was not visible in the latest diagnostic screenshot.

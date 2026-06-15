@@ -11,6 +11,7 @@ using DaggerfallConnect.Utility;
 using DaggerfallWorkshop;
 using UnityEngine;
 using DaggerfallWorkshop.Game;
+using DaggerfallWorkshop.Game.Entity;
 using DaggerfallWorkshop.Game.Serialization;
 
 namespace DeepWaters
@@ -93,6 +94,9 @@ namespace DeepWaters
         private const float MoveSpeed = 9f;
         private const float UnderwaterOffset = -8f;
         private const float AboveWaterOffset = 8f;
+        private const float TargetedScenarioSeconds = 35f;
+        private const float TargetedVisualHoldSeconds = 12f;
+        private const float TargetedScreenshotIntervalSeconds = 5f;
 
         private readonly List<MetricWindow> windows = new List<MetricWindow>();
         private StreamWriter writer;
@@ -104,6 +108,9 @@ namespace DeepWaters
         private DFPosition lastPixel;
         private bool hasLastPixel;
         private float nextRuntimeNoiseSuppressionTime;
+        private Vector3 lastFramePlayer;
+        private float lastFrameTime;
+        private bool hasLastFramePlayer;
 
         public static void Install(GameObject host)
         {
@@ -111,6 +118,8 @@ namespace DeepWaters
                 return;
 
             DeepWaterRuntime.DiagnosticProfiling = true;
+            DeepWaterFloorBuilder.DiagnosticLogging = true;
+            DeepWaterFloorMesh.DiagnosticLogging = true;
             host.AddComponent<DeepWaterDiagnosticsRunner>();
         }
 
@@ -196,8 +205,15 @@ namespace DeepWaters
                     continue;
 
                 yield return LoadSave(saveName);
-                yield return RecordInitialWindow(saveName);
-                yield return RunTraversal(saveName);
+                if (IsTargetedScenarioSave(saveName))
+                {
+                    yield return RunTargetedScenario(saveName);
+                }
+                else
+                {
+                    yield return RecordInitialWindow(saveName);
+                    yield return RunTraversal(saveName);
+                }
             }
 
             while (windows.Count > 0)
@@ -228,7 +244,19 @@ namespace DeepWaters
                 yield break;
             }
 
-            Debug.Log("[DeepWaters.Diagnostics] Loading " + characterName + " / " + saveName);
+            string saveFolder = saveLoad.GetSaveFolder(key);
+            SavedPlayerPose savedPose;
+            bool hasSavedPose = TryReadSavedPlayerPose(saveFolder, out savedPose);
+
+            Debug.Log("[DeepWaters.Diagnostics] Loading " + characterName + " / " + saveName +
+                      " key=" + key +
+                      " folder=" + Path.GetFileName(saveFolder) +
+                      (hasSavedPose
+                          ? " pos=" + VectorString(savedPose.Position) +
+                            " comp=" + VectorString(savedPose.WorldCompensation) +
+                            " yaw=" + savedPose.Yaw.ToString("F2", CultureInfo.InvariantCulture) +
+                            " pitch=" + savedPose.Pitch.ToString("F2", CultureInfo.InvariantCulture)
+                          : " pose=<not found>"));
             saveLoad.Load(key);
             yield return null;
 
@@ -237,11 +265,122 @@ namespace DeepWaters
 
             CloseBlockingUi();
             yield return null;
+            ApplySavedPose(hasSavedPose, savedPose);
             CloseBlockingUi();
             yield return new WaitForSecondsRealtime(2f);
+            ApplySavedPose(hasSavedPose, savedPose);
             CloseBlockingUi();
             DisableNoisyRuntimeSystems();
+            ApplySavedPose(hasSavedPose, savedPose);
             hasLastPixel = TryGetCurrentPixel(out lastPixel);
+        }
+
+        private static bool TryReadSavedPlayerPose(string saveFolder, out SavedPlayerPose pose)
+        {
+            pose = new SavedPlayerPose();
+            if (string.IsNullOrEmpty(saveFolder))
+                return false;
+
+            string path = Path.Combine(saveFolder, "SaveData.txt");
+            if (!File.Exists(path))
+                return false;
+
+            string text = File.ReadAllText(path);
+            int playerPosition = text.IndexOf("\"playerPosition\"", StringComparison.Ordinal);
+            if (playerPosition < 0)
+                playerPosition = 0;
+
+            return TryReadJsonVector3(text, "\"position\"", playerPosition, out pose.Position) &&
+                   TryReadJsonVector3(text, "\"worldCompensation\"", playerPosition, out pose.WorldCompensation) &&
+                   TryReadJsonFloat(text, "\"yaw\"", playerPosition, out pose.Yaw) &&
+                   TryReadJsonFloat(text, "\"pitch\"", playerPosition, out pose.Pitch);
+        }
+
+        private static bool TryReadJsonVector3(string text, string key, int startIndex, out Vector3 value)
+        {
+            value = Vector3.zero;
+            int keyIndex = text.IndexOf(key, Math.Max(0, startIndex), StringComparison.Ordinal);
+            if (keyIndex < 0)
+                return false;
+
+            float x;
+            float y;
+            float z;
+            if (!TryReadJsonFloat(text, "\"x\"", keyIndex, out x) ||
+                !TryReadJsonFloat(text, "\"y\"", keyIndex, out y) ||
+                !TryReadJsonFloat(text, "\"z\"", keyIndex, out z))
+                return false;
+
+            value = new Vector3(x, y, z);
+            return true;
+        }
+
+        private static bool TryReadJsonFloat(string text, string key, int startIndex, out float value)
+        {
+            value = 0f;
+            if (string.IsNullOrEmpty(text))
+                return false;
+
+            int keyIndex = text.IndexOf(key, Math.Max(0, startIndex), StringComparison.Ordinal);
+            if (keyIndex < 0)
+                return false;
+
+            int colon = text.IndexOf(':', keyIndex + key.Length);
+            if (colon < 0)
+                return false;
+
+            int valueStart = colon + 1;
+            while (valueStart < text.Length && char.IsWhiteSpace(text[valueStart]))
+                valueStart++;
+
+            int valueEnd = valueStart;
+            while (valueEnd < text.Length && "-+.0123456789eE".IndexOf(text[valueEnd]) >= 0)
+                valueEnd++;
+
+            if (valueEnd <= valueStart)
+                return false;
+
+            return float.TryParse(
+                text.Substring(valueStart, valueEnd - valueStart),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        private static void ApplySavedPose(bool hasSavedPose, SavedPlayerPose pose)
+        {
+            if (!hasSavedPose || !GameManager.HasInstance)
+                return;
+
+            GameManager gameManager = GameManager.Instance;
+            PlayerMouseLook mouseLook = gameManager.PlayerMouseLook;
+            if (mouseLook == null)
+                return;
+
+            mouseLook.SetFacing(pose.Yaw, pose.Pitch);
+
+            // PlayerMouseLook normally applies these transforms in Update().
+            // The diagnostics harness captures and moves immediately after load, so
+            // force the rendered camera rig to the saved facing now.
+            if (mouseLook.characterBody != null)
+            {
+                mouseLook.transform.localEulerAngles = new Vector3(pose.Pitch, 0f, 0f);
+                mouseLook.characterBody.transform.localEulerAngles = new Vector3(0f, pose.Yaw, 0f);
+            }
+            else
+            {
+                mouseLook.transform.localEulerAngles = new Vector3(pose.Pitch, pose.Yaw, 0f);
+            }
+
+            Physics.SyncTransforms();
+        }
+
+        private static string VectorString(Vector3 vector)
+        {
+            return "(" +
+                   vector.x.ToString("F2", CultureInfo.InvariantCulture) + "," +
+                   vector.y.ToString("F2", CultureInfo.InvariantCulture) + "," +
+                   vector.z.ToString("F2", CultureInfo.InvariantCulture) + ")";
         }
 
         private IEnumerator RecordInitialWindow(string saveName)
@@ -263,6 +402,120 @@ namespace DeepWaters
             yield return RunPhase(saveName, "above_water_levitation", phaseDuration, new Vector3(0.15f, 0f, 1f), AboveWaterOffset);
             yield return RunPhase(saveName, "underwater_return", phaseDuration, new Vector3(-1f, 0f, -0.15f), UnderwaterOffset);
             yield return RunPhase(saveName, "surface_boat_like", phaseDuration, new Vector3(-0.15f, 0f, -1f), AboveWaterOffset);
+        }
+
+        private static bool IsTargetedScenarioSave(string saveName)
+        {
+            return string.Equals(saveName, "ddd", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "eee", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "fff", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "ggg", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "hhh", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "iii", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "jjj", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "kkkk", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "lll", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "nnn", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private IEnumerator RunTargetedScenario(string saveName)
+        {
+            yield return CaptureDiagnosticScreenshot(saveName, "after-load");
+
+            if (string.Equals(saveName, "eee", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "ggg", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "hhh", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "jjj", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "nnn", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase))
+            {
+                string visualPhase = saveName.ToLowerInvariant() + "_shoreline_visual";
+                yield return RunStationaryPhase(saveName, visualPhase, TargetedVisualHoldSeconds);
+                yield return CaptureDiagnosticScreenshot(saveName, "shoreline-hold");
+                yield break;
+            }
+
+            string phase;
+            if (string.Equals(saveName, "ddd", StringComparison.OrdinalIgnoreCase))
+                phase = "ddd_straight_shore_entry";
+            else if (string.Equals(saveName, "iii", StringComparison.OrdinalIgnoreCase))
+                phase = "iii_straight_shore_entry";
+            else if (string.Equals(saveName, "kkkk", StringComparison.OrdinalIgnoreCase))
+                phase = "kkkk_straight_shore_entry";
+            else if (string.Equals(saveName, "lll", StringComparison.OrdinalIgnoreCase))
+                phase = "lll_straight_shore_probe";
+            else if (string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase))
+                phase = "mmm_straight_water_entry";
+            else
+                phase = "fff_straight_seam_probe";
+            float seconds = Mathf.Min(TargetedScenarioSeconds, Mathf.Max(10f, durationSeconds));
+            yield return RunNaturalForwardPhase(saveName, phase, seconds);
+            yield return CaptureDiagnosticScreenshot(saveName, phase + "-end");
+        }
+
+        private IEnumerator RunStationaryPhase(string saveName, string phase, float seconds)
+        {
+            DFPosition current;
+            if (TryGetCurrentPixel(out current))
+                StartWindow(saveName, phase, "visual_hold", current, hasLastPixel ? lastPixel : current);
+
+            float end = Time.realtimeSinceStartup + seconds;
+            while (Time.realtimeSinceStartup < end)
+                yield return null;
+        }
+
+        private IEnumerator RunNaturalForwardPhase(string saveName, string phase, float seconds)
+        {
+            Vector3 direction = GetCameraForwardFlat();
+            if (direction.sqrMagnitude < 0.001f)
+                direction = Vector3.forward;
+            bool writeFrameMovement =
+                string.Equals(saveName, "iii", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "kkkk", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "lll", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase);
+            if (writeFrameMovement)
+                ResetFrameMovementProbe();
+
+            DFPosition current;
+            if (TryGetCurrentPixel(out current))
+            {
+                StartWindow(saveName, phase, "phase_start", current, hasLastPixel ? lastPixel : current);
+                lastPixel = current;
+                hasLastPixel = true;
+            }
+
+            float end = Time.realtimeSinceStartup + seconds;
+            float nextScreenshot = Time.realtimeSinceStartup + TargetedScreenshotIntervalSeconds;
+            while (Time.realtimeSinceStartup < end)
+            {
+                MovePlayerNatural(direction);
+                CheckMapPixelTransition(saveName, phase);
+                if (writeFrameMovement)
+                    WriteMovementSnapshot(saveName, phase, "frame");
+
+                if (Time.realtimeSinceStartup >= nextScreenshot)
+                {
+                    yield return CaptureDiagnosticScreenshot(saveName, phase + "-" + Mathf.RoundToInt(seconds - (end - Time.realtimeSinceStartup)) + "s");
+                    nextScreenshot = Time.realtimeSinceStartup + TargetedScreenshotIntervalSeconds;
+                }
+
+                yield return null;
+            }
+        }
+
+        private static Vector3 GetCameraForwardFlat()
+        {
+            GameManager gameManager = GameManager.Instance;
+            Camera camera = gameManager != null ? gameManager.MainCamera : null;
+            Vector3 direction = camera != null ? camera.transform.forward : Vector3.forward;
+            direction.y = 0f;
+            if (direction.sqrMagnitude > 0.001f)
+                direction.Normalize();
+
+            return direction;
         }
 
         private IEnumerator RunPhase(string saveName, string phase, float seconds, Vector3 direction, float waterOffset)
@@ -309,6 +562,28 @@ namespace DeepWaters
                 pos.y = oceanY + waterOffset;
                 player.transform.position = pos;
             }
+
+            Physics.SyncTransforms();
+        }
+
+        private void MovePlayerNatural(Vector3 direction)
+        {
+            GameManager gameManager = GameManager.Instance;
+            GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+            if (player == null)
+                return;
+
+            float dt = Mathf.Min(Time.deltaTime, 0.1f);
+            Vector3 delta = direction * MoveSpeed * dt;
+            CharacterController controller = player.GetComponent<CharacterController>();
+            if (controller != null && controller.enabled)
+                controller.Move(delta);
+            else
+                player.transform.position += delta;
+
+            float oceanY;
+            if (DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) && gameManager.PlayerEnterExit != null)
+                OutdoorShoreExitAssist.TryMoveToShore(gameManager.PlayerEnterExit, oceanY, false, false);
 
             Physics.SyncTransforms();
         }
@@ -369,6 +644,8 @@ namespace DeepWaters
         {
             if (GameManager.HasInstance)
             {
+                KeepPlayerAliveForDiagnostics(GameManager.Instance);
+
                 WeaponManager weaponManager = GameManager.Instance.WeaponManager;
                 if (weaponManager != null)
                 {
@@ -390,6 +667,224 @@ namespace DeepWaters
             }
         }
 
+        private static void KeepPlayerAliveForDiagnostics(GameManager gameManager)
+        {
+            PlayerEntity playerEntity = gameManager != null ? gameManager.PlayerEntity : null;
+            if (playerEntity == null)
+                return;
+
+            playerEntity.GodMode = true;
+            if (playerEntity.CurrentHealth < playerEntity.MaxHealth)
+                playerEntity.CurrentHealth = playerEntity.MaxHealth;
+            if (playerEntity.CurrentFatigue < playerEntity.MaxFatigue)
+                playerEntity.CurrentFatigue = playerEntity.MaxFatigue;
+            if (playerEntity.CurrentMagicka < playerEntity.MaxMagicka)
+                playerEntity.CurrentMagicka = playerEntity.MaxMagicka;
+        }
+
+        private IEnumerator CaptureDiagnosticScreenshot(string saveName, string label)
+        {
+            string dir = Path.Combine(Application.persistentDataPath, "DeepWatersDiagnostics");
+            Directory.CreateDirectory(dir);
+            string safeLabel = (label ?? "capture").Replace(' ', '-').Replace(':', '-');
+            string path = Path.Combine(
+                dir,
+                "deep-waters-" + saveName + "-" + safeLabel + "-" +
+                DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".png");
+            WriteSnapshot(saveName, "screenshot", safeLabel);
+            LogTerrainSurfaceSnapshot(saveName, safeLabel);
+            LogShoreProfileSnapshot(saveName, safeLabel);
+            yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(path);
+            Debug.Log("[DeepWaters.Diagnostics] Screenshot: " + path);
+            yield return new WaitForSecondsRealtime(0.5f);
+        }
+
+        private static void LogTerrainSurfaceSnapshot(string saveName, string label)
+        {
+            if (GameManager.Instance == null || GameManager.Instance.PlayerObject == null)
+                return;
+
+            Vector3 player = GameManager.Instance.PlayerObject.transform.position;
+            DaggerfallTerrain[] terrains = UnityEngine.Object.FindObjectsOfType<DaggerfallTerrain>();
+            var sb = new StringBuilder();
+            sb.Append("[DeepWaters.Diagnostics] SurfaceSnapshot save=")
+              .Append(saveName)
+              .Append(" label=")
+              .Append(label)
+              .Append(" player=")
+              .Append(VectorString(player));
+
+            for (int i = 0; i < terrains.Length; i++)
+            {
+                DaggerfallTerrain dfTerrain = terrains[i];
+                if (dfTerrain == null)
+                    continue;
+
+                Terrain unityTerrain = dfTerrain.GetComponent<Terrain>();
+                TerrainData data = unityTerrain != null ? unityTerrain.terrainData : null;
+                Vector3 center = dfTerrain.transform.position;
+                if (data != null)
+                    center += new Vector3(data.size.x * 0.5f, 0f, data.size.z * 0.5f);
+
+                if ((center - player).sqrMagnitude > 2200f * 2200f)
+                    continue;
+
+                Transform surface = dfTerrain.transform.Find("DeepWaters_Surface");
+                MeshFilter filter = surface != null ? surface.GetComponentInChildren<MeshFilter>() : null;
+                Mesh mesh = filter != null ? filter.sharedMesh : null;
+                DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+                Material material = unityTerrain != null ? unityTerrain.materialTemplate : null;
+
+                sb.Append(" | tile=")
+                  .Append(dfTerrain.MapPixelX)
+                  .Append(":")
+                  .Append(dfTerrain.MapPixelY)
+                  .Append(" dist=")
+                  .Append(Vector3.Distance(center, player).ToString("F0", CultureInfo.InvariantCulture))
+                  .Append(" draw=")
+                  .Append(unityTerrain != null && unityTerrain.drawHeightmap ? "1" : "0")
+                  .Append(" surf=")
+                  .Append(surface != null ? "1" : "0")
+                  .Append(" verts=")
+                  .Append(mesh != null ? mesh.vertexCount.ToString(CultureInfo.InvariantCulture) : "0")
+                  .Append(" ocean=")
+                  .Append(tile != null && tile.IsOceanConnected ? "1" : "0")
+                  .Append(" df=")
+                  .Append(tile != null && tile.HasDistanceField ? "1" : "0")
+                  .Append(" shader=")
+                  .Append(material != null && material.shader != null ? material.shader.name : "none");
+            }
+
+            string line = sb.ToString();
+            Debug.Log(line);
+
+            string dir = Path.Combine(Application.persistentDataPath, "DeepWatersDiagnostics");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(
+                Path.Combine(dir, "surface-snapshots.log"),
+                DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) + " " + line + Environment.NewLine);
+        }
+
+        private static void LogShoreProfileSnapshot(string saveName, string label)
+        {
+            if (GameManager.Instance == null || GameManager.Instance.PlayerObject == null)
+                return;
+
+            Vector3 player = GameManager.Instance.PlayerObject.transform.position;
+            Vector3 forward = GetCameraForwardFlat();
+            if (forward.sqrMagnitude < 0.001f)
+                forward = Vector3.forward;
+
+            var sb = new StringBuilder();
+            sb.Append("[DeepWaters.Diagnostics] ShoreProfile save=")
+              .Append(saveName)
+              .Append(" label=")
+              .Append(label)
+              .Append(" player=")
+              .Append(VectorString(player))
+              .Append(" forward=(")
+              .Append(forward.x.ToString("F2", CultureInfo.InvariantCulture))
+              .Append(",")
+              .Append(forward.z.ToString("F2", CultureInfo.InvariantCulture))
+              .Append(")");
+
+            for (float distance = 0f; distance <= 360f; distance += 24f)
+            {
+                Vector3 sample = player + forward * distance;
+                PlayerProbe probe = SamplePlayerProbe(sample);
+                sb.Append(" | d=")
+                  .Append(distance.ToString("F0", CultureInfo.InvariantCulture))
+                  .Append(" pos=")
+                  .Append(VectorString(sample))
+                  .Append(" pix=")
+                  .Append(probe.TerrainPixel)
+                  .Append(" frac=")
+                  .Append(FloatCell(probe.LocalFracX))
+                  .Append("/")
+                  .Append(FloatCell(probe.LocalFracZ))
+                  .Append(" h=")
+                  .Append(FloatCell(probe.HeightSample))
+                  .Append(" terrainY=")
+                  .Append(FloatCell(probe.TerrainSampleWorldY))
+                  .Append(" water=")
+                  .Append(probe.LocalPointWater ? "1" : "0")
+                  .Append(" baked=")
+                  .Append(probe.BakedWater ? "1" : "0")
+                  .Append(" carved=")
+                  .Append(probe.CarvedWater ? "1" : "0")
+                  .Append(" col=")
+                  .Append(probe.ColumnPresent ? "1" : "0")
+                  .Append(" depth=")
+                  .Append(FloatCell(probe.ColumnDepth))
+                  .Append(" floor=")
+                  .Append(FloatCell(probe.CarvedSeafloorY))
+                  .Append(" down=")
+                  .Append(FloatCell(probe.DownHitY))
+                  .Append("/")
+                  .Append(FloatCell(probe.DownHitNormalY));
+            }
+
+            string line = sb.ToString();
+            Debug.Log(line);
+
+            string dir = Path.Combine(Application.persistentDataPath, "DeepWatersDiagnostics");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(
+                Path.Combine(dir, "shore-profiles.log"),
+                DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) + " " + line + Environment.NewLine);
+        }
+
+        private void WriteSnapshot(string saveName, string phase, string eventName)
+        {
+            WriteSnapshot(saveName, phase, eventName, float.NaN, float.NaN);
+        }
+
+        private void WriteMovementSnapshot(string saveName, string phase, string eventName)
+        {
+            float horizontalSpeed = float.NaN;
+            float verticalSpeed = float.NaN;
+            if (GameManager.Instance != null && GameManager.Instance.PlayerObject != null)
+            {
+                Vector3 player = GameManager.Instance.PlayerObject.transform.position;
+                float now = Time.realtimeSinceStartup;
+                if (hasLastFramePlayer)
+                {
+                    float dt = Mathf.Max(0.0001f, now - lastFrameTime);
+                    Vector3 delta = player - lastFramePlayer;
+                    horizontalSpeed = new Vector2(delta.x, delta.z).magnitude / dt;
+                    verticalSpeed = delta.y / dt;
+                }
+
+                lastFramePlayer = player;
+                lastFrameTime = now;
+                hasLastFramePlayer = true;
+            }
+
+            WriteSnapshot(saveName, phase, eventName, horizontalSpeed, verticalSpeed);
+        }
+
+        private void ResetFrameMovementProbe()
+        {
+            hasLastFramePlayer = false;
+            lastFramePlayer = Vector3.zero;
+            lastFrameTime = 0f;
+        }
+
+        private void WriteSnapshot(string saveName, string phase, string eventName, float horizontalSpeed, float verticalSpeed)
+        {
+            if (writer == null)
+                return;
+
+            DFPosition current;
+            if (!TryGetCurrentPixel(out current))
+                current = hasLastPixel ? lastPixel : new DFPosition();
+
+            DFPosition former = hasLastPixel ? lastPixel : current;
+            var window = new MetricWindow(saveName, phase, eventName, current, former);
+            WriteWindow(window, 0f, 0f, CountPixelAverage(current), CountPixelAverage(former), SampleRuntimeState(), horizontalSpeed, verticalSpeed);
+        }
+
         private void OpenWriter()
         {
             string dir = Path.Combine(Application.persistentDataPath, "DeepWatersDiagnostics");
@@ -397,14 +892,20 @@ namespace DeepWaters
             string path = Path.Combine(dir, "deep-waters-diagnostics-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".csv");
             writer = new StreamWriter(path, false, Encoding.UTF8);
             writer.AutoFlush = true;
-            writer.WriteLine("utc,save,phase,event,currentPixel,formerPixel,seconds,fps,decorationsCurrent,decorationsFormer,enemiesCurrent,enemiesFormer,fishCurrent,fishFormer,lootCurrent,lootFormer,rubbleCurrent,rubbleFormer,contentEligibleCurrent,contentEligibleFormer,loadGateActive,loadGateCount,loadGateAge,terrainUpdateActive,loadGraceActive,heavyWorkBlocked,heavyWorkResumeIn,postRefreshPending,decorQueue,decorQueuedTerrains,locationSkippedLast,locationDeferred,playerX,playerY,playerZ");
+            writer.WriteLine("utc,save,phase,event,currentPixel,formerPixel,seconds,fps,decorationsCurrent,decorationsFormer,enemiesCurrent,enemiesFormer,fishCurrent,fishFormer,lootCurrent,lootFormer,rubbleCurrent,rubbleFormer,contentEligibleCurrent,contentEligibleFormer,loadGateActive,loadGateCount,loadGateAge,terrainUpdateActive,loadGraceActive,heavyWorkBlocked,heavyWorkResumeIn,postRefreshPending,decorQueue,decorQueuedTerrains,locationSkippedLast,locationDeferred,playerX,playerY,playerZ,oceanY,columnPresent,columnDepth,renderedSeafloorY,carvedPresent,carvedSeafloorY,downHitY,downHitNormalY,downHitShore,playerSwimming,controllerGrounded,cameraYaw,cameraPitch,cameraTransformYaw,cameraForwardX,cameraForwardZ,playerTransformYaw,worldCompX,worldCompY,worldCompZ,gpsWorldX,gpsWorldZ,terrainPixel,localFracX,localFracZ,tileValue,tileIndex,heightSample,localPointWater,bakedWater,carvedWater,oceanConnected,horizontalSpeed,verticalSpeed,waterGateActive,waterGateDisabled,waterGateDesired");
         }
 
         private void WriteWindow(MetricWindow window, float seconds, float fps, Counts current, Counts former, RuntimeState runtime)
         {
+            WriteWindow(window, seconds, fps, current, former, runtime, float.NaN, float.NaN);
+        }
+
+        private void WriteWindow(MetricWindow window, float seconds, float fps, Counts current, Counts former, RuntimeState runtime, float horizontalSpeed, float verticalSpeed)
+        {
             Vector3 player = Vector3.zero;
             if (GameManager.Instance != null && GameManager.Instance.PlayerObject != null)
                 player = GameManager.Instance.PlayerObject.transform.position;
+            PlayerProbe probe = SamplePlayerProbe(player);
 
             writer.WriteLine(string.Join(",",
                 Csv(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)),
@@ -441,13 +942,203 @@ namespace DeepWaters
                 runtime.LocationDeferred.ToString("F2", CultureInfo.InvariantCulture),
                 player.x.ToString("F2", CultureInfo.InvariantCulture),
                 player.y.ToString("F2", CultureInfo.InvariantCulture),
-                player.z.ToString("F2", CultureInfo.InvariantCulture)));
+                player.z.ToString("F2", CultureInfo.InvariantCulture),
+                FloatCell(probe.OceanY),
+                probe.ColumnPresent ? "1" : "0",
+                FloatCell(probe.ColumnDepth),
+                FloatCell(probe.RenderedSeafloorY),
+                probe.CarvedPresent ? "1" : "0",
+                FloatCell(probe.CarvedSeafloorY),
+                FloatCell(probe.DownHitY),
+                FloatCell(probe.DownHitNormalY),
+                probe.DownHitShore ? "1" : "0",
+                probe.PlayerSwimming ? "1" : "0",
+                probe.ControllerGrounded ? "1" : "0",
+                FloatCell(probe.CameraYaw),
+                FloatCell(probe.CameraPitch),
+                FloatCell(probe.CameraTransformYaw),
+                FloatCell(probe.CameraForwardX),
+                FloatCell(probe.CameraForwardZ),
+                FloatCell(probe.PlayerTransformYaw),
+                FloatCell(probe.WorldCompensation.x),
+                FloatCell(probe.WorldCompensation.y),
+                FloatCell(probe.WorldCompensation.z),
+                FloatCell(probe.GpsWorldX),
+                FloatCell(probe.GpsWorldZ),
+                probe.TerrainPixel,
+                FloatCell(probe.LocalFracX),
+                FloatCell(probe.LocalFracZ),
+                probe.TileValue >= 0 ? probe.TileValue.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                probe.TileIndex >= 0 ? probe.TileIndex.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                FloatCell(probe.HeightSample),
+                probe.LocalPointWater ? "1" : "0",
+                probe.BakedWater ? "1" : "0",
+                probe.CarvedWater ? "1" : "0",
+                probe.OceanConnected ? "1" : "0",
+                FloatCell(horizontalSpeed),
+                FloatCell(verticalSpeed),
+                OutdoorSwimDriver.DiagnosticWaterColliderGateActive ? "1" : "0",
+                OutdoorSwimDriver.DiagnosticDisabledWaterColliderCount.ToString(CultureInfo.InvariantCulture),
+                OutdoorSwimDriver.DiagnosticDesiredWaterColliderCount.ToString(CultureInfo.InvariantCulture)));
             writer.Flush();
         }
 
         private static string Csv(string value)
         {
             return "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
+        }
+
+        private static string FloatCell(float value)
+        {
+            return float.IsNaN(value) || float.IsInfinity(value)
+                ? string.Empty
+                : value.ToString("F2", CultureInfo.InvariantCulture);
+        }
+
+        private static PlayerProbe SamplePlayerProbe(Vector3 player)
+        {
+            PlayerProbe probe = new PlayerProbe
+            {
+                OceanY = float.NaN,
+                ColumnDepth = float.NaN,
+                RenderedSeafloorY = float.NaN,
+                CarvedSeafloorY = float.NaN,
+                DownHitY = float.NaN,
+                DownHitNormalY = float.NaN,
+                CameraYaw = float.NaN,
+                CameraPitch = float.NaN,
+                CameraTransformYaw = float.NaN,
+                CameraForwardX = float.NaN,
+                CameraForwardZ = float.NaN,
+                PlayerTransformYaw = float.NaN,
+                WorldCompensation = new Vector3(float.NaN, float.NaN, float.NaN),
+                GpsWorldX = float.NaN,
+                GpsWorldZ = float.NaN,
+                TerrainPixel = string.Empty,
+                LocalFracX = float.NaN,
+                LocalFracZ = float.NaN,
+                TileValue = -1,
+                TileIndex = -1,
+                HeightSample = float.NaN,
+                TerrainSampleWorldY = float.NaN
+            };
+
+            float oceanY;
+            if (DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+                probe.OceanY = oceanY;
+
+            DeepWaterColumn column;
+            if (DeepWaterWorld.TryGetWaterColumn(player.x, player.z, out column))
+            {
+                probe.ColumnPresent = true;
+                probe.ColumnDepth = column.Depth;
+
+                float renderedY;
+                if (DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, player.x, player.z, out renderedY))
+                    probe.RenderedSeafloorY = renderedY;
+            }
+
+            float carvedY;
+            if (DeepWaterWorld.TryGetCarvedSeafloorWorldY(player.x, player.z, out carvedY))
+            {
+                probe.CarvedPresent = true;
+                probe.CarvedSeafloorY = carvedY;
+            }
+
+            RaycastHit hit;
+            if (Physics.Raycast(player + Vector3.up * 3f, Vector3.down, out hit, 30f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            {
+                probe.DownHitY = hit.point.y;
+                probe.DownHitNormalY = hit.normal.y;
+                probe.DownHitShore = !float.IsNaN(probe.OceanY) && OutdoorShoreExitAssist.IsValidShoreStandingHit(hit, probe.OceanY);
+            }
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager != null)
+            {
+                probe.PlayerSwimming = gameManager.PlayerEnterExit != null && gameManager.PlayerEnterExit.IsPlayerSwimming;
+                CharacterController controller = gameManager.PlayerObject != null
+                    ? gameManager.PlayerObject.GetComponent<CharacterController>()
+                    : null;
+                probe.ControllerGrounded = controller != null && controller.isGrounded;
+
+                PlayerMouseLook mouseLook = gameManager.PlayerMouseLook;
+                if (mouseLook != null)
+                {
+                    probe.CameraYaw = mouseLook.Yaw;
+                    probe.CameraPitch = mouseLook.Pitch;
+                }
+
+                Camera mainCamera = gameManager.MainCamera;
+                if (mainCamera != null)
+                {
+                    Transform cameraTransform = mainCamera.transform;
+                    Vector3 forward = cameraTransform.forward;
+                    probe.CameraTransformYaw = cameraTransform.eulerAngles.y;
+                    probe.CameraForwardX = forward.x;
+                    probe.CameraForwardZ = forward.z;
+                }
+
+                if (gameManager.PlayerObject != null)
+                    probe.PlayerTransformYaw = gameManager.PlayerObject.transform.eulerAngles.y;
+
+                if (gameManager.StreamingWorld != null)
+                    probe.WorldCompensation = gameManager.StreamingWorld.WorldCompensation;
+
+                if (gameManager.PlayerGPS != null)
+                {
+                    probe.GpsWorldX = gameManager.PlayerGPS.WorldX;
+                    probe.GpsWorldZ = gameManager.PlayerGPS.WorldZ;
+                }
+            }
+
+            DaggerfallTerrain dfTerrain;
+            Terrain terrain;
+            if (DeepWaterTerrainLookup.TryGetByWorldPosition(player.x, player.z, out dfTerrain, out terrain) &&
+                dfTerrain != null)
+            {
+                float tileWorldSize = DeepWaterWorld.TileWorldSize;
+                float fracX = tileWorldSize > 0f ? (player.x - dfTerrain.transform.position.x) / tileWorldSize : float.NaN;
+                float fracZ = tileWorldSize > 0f ? (player.z - dfTerrain.transform.position.z) / tileWorldSize : float.NaN;
+                probe.TerrainPixel = dfTerrain.MapPixelX + ":" + dfTerrain.MapPixelY;
+                probe.LocalFracX = fracX;
+                probe.LocalFracZ = fracZ;
+                probe.LocalPointWater = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ);
+
+                DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+                if (tile != null)
+                {
+                    probe.BakedWater = tile.IsBakedWater(player.x, player.z);
+                    probe.CarvedWater = tile.IsCarvedWater(player.x, player.z);
+                    probe.OceanConnected = tile.IsOceanConnected;
+                }
+
+                if (terrain != null)
+                    probe.TerrainSampleWorldY = terrain.SampleHeight(player) + terrain.transform.position.y;
+
+                byte[,] tilemap = dfTerrain.MapData.tilemapSamples;
+                if (tilemap != null)
+                {
+                    int rows = tilemap.GetLength(0);
+                    int cols = tilemap.GetLength(1);
+                    int x = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracX) * cols), 0, cols - 1);
+                    int y = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracZ) * rows), 0, rows - 1);
+                    probe.TileValue = tilemap[y, x];
+                    probe.TileIndex = probe.TileValue & 0x3f;
+                }
+
+                float[,] heights = dfTerrain.MapData.heightmapSamples;
+                if (heights != null)
+                {
+                    int rows = heights.GetLength(0);
+                    int cols = heights.GetLength(1);
+                    int x = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(fracX) * (cols - 1)), 0, cols - 1);
+                    int y = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(fracZ) * (rows - 1)), 0, rows - 1);
+                    probe.HeightSample = heights[y, x];
+                }
+            }
+
+            return probe;
         }
 
         private static string PixelString(DFPosition pixel)
@@ -679,6 +1370,49 @@ namespace DeepWaters
                 LocationDeferred *= inv;
                 return this;
             }
+        }
+
+        private struct PlayerProbe
+        {
+            public float OceanY;
+            public bool ColumnPresent;
+            public float ColumnDepth;
+            public float RenderedSeafloorY;
+            public bool CarvedPresent;
+            public float CarvedSeafloorY;
+            public float DownHitY;
+            public float DownHitNormalY;
+            public bool DownHitShore;
+            public bool PlayerSwimming;
+            public bool ControllerGrounded;
+            public float CameraYaw;
+            public float CameraPitch;
+            public float CameraTransformYaw;
+            public float CameraForwardX;
+            public float CameraForwardZ;
+            public float PlayerTransformYaw;
+            public Vector3 WorldCompensation;
+            public float GpsWorldX;
+            public float GpsWorldZ;
+            public string TerrainPixel;
+            public float LocalFracX;
+            public float LocalFracZ;
+            public int TileValue;
+            public int TileIndex;
+            public float HeightSample;
+            public float TerrainSampleWorldY;
+            public bool LocalPointWater;
+            public bool BakedWater;
+            public bool CarvedWater;
+            public bool OceanConnected;
+        }
+
+        private struct SavedPlayerPose
+        {
+            public Vector3 Position;
+            public Vector3 WorldCompensation;
+            public float Yaw;
+            public float Pitch;
         }
 
         private sealed class MetricWindow
