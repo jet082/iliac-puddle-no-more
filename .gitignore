@@ -1,0 +1,6 @@
+*.meta
+Resources/DistanceBake.bytes
+Resources/DistanceBakeVanilla.bytes
+Diagnostics/WodExactWaterMasks.bytes
+.claude
+.claude/settings.local.json
