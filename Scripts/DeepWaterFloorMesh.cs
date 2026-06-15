@@ -21,18 +21,17 @@ namespace DeepWaters
     [RequireComponent(typeof(MeshCollider))]
     public class DeepWaterFloorMesh : MonoBehaviour
     {
-        private const int DefaultVertexGridSize = 33;
+        // 33x33 keeps the seafloor readable while cutting mesh build and
+        // collider cooking cost to roughly a quarter of the old 65x65 grid.
+        public const int VertexGridSize = 33;
         private const float WallMinimumDrop = 0.25f;
         private const float ShoreWallSurfaceInset = 0.20f;
         private const float ShoreWallBottomOverlap = 0.10f;
         private const float ShoreWallTopTextureStrength = 0.35f;
-        // Continuous shore-skirt tuning (v0.55.36). The skirt bridges the deep
-        // carved floor to the shallow vanilla coast as ONE gap-free surface
-        // (shared per-perimeter-vertex bottoms), with a run that widens as the
-        // drop deepens so it grades in like natural seabed instead of standing
-        // up as a wall.
+        // Continuous shore skirt. Keep it short and deterministic so stream
+        // builds don't spend extra time on wide/noisy perimeter geometry.
         private const float SkirtSlopeTangent = 0.6f;
-        private const float SkirtMinWidthMeters = 6.0f;
+        private const float SkirtMinWidthMeters = 12.0f;
         private const float SkirtMaxWidthMeters = 40.0f;
 
         private Mesh mesh;
@@ -49,7 +48,6 @@ namespace DeepWaters
         private float[,] vertexLocalY;
         private bool[,] floorQuadWater;
         private float tileWorldSizeCached;
-        private int builtVertexGridSize;
 
         // Diagnostic counters captured per Build call, logged at the end.
         // The user runs the game with this and shares the Player.log so we
@@ -114,8 +112,7 @@ namespace DeepWaters
             tileWorldSizeCached = tileWorldSize;
             Vector3 terrainOrigin = owner.transform.position;
 
-            int n = CurrentVertexGridSize;
-            builtVertexGridSize = n;
+            int n = VertexGridSize;
             int vertexCount = n * n;
             var vertices = new List<Vector3>(vertexCount + EstimateWallVertexCapacity(holes));
             var colors = new List<Color>(vertices.Capacity);
@@ -277,7 +274,7 @@ namespace DeepWaters
             if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
                 return false;
 
-            int n = builtVertexGridSize > 1 ? builtVertexGridSize : CurrentVertexGridSize;
+            int n = VertexGridSize;
             float fx = fracX * (n - 1);
             float fz = fracZ * (n - 1);
             int x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, n - 2);
@@ -329,16 +326,6 @@ namespace DeepWaters
             int hx = Mathf.Clamp(Mathf.FloorToInt(fracX * cols), 0, cols - 1);
             int hz = Mathf.Clamp(Mathf.FloorToInt(fracZ * rows), 0, rows - 1);
             return !holes[hz, hx];
-        }
-
-        private static int CurrentVertexGridSize
-        {
-            get
-            {
-                return DeepWaters.Instance != null
-                    ? Mathf.Clamp(DeepWaters.Instance.SeafloorMeshSize, 17, 65)
-                    : DefaultVertexGridSize;
-            }
         }
 
         private void AppendHoleEdgeWalls(
@@ -594,7 +581,8 @@ namespace DeepWaters
                 seafloorTop = meshTop;
             float drop = Mathf.Max(0f, topY - seafloorTop);
 
-            float skirtWidth = Mathf.Clamp(drop / SkirtSlopeTangent, SkirtMinWidthMeters, SkirtMaxWidthMeters);
+            float skirtWidth = Mathf.Clamp(drop / SkirtSlopeTangent,
+                                           SkirtMinWidthMeters, SkirtMaxWidthMeters);
 
             float bottomLocalX = Mathf.Clamp(localX + inward.x * skirtWidth, 0f, tileWorldSize);
             float bottomLocalZ = Mathf.Clamp(localZ + inward.y * skirtWidth, 0f, tileWorldSize);

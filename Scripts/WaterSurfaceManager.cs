@@ -21,7 +21,7 @@ namespace DeepWaters
         private const string TopSurfaceChildName = "DeepWaters_Surface_Top";
         private const string UndersideSurfaceChildName = "DeepWaters_Surface_Underside";
         private const string GeneratedMeshName = "DeepWaters.SurfaceMesh";
-        private const int DefaultSurfaceGridResolution = 16;
+        private const int SurfaceGridResolution = 16;
 
         private static bool installed;
 
@@ -64,28 +64,36 @@ namespace DeepWaters
         // build never mutates terrainData; it only adds a child mesh renderer.
         private static void HandlePromoteCore(DaggerfallTerrain sender, TerrainData terrainData, bool fromPromoteEvent)
         {
-            if (sender == null || terrainData == null)
-                return;
-
-            if (!fromPromoteEvent && !DeepWaterRuntime.CanMutateTerrainData)
-                return;
-
-            if (DeepWaters.Instance == null ||
-                !DeepWaters.Instance.SpawnWaterSurfaces ||
-                !HasWaterTile(sender.MapData))
+            System.Diagnostics.Stopwatch profile = DeepWaterRuntime.StartProfile();
+            try
             {
-                RemoveExisting(sender);
-                return;
-            }
+                if (sender == null || terrainData == null)
+                    return;
 
-            Mesh surfaceMesh = BuildSurfaceMesh(sender, terrainData);
-            if (surfaceMesh == null)
+                if (!fromPromoteEvent && !DeepWaterRuntime.CanMutateTerrainData)
+                    return;
+
+                if (DeepWaters.Instance == null ||
+                    !DeepWaters.Instance.SpawnWaterSurfaces ||
+                    !HasWaterTile(sender.MapData))
+                {
+                    RemoveExisting(sender);
+                    return;
+                }
+
+                Mesh surfaceMesh = BuildSurfaceMesh(sender, terrainData);
+                if (surfaceMesh == null)
+                {
+                    RemoveExisting(sender);
+                    return;
+                }
+
+                EnsureVisibleSurface(sender, terrainData, surfaceMesh);
+            }
+            finally
             {
-                RemoveExisting(sender);
-                return;
+                DeepWaterRuntime.LogProfile(profile, "surface-promote", sender);
             }
-
-            EnsureVisibleSurface(sender, terrainData, surfaceMesh);
         }
 
         // Use the same promoted tilemap/heightmap test as the hole builder so
@@ -179,7 +187,7 @@ namespace DeepWaters
 
         private static Mesh BuildSurfaceMesh(DaggerfallTerrain terrain, TerrainData terrainData)
         {
-            int n = DeepWaters.Instance != null ? DeepWaters.Instance.WaterSurfaceMeshSize : DefaultSurfaceGridResolution;
+            int n = SurfaceGridResolution;
             float sizeX = terrainData.size.x;
             float sizeZ = terrainData.size.z;
 

@@ -357,21 +357,9 @@ namespace DeepWaters
             return Mathf.Clamp(DeepWaters.Instance.WaterDepth, 1f, MaxAbsoluteDepth);
         }
 
-        // The first meters of carved water ramp from wading depth at the
-        // carve edge up to the full swimmable minimum, so the seabed meets
-        // the shore as a continuous shelf instead of a 2.7m underwater cliff
-        // (which read as a hard zigzag color seam along the cell-quantized
-        // carve edge). The swim gate engages at GateEngageWaterDepth,
-        // comfortably inside the ramp, so the shallow fringe is wading
-        // ground, not broken swim water.
-        private const float ShoreEntryMinDepth = 0.9f;
-        private const float ShoreEntryRampMeters = 20f;
-
         private static float ComputeMinimumNavigableDepth(float distanceToCoastMeters, float userMaxDepth)
         {
-            float edgeT = Mathf.Clamp01(distanceToCoastMeters / ShoreEntryRampMeters);
-            float rampedShelfMin = Mathf.Lerp(ShoreEntryMinDepth, ShelfMinDepth, edgeT * edgeT * (3f - 2f * edgeT));
-            float effectiveShelfMin = Mathf.Min(rampedShelfMin, userMaxDepth * 0.4f);
+            float effectiveShelfMin = Mathf.Min(ShelfMinDepth, userMaxDepth * 0.4f);
             float noStandDepth = Mathf.Min(MinimumOffshoreNavigableDepthMeters, userMaxDepth);
             if (noStandDepth <= effectiveShelfMin)
                 return effectiveShelfMin;

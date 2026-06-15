@@ -35,6 +35,7 @@ namespace DeepWaters
         private static readonly int CutoffProperty = Shader.PropertyToID("_Cutoff");
         private static readonly Dictionary<Material, Material> underwaterMaterialCache = new Dictionary<Material, Material>();
         private static readonly HashSet<Material> cachedUnderwaterMaterials = new HashSet<Material>();
+        private static readonly Dictionary<Texture, Texture> cleanedTextureCache = new Dictionary<Texture, Texture>();
 
         public static GameObject Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {
@@ -434,10 +435,145 @@ namespace DeepWaters
 
             Texture texture = sourceMaterial.GetTexture(propertyId);
             if (texture != null)
-                targetMaterial.SetTexture(propertyId, texture);
+                targetMaterial.SetTexture(propertyId, GetEdgeCleanedTexture(texture));
 
             targetMaterial.SetTextureScale(propertyId, sourceMaterial.GetTextureScale(propertyId));
             targetMaterial.SetTextureOffset(propertyId, sourceMaterial.GetTextureOffset(propertyId));
+        }
+
+        private static Texture GetEdgeCleanedTexture(Texture source)
+        {
+            Texture cached;
+            if (cleanedTextureCache.TryGetValue(source, out cached))
+                return cached;
+
+            Texture cleaned = TryCreateEdgeCleanedTexture(source) ?? source;
+            cleanedTextureCache[source] = cleaned;
+            return cleaned;
+        }
+
+        private static Texture2D TryCreateEdgeCleanedTexture(Texture source)
+        {
+            if (source == null || source.width <= 0 || source.height <= 0)
+                return null;
+
+            RenderTexture previous = RenderTexture.active;
+            RenderTexture rt = RenderTexture.GetTemporary(source.width, source.height, 0, RenderTextureFormat.ARGB32);
+            Texture2D copy = null;
+            try
+            {
+                Graphics.Blit(source, rt);
+                RenderTexture.active = rt;
+                copy = new Texture2D(source.width, source.height, TextureFormat.ARGB32, false);
+                copy.ReadPixels(new Rect(0, 0, source.width, source.height), 0, 0);
+                copy.Apply(false, false);
+
+                if (!ClearEdgeBlackPixels(copy))
+                {
+                    Object.Destroy(copy);
+                    return null;
+                }
+
+                copy.name = source.name + " (Deep Waters Edge Alpha)";
+                copy.wrapMode = source.wrapMode;
+                copy.filterMode = source.filterMode;
+                copy.anisoLevel = source.anisoLevel;
+                copy.hideFlags = HideFlags.HideAndDontSave;
+                return copy;
+            }
+            catch
+            {
+                if (copy != null)
+                    Object.Destroy(copy);
+                return null;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+            }
+        }
+
+        private static bool ClearEdgeBlackPixels(Texture2D texture)
+        {
+            Color32[] pixels = texture.GetPixels32();
+            int width = texture.width;
+            int height = texture.height;
+            bool[] queued = new bool[pixels.Length];
+            var queue = new Queue<int>();
+
+            for (int x = 0; x < width; x++)
+            {
+                EnqueueEdgeBlackPixel(x, 0, width, pixels, queued, queue);
+                EnqueueEdgeBlackPixel(x, height - 1, width, pixels, queued, queue);
+            }
+
+            for (int y = 1; y < height - 1; y++)
+            {
+                EnqueueEdgeBlackPixel(0, y, width, pixels, queued, queue);
+                EnqueueEdgeBlackPixel(width - 1, y, width, pixels, queued, queue);
+            }
+
+            bool changed = false;
+            while (queue.Count > 0)
+            {
+                int index = queue.Dequeue();
+                if (pixels[index].a != 0)
+                {
+                    pixels[index].a = 0;
+                    changed = true;
+                }
+
+                int x = index % width;
+                int y = index / width;
+                TryEnqueueNeighbor(x - 1, y, width, height, pixels, queued, queue);
+                TryEnqueueNeighbor(x + 1, y, width, height, pixels, queued, queue);
+                TryEnqueueNeighbor(x, y - 1, width, height, pixels, queued, queue);
+                TryEnqueueNeighbor(x, y + 1, width, height, pixels, queued, queue);
+            }
+
+            if (!changed)
+                return false;
+
+            texture.SetPixels32(pixels);
+            texture.Apply(false, false);
+            return true;
+        }
+
+        private static void EnqueueEdgeBlackPixel(
+            int x,
+            int y,
+            int width,
+            Color32[] pixels,
+            bool[] queued,
+            Queue<int> queue)
+        {
+            int index = y * width + x;
+            if (queued[index] || !IsTransparentPadding(pixels[index]))
+                return;
+
+            queued[index] = true;
+            queue.Enqueue(index);
+        }
+
+        private static void TryEnqueueNeighbor(
+            int x,
+            int y,
+            int width,
+            int height,
+            Color32[] pixels,
+            bool[] queued,
+            Queue<int> queue)
+        {
+            if (x < 0 || y < 0 || x >= width || y >= height)
+                return;
+
+            EnqueueEdgeBlackPixel(x, y, width, pixels, queued, queue);
+        }
+
+        private static bool IsTransparentPadding(Color32 pixel)
+        {
+            return pixel.a < 16 || (pixel.r <= 12 && pixel.g <= 12 && pixel.b <= 12);
         }
 
         private static void ConfigureUnderwaterDecorationMaterial(Material material, Material sourceMaterial = null)

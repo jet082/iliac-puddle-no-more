@@ -22,11 +22,13 @@ namespace DeepWaters
         private const float SpawnViewportMargin = 0.08f;
         private const float MinFishPulseIntervalSeconds = 10f;
         private const float FailedFishRetrySeconds = 4f;
-        private const float DespawnDistance = 100f;
+        private const float DespawnDistance = 160f;
         private const float ShoreFishPulseMultiplier = 0.5f;
+        private const float FishSpawnMinDistance = 20f;
+        private const float FishSpawnMaxDistance = 85f;
+        private const float FishSpawnViewSafetyDistance = 25f;
 
         private static readonly TransientObjectTracker liveFish = new TransientObjectTracker();
-
         private static GameObject iconBridgeObject;
         private static float nextAllowedPulseTime;
         private static bool installed;
@@ -181,15 +183,15 @@ namespace DeepWaters
             Vector3 playerPos = gameManager.PlayerObject.transform.position;
             Vector3 spawnPoint = DeepWaterWorld.PickRingPoint(
                 playerPos,
-                DeepWaterWorld.EncounterSpawnMinDistance,
-                DeepWaterWorld.EncounterSpawnMaxDistance);
+                FishSpawnMinDistance,
+                FishSpawnMaxDistance);
 
             Vector3 worldPos;
             Transform parent;
             if (!PassiveFishPlacement.TryResolvePosition(spawnPoint.x, spawnPoint.z, out worldPos, out parent))
                 return 0;
 
-            if (!DeepWaterWorld.IsOutsideImmediateView(worldPos, playerPos, DeepWaterWorld.EncounterSpawnViewSafetyDistance, SpawnViewportMargin))
+            if (!DeepWaterWorld.IsOutsideImmediateView(worldPos, playerPos, FishSpawnViewSafetyDistance, SpawnViewportMargin))
                 return 0;
 
             // Pick the species for THIS location's biome + depth so each region
@@ -264,8 +266,8 @@ namespace DeepWaters
         {
             bool fishParadise = DeepWaters.Instance != null && DeepWaters.Instance.FishParadise;
             bool inLocation = IsPlayerInLoadedLocation();
-            int maxFish = DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveFish : 36;
-            int maxParadiseFish = DeepWaters.Instance != null ? DeepWaters.Instance.FishParadiseMaxLiveFish : 72;
+            int maxFish = DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveFish : 54;
+            int maxParadiseFish = DeepWaters.Instance != null ? DeepWaters.Instance.FishParadiseMaxLiveFish : 108;
             if (fishParadise)
                 return inLocation ? Mathf.FloorToInt(maxParadiseFish * 0.5f) : maxParadiseFish;
 

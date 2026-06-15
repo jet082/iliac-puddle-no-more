@@ -90,6 +90,17 @@ namespace DeepWaters
                    gameManager.PlayerMotor.OnExteriorWater != PlayerMotor.OnExteriorWaterMethod.None;
         }
 
+        public static bool IsPlayerOverDeepWater(float minimumDepth)
+        {
+            Vector3 position;
+            if (!TryGetPlayerPosition(out position))
+                return false;
+
+            DeepWaterColumn column;
+            return TryGetWaterColumn(position.x, position.z, out column) &&
+                   column.Depth >= minimumDepth;
+        }
+
         public static bool IsPlayerInOrAboveDeepWater(float minimumDepth)
         {
             var gameManager = GameManager.Instance;

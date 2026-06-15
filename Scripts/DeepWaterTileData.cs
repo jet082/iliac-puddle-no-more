@@ -307,13 +307,6 @@ namespace DeepWaters
             if (!DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData))
                 return false;
 
-            // Treat the promoted tile as ocean-connected when the coarse
-            // ocean-connected bake reaches this pixel or its immediate shore
-            // neighborhood. This keeps shoreline pixels that are mostly beach
-            // from dropping out, while still filtering isolated inland water.
-            if (DeepWaterDistanceBake.MapPixelHasWaterCellsNear(mx, my, 2))
-                return true;
-
             if (DeepWaterDistanceBake.HasFineWaterMask)
                 return DeepWaterDistanceBake.MapPixelHasFineWaterCells(mx, my);
 

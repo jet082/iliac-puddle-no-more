@@ -63,8 +63,7 @@ Shader "DeepWaters/TilemapClipWater" {
 			// bits; rotation variants live in the high bits). Shore transition
 			// tiles keep rendering, so the beach fringe stays solid while the
 			// painted sea-level water cap disappears, revealing the carved
-			// seafloor below — and, over the bake's buffered shore strip, the
-			// water film above the void (the shipped shoreline look).
+			// seafloor below.
 			clip((index & 0x3F) == 0 ? -1.0 : 1.0);
 
 			uint xpos = index % _TilesetDim;

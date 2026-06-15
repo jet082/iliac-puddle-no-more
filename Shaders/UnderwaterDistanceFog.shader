@@ -205,13 +205,8 @@ Shader "DeepWaters/UnderwaterDistanceFog"
 
                     // Geometry ABOVE the surface (boats, docks, towers seen
                     // from below through the film): only the underwater part
-                    // of the ray is water — clamp the fog path to the surface
-                    // crossing, exactly like the no-depth branch. Without
-                    // this an above-water object fogs over its FULL distance
-                    // (air counted as water) and turns into a flat silhouette
-                    // while the sky beside it stops at the surface and stays
-                    // clear — an inverted look. Underwater geometry is closer
-                    // than the crossing, so the min() never affects it.
+                    // of the ray is water. Clamp the fog path to the surface
+                    // crossing so air is not counted as water fog.
                     float3 rayDir = normalize(rayWorldUnnorm);
                     float belowSurface = _WaterSurfaceY - _WorldSpaceCameraPos.y;
                     if (rayDir.y > 0.0001 && belowSurface > 0.0)

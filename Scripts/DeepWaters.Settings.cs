@@ -10,15 +10,16 @@ namespace DeepWaters
     public partial class DeepWaters
     {
         private const float SliderMidpoint = 0.5f;
-        private const float EnemyFrequencyAtMidpoint = 0.3f;
-        private const float PassiveFishFrequencyAtMidpoint = 0.6f;
-        private const float DecorationFrequencyAtMidpoint = 1.0f;
+        private const float EnemyFrequencyAtMidpoint = 0.5f;
+        private const float PassiveFishFrequencyAtMidpoint = 3.0f;
+        private const float DecorationFrequencyAtMidpoint = 3.75f;
+        private const float PassiveFishLiveCapMultiplier = 1.5f;
         private const float SeafloorLootRateAtMidpoint = 0.7f;
         private const float TreasureClusterRateAtMidpoint = 0.1f;
         private const float UnderwaterFogDensityMaxAtMidpoint = 0.014f;
-        private const float UnderwaterVisionDistanceAtDefaultSetting = 70f;
+        private const float UnderwaterVisionDistanceAtDefaultSetting = 95f;
         private const float MinimumUnderwaterVisionDistance = 22f;
-        private const float MaximumUnderwaterVisionDistance = 260f;
+        private const float MaximumUnderwaterVisionDistance = 360f;
         // Both surfaces map the slider linearly: alpha = 1 - transparency, so
         // 0.1 transparency = 90% opaque and 1.0 transparency = fully invisible.
         private const float TopOpaqueWaterSurfaceAlpha = 1.0f;
@@ -31,18 +32,18 @@ namespace DeepWaters
         private const float MaxSwimSpeedMultiplier = 30.0f;
         private const float DefaultEncounterMinSpawnDistance = 35f;
         private const float DefaultEncounterMaxSpawnDistance = 55f;
+        private const float ClearWaterEncounterMinSpawnDistance = 90f;
+        private const float ClearWaterEncounterMaxSpawnDistance = 180f;
         private const float EncounterImmediateViewDistance = 55f;
 
         public float WaterDepth { get; private set; } = 200f;
         public bool SpawnWaterSurfaces { get; private set; } = true;
-        public int WaterSurfaceMeshSize { get; private set; } = 16;
-        public int SeafloorMeshSize { get; private set; } = 33;
         public bool SpawnUnderwaterEnemies { get; private set; } = true;
         public int MaxLiveEnemies { get; private set; } = 8;
         public float EnemyFrequency { get; private set; } = EnemyFrequencyAtMidpoint;
         public float PassiveFishFrequency { get; private set; } = PassiveFishFrequencyAtMidpoint;
-        public int MaxLiveFish { get; private set; } = 36;
-        public int FishParadiseMaxLiveFish { get; private set; } = 72;
+        public int MaxLiveFish { get; private set; } = 54;
+        public int FishParadiseMaxLiveFish { get; private set; } = 108;
         public bool FishParadise { get; private set; }
         public bool SpawnUnderwaterDecorations { get; private set; } = true;
         public int DecorationPopulateRadius { get; private set; } = 1;
@@ -63,8 +64,6 @@ namespace DeepWaters
         public bool ArgonianInfiniteBreath { get; private set; } = true;
         public float SwimSpeedMultiplier { get; private set; } = 1f;
         public bool EnableSwimStroke { get; private set; }
-        private int encounterSpawnMinDistance = (int)DefaultEncounterMinSpawnDistance;
-        private int encounterSpawnMaxDistance = (int)DefaultEncounterMaxSpawnDistance;
 
         public float WaterSurfaceTopAlpha
         {
@@ -111,12 +110,12 @@ namespace DeepWaters
 
         public float EncounterSpawnMinDistance
         {
-            get { return encounterSpawnMinDistance; }
+            get { return Mathf.Lerp(DefaultEncounterMinSpawnDistance, ClearWaterEncounterMinSpawnDistance, EncounterVisibilityExpansion); }
         }
 
         public float EncounterSpawnMaxDistance
         {
-            get { return Mathf.Max(encounterSpawnMinDistance + 1, encounterSpawnMaxDistance); }
+            get { return Mathf.Lerp(DefaultEncounterMaxSpawnDistance, ClearWaterEncounterMaxSpawnDistance, EncounterVisibilityExpansion); }
         }
 
         public float EncounterSpawnViewSafetyDistance
@@ -163,28 +162,24 @@ namespace DeepWaters
         {
             WaterDepth = GetFloatSetting(s, "WaterDepth");
             SpawnWaterSurfaces = GetBoolSetting(s, "SpawnWaterSurfaces");
-            WaterSurfaceMeshSize = Mathf.Clamp(GetIntSetting(s, "WaterSurfaceMeshSize"), 8, 64);
-            SeafloorMeshSize = Mathf.Clamp(GetIntSetting(s, "SeafloorMeshSize"), 17, 65);
             SpawnUnderwaterEnemies = GetBoolSetting(s, "SpawnUnderwaterEnemies");
-            MaxLiveEnemies = Mathf.Clamp(GetIntSetting(s, "MaxLiveEnemies"), 0, 32);
             EnemyFrequency = GetScaledSliderSetting(s, "EnemyFrequency", EnemyFrequencyAtMidpoint);
             PassiveFishFrequency = GetScaledSliderSetting(s, "PassiveFishFrequency", PassiveFishFrequencyAtMidpoint);
-            MaxLiveFish = Mathf.Clamp(GetIntSetting(s, "MaxLiveFish"), 0, 180);
-            FishParadiseMaxLiveFish = Mathf.Clamp(GetIntSetting(s, "FishParadiseMaxLiveFish"), 0, 240);
+            MaxLiveFish = Mathf.Clamp(
+                Mathf.RoundToInt(GetIntSetting(s, "MaxLiveFish") * PassiveFishLiveCapMultiplier),
+                0,
+                180);
+            FishParadiseMaxLiveFish = Mathf.Clamp(
+                Mathf.RoundToInt(GetIntSetting(s, "FishParadiseMaxLiveFish") * PassiveFishLiveCapMultiplier),
+                0,
+                240);
             FishParadise = GetBoolSetting(s, "FishParadise");
             SpawnUnderwaterDecorations = GetBoolSetting(s, "SpawnUnderwaterDecorations");
             DecorationPopulateRadius = Mathf.Clamp(GetIntSetting(s, "DecorationPopulateRadius"), 1, 3);
             DecorationFrequency = GetScaledSliderSetting(s, "DecorationFrequency", DecorationFrequencyAtMidpoint);
             SeafloorLootRate = GetScaledSliderSetting(s, "SeafloorLootRate", SeafloorLootRateAtMidpoint);
-            MaxLiveLootObjects = Mathf.Clamp(GetIntSetting(s, "MaxLiveLootObjects"), 0, 64);
-            MaxStrayLootPerPulse = Mathf.Clamp(GetIntSetting(s, "MaxStrayLootPerPulse"), 0, 16);
-            TreasureCoveMaxStrayLootPerPulse = Mathf.Clamp(GetIntSetting(s, "TreasureCoveMaxStrayLootPerPulse"), 0, 24);
             TreasureClusterRate = GetScaledSliderSetting(s, "TreasureClusterRate", TreasureClusterRateAtMidpoint);
             TreasureCove = GetBoolSetting(s, "TreasureCove");
-            encounterSpawnMinDistance = Mathf.Clamp(GetIntSetting(s, "EncounterSpawnMinDistance"), 10, 180);
-            encounterSpawnMaxDistance = Mathf.Clamp(GetIntSetting(s, "EncounterSpawnMaxDistance"), 20, 240);
-            LootSpawnMinDistance = Mathf.Clamp(GetIntSetting(s, "LootSpawnMinDistance"), 10, 180);
-            LootSpawnMaxDistance = Mathf.Clamp(GetIntSetting(s, "LootSpawnMaxDistance"), 20, 240);
             WaterSurfaceTopTransparency = GetFloatSetting(s, "WaterSurfaceTopTransparency");
             WaterSurfaceBottomTransparency = GetFloatSetting(s, "WaterSurfaceBottomTransparency");
             WaterSurfaceDistanceFalloff = GetFloatSetting(s, "WaterSurfaceDistanceFalloff");
@@ -193,6 +188,19 @@ namespace DeepWaters
             ArgonianInfiniteBreath = GetBoolSetting(s, "ArgonianInfiniteBreath");
             SwimSpeedMultiplier = ClampSwimSpeedMultiplier(GetFloatSetting(s, "SwimSpeedMultiplier"));
             EnableSwimStroke = GetBoolSetting(s, "EnableSwimStroke");
+        }
+
+        private float EncounterVisibilityExpansion
+        {
+            get
+            {
+                float surfaceClarity = Mathf.Max(
+                    SurfaceClarity01(WaterSurfaceTopTransparency),
+                    SurfaceClarity01(WaterSurfaceBottomTransparency));
+                float fogRange = AboveMidpoint01(UnderwaterFogDistance);
+                float fogThinness = Mathf.Clamp01((SliderMidpoint - UnderwaterFogStrength) / SliderMidpoint);
+                return Mathf.Clamp01(Mathf.Max(Mathf.Max(surfaceClarity, fogRange), fogThinness));
+            }
         }
 
         private static float GetScaledSliderSetting(ModSettings settings, string key, float valueAtMidpoint)
@@ -214,6 +222,16 @@ namespace DeepWaters
                 ? Mathf.Lerp(1f, 0.98f, slider / 0.1f)
                 : Mathf.Lerp(0.98f, 0f, (slider - 0.1f) / 0.9f);
             return Mathf.Lerp(transparentAlpha, opaqueAlpha, opacity01);
+        }
+
+        private static float SurfaceClarity01(float sliderValue)
+        {
+            return Mathf.Clamp01(sliderValue);
+        }
+
+        private static float AboveMidpoint01(float sliderValue)
+        {
+            return Mathf.Clamp01((Mathf.Clamp01(sliderValue) - SliderMidpoint) / SliderMidpoint);
         }
 
         private static float FogDistanceSliderToMultiplier(float sliderValue)

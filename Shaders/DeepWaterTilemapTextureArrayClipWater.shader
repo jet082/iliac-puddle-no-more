@@ -101,9 +101,7 @@ Shader "DeepWaters/TilemapTextureArrayClipWater" {
             // DeepWaters: discard pure-water texels (tile record 0). Shore
             // transition tiles keep rendering, so the beach fringe stays solid
             // while the painted sea-level water cap disappears, revealing the
-            // carved seafloor below — and, over the bake's buffered shore
-            // strip, the water film above the void (the shipped shoreline
-            // look).
+            // carved seafloor below.
             clip(tileIndex == 0 ? -1.0 : 1.0);
 
             // Offset to fragment position inside tile

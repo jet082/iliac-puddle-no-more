@@ -58,8 +58,8 @@ The mod has four major jobs:
 - `UnderwaterAmbientMuter.cs`: underwater audio low-pass filter.
 - `SwimmingSfxBridge.cs`: lightweight swim splash cadence.
 - `UnderwaterWeatherSuppressor.cs`: rain and snow particle suppression while swimming.
-- `UnderwaterWaveShadowFix.cs`: underwater suppression of player-following
-  lights, plus the cutout depth-queue fix for flats.
+- `UnderwaterWaveShadowFix.cs`: underwater compatibility for player-following
+  lights and third-party wave shadows.
 - `ArgonianWaterBreathing.cs`: optional Argonian infinite breath.
 - `UnderwaterDecorations.cs`: seafloor flora and debris batches.
 - `UnderwaterEnemySpawner.cs`: aquatic enemies and rare treasure guards.
@@ -377,7 +377,14 @@ enable the player torch because `OutdoorSwimDriver` borrows DFU's dungeon
 swimming state for part of the frame. Underwater, either light can wash out
 contrast in a perfect circular radius around the camera. The fix suppresses
 those player-following lights only while underwater presentation is active,
-after DFU has updated lighting for the frame.
+after DFU has updated lighting for the frame. It also disables real shadow
+casting on Come Sail Away-style wave renderers while submerged, because those
+large, thin, above-camera meshes are culled inconsistently from Unity's shadow
+frustum when viewed from below. Their normal visual rendering remains intact,
+but their shadows are intentionally left off while submerged. A missing wave
+shadow is less distracting than circular shadow holes or floating artifacts,
+and their original shadow settings are restored when the player leaves
+underwater presentation.
 
 ## Outdoor Swimming
 

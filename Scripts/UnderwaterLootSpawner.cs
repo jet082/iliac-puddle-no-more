@@ -35,6 +35,7 @@ namespace DeepWaters
         private const int FullStrayLootPerPulse = 2;
         private const float NormalLootMultiplier = 2f;
         private const float TreasureCoveStrayMultiplier = 3f;
+
         // Treasure clusters are event-like, so the setting maps directly to a
         // per-pulse chance rather than a count.
         private const float TreasureCoveClusterChanceMultiplier = 3f;
@@ -45,7 +46,6 @@ namespace DeepWaters
         private const float LooseLootDebrisMinRadius = 1.5f;
         private const float LooseLootDebrisMaxRadius = 5.0f;
         private const int LooseLootDebrisSpotAttempts = 4;
-
         // Height and placement checks.
         private const float SurfaceLootOriginClearance = 8f;
         private const int NearbyWaterProbeDirections = 12;
@@ -57,7 +57,9 @@ namespace DeepWaters
         private static Vector3 lastPulseAnchor;
         private static bool hasPulseAnchor;
         private static float nextAllowedPulseTime;
-        private static readonly TimedGateCache nearbyWaterGate = new TimedGateCache(NearbyWaterGateCheckInterval);
+        private static float nextNearbyWaterGateCheckTime;
+        private static bool hasNearbyWaterGateCache;
+        private static bool lastNearbyWaterGateResult;
         private static bool installed;
 
         public static void Install()
@@ -88,7 +90,8 @@ namespace DeepWaters
             UnderwaterLootPlacement.Reset();
             hasPulseAnchor = false;
             nextAllowedPulseTime = 0f;
-            nearbyWaterGate.Invalidate();
+            hasNearbyWaterGateCache = false;
+            lastNearbyWaterGateResult = false;
             trackedObjects.Clear();
         }
 
@@ -285,8 +288,8 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
                 return false;
 
-            if (nearbyWaterGate.IsFresh)
-                return nearbyWaterGate.Value;
+            if (hasNearbyWaterGateCache && Time.time < nextNearbyWaterGateCheckTime)
+                return lastNearbyWaterGateResult;
 
             float minSpawnDistance;
             float maxSpawnDistance;
@@ -301,7 +304,10 @@ namespace DeepWaters
                 SurfaceLootOriginClearance,
                 out depth);
 
-            return nearbyWaterGate.Store(result);
+            hasNearbyWaterGateCache = true;
+            lastNearbyWaterGateResult = result;
+            nextNearbyWaterGateCheckTime = Time.time + NearbyWaterGateCheckInterval;
+            return result;
         }
 
         private static float GetWaterContextSpawnMultiplier()

@@ -27,11 +27,6 @@ namespace DeepWaters
 
         void LateUpdate()
         {
-            LateUpdateCore();
-        }
-
-        private void LateUpdateCore()
-        {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.MainCamera == null)
             {
@@ -305,9 +300,9 @@ namespace DeepWaters
         // surface before the scene fades to ambient water color. Below the
         // surface the shader trims this back via depth darkening, but never
         // below ~50% of the surface value so the scene stays readable.
-        private const float VisionDistanceAtDefaultSetting = 70f;
+        private const float VisionDistanceAtDefaultSetting = 95f;
         private const float MinimumVisionDistance = 22f;
-        private const float MaximumVisionDistance = 260f;
+        private const float MaximumVisionDistance = 360f;
         private const float DistanceCurveAtLowStrength = 0.85f;
         private const float DistanceCurveAtFullStrength = 1.40f;
         private const float MinimumNearTint = 0.10f;

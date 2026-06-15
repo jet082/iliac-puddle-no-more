@@ -1,0 +1,784 @@
+# Deep Waters Performance Iteration Log
+
+Date: 2026-06-14
+
+Working source:
+
+- `C:\S...\Games\daggerfall-unity-master\Assets\Game\Mods\deep-waters`
+
+Playable bundles patched after each source change:
+
+- `C:\S...\Games\Daggerfall Unity - Modding\staging\StandaloneWindows\iliac puddle no more.dfmod`
+- `C:\S...\Games\Daggerfall Unity - Modding\DaggerfallUnity_Data\StreamingAssets\Mods\iliac puddle no more.dfmod`
+
+Diagnostics command shape:
+
+- Hidden standalone launch with `-deepWatersTest -deepWatersTestCharacter Miranda -deepWatersTestSaves bbb,ccc -deepWatersTestDuration 120 -deepWatersTestQuit`.
+- `ShowOptionsAtStart` is temporarily set to `False` before each run and restored to `True` afterward.
+- CSV output is under `AppData\LocalLow\Daggerfall Workshop\Daggerfall Unity\DeepWatersDiagnostics`.
+
+## Goal
+
+Keep the known-good functional behavior from the restored working lineage while removing the severe load, transition, and underwater runtime hitches. The current automated test suite measures `bbb` and `ccc` saves across first load, underwater movement, above-water movement, underwater return, boat/surface movement, and map-pixel transitions.
+
+## Pre-Iteration Baseline
+
+Before the current sequence, `ccc` showed a pathological decoration count and very poor FPS:
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 41.79 | 38.70 | 0.00 | 0.00 | 1.00 | 16.00 |
+| bbb | underwater_outbound / phase_start | 54.89 | 43.00 | 0.00 | 0.00 | 0.10 | 16.00 |
+| bbb | above_water_levitation / phase_start | 56.01 | 43.00 | 0.00 | 0.00 | 0.00 | 16.00 |
+| bbb | underwater_return / phase_start | 53.79 | 43.00 | 0.00 | 0.00 | 0.00 | 16.00 |
+| bbb | surface_boat_like / phase_start | 55.15 | 43.00 | 0.00 | 0.00 | 0.00 | 16.00 |
+| ccc | initial_load / first_10s | 6.89 | 0.00 | 1.00 | 15.00 | 8.00 | 24.00 |
+| ccc | underwater_outbound / phase_start | 34.34 | 3312.00 | 1.10 | 19.50 | 8.00 | 24.00 |
+| ccc | above_water_levitation / phase_start | 39.34 | 3312.00 | 4.60 | 38.70 | 18.90 | 37.40 |
+| ccc | underwater_return / phase_start | 42.49 | 3312.00 | 2.20 | 30.10 | 12.00 | 5.00 |
+| ccc | surface_boat_like / phase_start | 5.69 | 3312.00 | 0.00 | 0.00 | 24.00 | 4.00 |
+| ccc | surface_boat_like / map_pixel_transition | 5.67 | 343.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+
+Interpretation:
+
+- The `3312` decoration count in `ccc` was the first clear mod-owned performance bug.
+- The low transition FPS persisted even when steady-state counts became sane, suggesting a separate synchronous terrain/location/build cost.
+
+## Iteration 1: Cap Decorations Per Tile
+
+Change:
+
+- Added `MaxDecorationsPerTile = 256`.
+- Trimmed generated decoration positions deterministically before spawning.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-180905.csv`
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 52.23 | 39.09 | 0.00 | 0.27 | 0.00 | 0.00 |
+| bbb | underwater_outbound / phase_start | 59.83 | 43.00 | 0.00 | 0.10 | 0.00 | 0.00 |
+| bbb | above_water_levitation / phase_start | 66.01 | 43.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | underwater_return / phase_start | 67.98 | 43.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | surface_boat_like / phase_start | 67.58 | 43.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| ccc | initial_load / first_10s | 2.99 | 0.00 | 6.00 | 15.00 | 13.00 | 51.00 |
+| ccc | underwater_outbound / phase_start | 44.14 | 204.80 | 6.10 | 19.50 | 13.00 | 51.00 |
+| ccc | above_water_levitation / phase_start | 47.44 | 256.00 | 2.30 | 39.40 | 9.10 | 6.20 |
+| ccc | underwater_return / phase_start | 57.53 | 256.00 | 2.40 | 41.50 | 18.00 | 4.00 |
+| ccc | surface_boat_like / phase_start | 51.23 | 256.00 | 9.20 | 32.50 | 33.50 | 53.40 |
+| ccc | surface_boat_like / map_pixel_transition | 3.86 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+
+Finding:
+
+- Keep. The cap fixed the pathological steady-state `ccc` decoration count and moved active water FPS from the 30s/40s into the 40s/50s.
+- It did not fix first-load or transition cliffs. Those are not caused only by live decoration count.
+
+## Iteration 2: Disable DeepWaterStreamingBuffer Install
+
+Change:
+
+- Removed `go.AddComponent<DeepWaterStreamingBuffer>()` from `DeepWaters.Bootstrap.cs`.
+- Left the class present for easy rollback.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-181740.csv`
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 44.07 | 39.09 | 0.00 | 3.00 | 1.00 | 2.00 |
+| bbb | underwater_outbound / phase_start | 63.26 | 43.00 | 0.00 | 0.30 | 0.10 | 2.00 |
+| bbb | above_water_levitation / phase_start | 67.15 | 43.00 | 0.00 | 0.00 | 0.00 | 2.00 |
+| bbb | underwater_return / phase_start | 67.49 | 43.00 | 0.00 | 0.00 | 0.00 | 2.00 |
+| bbb | surface_boat_like / phase_start | 72.18 | 43.00 | 0.00 | 0.00 | 0.00 | 2.00 |
+| ccc | initial_load / first_10s | 4.55 | 0.00 | 6.00 | 15.00 | 16.00 | 58.00 |
+| ccc | underwater_outbound / phase_start | 61.19 | 230.40 | 6.00 | 21.60 | 16.20 | 58.00 |
+| ccc | above_water_levitation / phase_start | 52.57 | 256.00 | 1.70 | 26.70 | 10.20 | 4.60 |
+| ccc | underwater_return / phase_start | 59.54 | 256.00 | 5.80 | 25.50 | 17.00 | 49.00 |
+| ccc | surface_boat_like / phase_start | 53.43 | 256.00 | 9.80 | 37.00 | 31.80 | 56.20 |
+| ccc | surface_boat_like / map_pixel_transition | 4.03 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+
+Finding:
+
+- Keep. Disabling the buffer substantially improved steady underwater `ccc` FPS, especially underwater outbound (`44.14 -> 61.19`).
+- Transition remained bad (`3.86 -> 4.03`), so the buffer was a steady streaming pressure multiplier but not the core transition cliff.
+
+## Iteration 3: Replace Whole-Scene Terrain Lookup With StreamingTarget Enumeration
+
+Change:
+
+- `DeepWaterTerrainLookup.GetFrameSnapshot()` now enumerates `GameManager.Instance.StreamingWorld.StreamingTarget` children first.
+- `Object.FindObjectsOfType<DaggerfallTerrain>()` remains only as fallback.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-182550.csv`
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 64.00 | 38.70 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | underwater_outbound / phase_start | 82.77 | 43.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | above_water_levitation / phase_start | 77.82 | 43.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | underwater_return / phase_start | 84.19 | 43.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | surface_boat_like / phase_start | 89.37 | 43.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| ccc | initial_load / first_10s | 3.20 | 0.00 | 6.00 | 15.00 | 12.00 | 57.00 |
+| ccc | underwater_outbound / phase_start | 70.44 | 230.40 | 6.20 | 20.40 | 12.00 | 57.00 |
+| ccc | above_water_levitation / phase_start | 61.13 | 256.00 | 4.70 | 20.10 | 18.00 | 22.20 |
+| ccc | underwater_return / phase_start | 77.55 | 256.00 | 2.70 | 30.90 | 10.00 | 17.00 |
+| ccc | surface_boat_like / phase_start | 77.86 | 256.00 | 9.30 | 30.20 | 28.00 | 53.00 |
+| ccc | surface_boat_like / map_pixel_transition | 4.07 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+
+Finding:
+
+- Keep. This is the biggest active-play improvement so far.
+- It strongly confirms terrain lookup was on the swim/collider/spawn hot path.
+- It still does not fix first-load or transition cliffs, which are probably synchronous DFU terrain/location rebuild plus mod mesh/content build work.
+
+## Renderer Sweep Check
+
+Finding:
+
+- `UnderwaterWaveShadowFix.cs` was already mostly in the latest shape:
+  - external wave renderer suppression is absent,
+  - `CutoutDepthQueueFix` scans every 8 seconds,
+  - scans are sliced in chunks of 150 renderers,
+  - `GetSharedMaterials(materialScratch)` is used.
+- No renderer-sweep patch was applied because the code already matched the intended optimization closely enough.
+
+## Iteration 4: Mesh Build Cost Bundle
+
+Change:
+
+- `WaterSurfaceManager.SurfaceGridResolution`: `64 -> 16`.
+- Removed `mesh.RecalculateNormals()` from water surface generation.
+- `DeepWaterFloorMesh.VertexGridSize`: `65 -> 33`.
+- Shore skirt simplified:
+  - `SkirtSlopeTangent`: `0.3 -> 0.6`.
+  - `SkirtMaxWidthMeters`: `150 -> 40`.
+  - removed Perlin width noise from skirt width.
+- Removed `Physics.SyncTransforms()` after seafloor collider assignment.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-183414.csv`
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 70.94 | 38.18 | 0.00 | 7.73 | 0.00 | 0.00 |
+| bbb | underwater_outbound / phase_start | 80.18 | 42.00 | 0.00 | 3.20 | 2.00 | 7.20 |
+| bbb | above_water_levitation / phase_start | 68.95 | 42.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | above_water_levitation / map_pixel_transition | 69.79 | 256.00 | 2.30 | 17.00 | 16.90 | 9.00 |
+| bbb | underwater_return / phase_start | 79.82 | 256.00 | 4.50 | 32.20 | 18.00 | 22.80 |
+| bbb | surface_boat_like / phase_start | 76.63 | 256.00 | 7.40 | 33.10 | 26.70 | 56.90 |
+| ccc | initial_load / first_10s | 3.03 | 0.00 | 6.00 | 16.00 | 13.00 | 54.00 |
+| ccc | underwater_outbound / phase_start | 74.94 | 230.40 | 3.00 | 6.40 | 13.00 | 54.00 |
+| ccc | above_water_levitation / map_pixel_transition | 3.85 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| ccc | above_water_levitation / phase_start | 3.85 | 256.00 | 0.00 | 0.00 | 13.00 | 54.00 |
+| ccc | underwater_return / phase_start | 49.80 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| ccc | surface_boat_like / phase_start | 49.86 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| ccc | surface_boat_like / map_pixel_transition | 43.05 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+
+Finding:
+
+- Active `bbb` and `ccc` water FPS stayed strong.
+- `bbb` transition became healthy in this route (`69.79 FPS`), which is a good sign.
+- `ccc` still has a severe above-water transition cliff (`3.85 FPS`). The log around this showed a DFU location update of about `13.4s`, so that spike is likely dominated by DFU/location/mod object rebuild rather than seafloor mesh density.
+- After the bad `ccc` transition, the same run recovered to `49.80-49.86 FPS`, then recorded another map-pixel transition at `43.05 FPS`.
+- Tentatively keep, pending visual verification. The mesh bundle improves or preserves active-play FPS and appears to reduce build pressure on ordinary terrain transitions, but it cannot solve a location rebuild spike by itself.
+
+## Current Best Kept Set
+
+These changes are currently worth keeping unless later tests expose a functional/visual regression:
+
+- Decoration cap at 256 per tile.
+- Do not install `DeepWaterStreamingBuffer`.
+- Enumerate `StreamingTarget` children for terrain lookup.
+- Keep `Time.maximumDeltaTime = 0.1f` clamp already present.
+- Collider gate cadence/radius reduction:
+  - `ColliderGateTileProximityMeters`: `250 -> 96`.
+  - `ColliderGateEjectGuardPaddingMeters`: `300 -> 96`.
+  - gate refresh throttled to once per frame and at most every `0.15s`.
+- Post-transition runtime refresh now queues decorations only; it no longer scans all terrains or rebuilds water surface meshes after load/teleport.
+
+The mesh bundle is tentatively kept, pending visual verification.
+
+## Iteration 5: Collider Gate Cadence And Radius
+
+Change:
+
+- `ColliderGateTileProximityMeters`: `250 -> 96`.
+- `ColliderGateEjectGuardPaddingMeters`: `300 -> 96`.
+- Added `ColliderGateRefreshIntervalSeconds = 0.15`.
+- Added a once-per-frame guard so `Update()` and `PostPhaseRestore()` do not rebuild the same collider set in one rendered frame.
+- Above-surface collider restoration remains immediate.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-184417.csv`
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 69.36 | 42.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | underwater_outbound / phase_start | 77.26 | 42.00 | 0.00 | 0.00 | 2.00 | 2.50 |
+| bbb | above_water_levitation / phase_start | 72.38 | 42.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | above_water_levitation / map_pixel_transition | 73.25 | 256.00 | 3.70 | 20.60 | 20.60 | 56.00 |
+| bbb | underwater_return / phase_start | 79.29 | 256.00 | 4.40 | 32.80 | 17.10 | 21.50 |
+| bbb | surface_boat_like / phase_start | 83.34 | 256.00 | 5.30 | 22.00 | 39.80 | 56.10 |
+| ccc | initial_load / first_10s | 3.17 | 0.00 | 1.00 | 15.00 | 12.00 | 46.00 |
+| ccc | underwater_outbound / phase_start | 68.99 | 230.40 | 1.20 | 21.00 | 12.00 | 46.00 |
+| ccc | above_water_levitation / phase_start | 78.26 | 256.00 | 1.90 | 40.30 | 15.50 | 4.00 |
+| ccc | underwater_return / phase_start | 76.19 | 256.00 | 2.20 | 8.50 | 14.00 | 6.00 |
+| ccc | surface_boat_like / phase_start | 70.76 | 256.00 | 10.70 | 45.10 | 32.30 | 55.20 |
+| ccc | surface_boat_like / map_pixel_transition | 4.08 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+
+Finding:
+
+- Keep for now. Active-play FPS remained high and `bbb` transition stayed healthy.
+- The collider cadence helped the normal phases stay smooth but did not solve the `ccc` surface transition cliff.
+- The persistent bad cases are now tightly clustered around `ccc` first load and one surface map-pixel transition, not general underwater play.
+
+## Iteration 6: Remove Redundant Post-Transition Terrain/Surface Refresh
+
+Change:
+
+- `DeepWaterRuntime.PumpPostTransitionRefresh()` no longer:
+  - calls `Object.FindObjectsOfType<DaggerfallTerrain>()`,
+  - runs `DeepWaterFloorBuilder.RefreshLoadedTile()` over every loaded terrain,
+  - runs `WaterSurfaceManager.RefreshLoadedSurface()` over every loaded terrain.
+- It now waits until terrain data can be safely touched, then queues `UnderwaterDecorations.RefreshPlayerArea()`.
+- The intent is to trust genuine `DaggerfallTerrain.OnPromoteTerrainData` for seafloor/surface creation and avoid a redundant post-load sweep.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-185307.csv`
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 77.06 | 42.00 | 0.00 | 8.00 | 1.00 | 2.00 |
+| bbb | underwater_outbound / phase_start | 75.49 | 42.00 | 0.00 | 3.20 | 1.80 | 3.20 |
+| bbb | above_water_levitation / phase_start | 60.14 | 42.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | above_water_levitation / map_pixel_transition | 60.85 | 256.00 | 4.50 | 25.00 | 18.20 | 43.00 |
+| bbb | underwater_return / phase_start | 74.60 | 256.00 | 2.40 | 41.60 | 21.80 | 23.00 |
+| bbb | surface_boat_like / phase_start | 74.66 | 256.00 | 7.00 | 37.50 | 27.80 | 51.30 |
+| ccc | initial_load / first_10s | 7.80 | 56.89 | 6.00 | 16.00 | 13.00 | 54.00 |
+| ccc | underwater_outbound / phase_start | 85.16 | 256.00 | 5.90 | 24.40 | 13.30 | 54.00 |
+| ccc | above_water_levitation / phase_start | 85.45 | 256.00 | 4.60 | 24.60 | 16.50 | 5.70 |
+| ccc | above_water_levitation / map_pixel_transition | 4.10 | 256.00 | 0.00 | 16.00 | 1.00 | 2.00 |
+| ccc | underwater_return / phase_start | 10.80 | 256.00 | 0.00 | 18.00 | 1.00 | 2.00 |
+| ccc | surface_boat_like / phase_start | 75.00 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| ccc | surface_boat_like / map_pixel_transition | 76.36 | 256.00 | 2.50 | 28.40 | 11.00 | 5.00 |
+
+Finding:
+
+- Keep. This is the first change to improve the stubborn `ccc` first-load window (`~3 FPS -> 7.80 FPS`) while preserving load-in-water content. `ccc` now has decorations, enemies, fish, loot, and rubble in the first 10 seconds.
+- Active `ccc` phases are excellent (`85.16`, `85.45`, `75.00`, `76.36 FPS`) outside the location-heavy transition window.
+- The remaining bad window coincides with `[DeepWaters.LoadGate] activeLoads=1 stuck for >12s` and `DFTFU ... Time to update location 95: 12800ms`.
+- Interpretation: the remaining cliff is probably a location/DFU/mod-load event. Deep Waters can still avoid piling on extra work around it, but the log now shows a large non-Deep-Waters contributor.
+
+## Iteration 7: Include Location Loading In CanRunHeavyRuntimeWork
+
+Change:
+
+- Temporarily changed `DeepWaterRuntime.CanRunHeavyRuntimeWork` to return false while `DeepWaterLocationLoadGate.IsAnyLocationLoading` is true.
+- The idea was to make all encounter/loot/fish/decor heavy drivers pause during DFU location rebuilds, not only systems that check `IsLoadGraceActive`.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-190232.csv`
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 75.98 | 42.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | underwater_outbound / phase_start | 82.56 | 42.00 | 0.00 | 0.00 | 1.00 | 1.50 |
+| bbb | above_water_levitation / phase_start | 76.84 | 42.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| bbb | above_water_levitation / map_pixel_transition | 77.59 | 256.00 | 5.80 | 17.80 | 18.00 | 55.00 |
+| bbb | underwater_return / phase_start | 85.27 | 256.00 | 2.00 | 32.80 | 17.90 | 7.30 |
+| bbb | surface_boat_like / phase_start | 96.88 | 256.00 | 2.60 | 7.50 | 16.60 | 40.40 |
+| ccc | initial_load / first_10s | 3.96 | 56.89 | 0.22 | 1.56 | 2.00 | 6.89 |
+| ccc | underwater_outbound / phase_start | 86.68 | 256.00 | 1.00 | 12.50 | 9.00 | 31.00 |
+| ccc | above_water_levitation / phase_start | 75.60 | 256.00 | 4.00 | 46.50 | 17.40 | 6.30 |
+| ccc | above_water_levitation / map_pixel_transition | 4.07 | 256.00 | 0.00 | 1.00 | 10.00 | 0.00 |
+| ccc | underwater_return / phase_start | 12.68 | 256.00 | 0.33 | 4.33 | 11.00 | 1.00 |
+| ccc | surface_boat_like / phase_start | 73.60 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| ccc | surface_boat_like / map_pixel_transition | 74.97 | 256.00 | 8.60 | 27.00 | 23.00 | 56.00 |
+
+Finding:
+
+- Rejected and reverted.
+- It did not improve the bad `ccc` location-heavy transition (`4.07 FPS`, then `12.68 FPS`).
+- It made first-load content worse by delaying enemies/fish/loot/rubble in `ccc`, and FPS fell back near the old bad load window.
+- Conclusion: heavy spawners should not be globally blocked on the location gate. The better base is iteration 6.
+
+## Next Ideas
+
+Likely next cuts, in rough order:
+
+1. Add lightweight transition diagnostics that logs whether a low-FPS sample overlaps location loading, terrain update, decoration queue work, enemy/fish/loot pulses, and current post-transition pending state.
+2. Reduce or stage only specific synchronous content generation after pixel transitions, instead of globally blocking heavy work on location loading.
+3. If the remaining `ccc` cliff is mostly DFU location rebuild (`Time to update location ... 13s`), add diagnostics that separates DFU terrain/location time from mod seafloor/decor/content time before changing gameplay logic.
+4. Visually verify the mesh bundle, especially shore skirt quality and surface coverage, because the numerical win is only acceptable if it does not bring back holes, walls, or bare-water bands.
+5. Consider a targeted avoidance/defer strategy for expensive work when the destination pixel is a location-heavy coast, because the bad samples line up with location rebuilds rather than open-water movement.
+
+## Transition Instrumentation
+
+Change:
+
+- Added CSV columns for:
+  - `loadGateActive`, `loadGateCount`, `loadGateAge`
+  - `terrainUpdateActive`, `loadGraceActive`, `heavyWorkBlocked`, `heavyWorkResumeIn`
+  - `postRefreshPending`
+  - `decorQueue`, `decorQueuedTerrains`
+  - later, `locationSkippedLast`, `locationDeferred`
+- Exposed side-effect-free load-gate and decoration queue counters.
+
+Baseline instrumentation CSV:
+
+- `deep-waters-diagnostics-20260614-192109.csv`
+
+Key rows:
+
+| Save | Event | FPS | LoadGateActive | LoadGateCount | TerrainUpdateActive | DecorQueue |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| bbb | surface_boat_like / map_pixel_transition | 5.30 | 0.88 | 2.50 | 0.13 | 0.88 |
+| ccc | initial_load / first_10s | 3.13 | 0.78 | 0.89 | 0.00 | 1.22 |
+| ccc | above_water_levitation / map_pixel_transition | 4.18 | 0.78 | 0.78 | 0.22 | 0.22 |
+| ccc | underwater_return / phase_start | 18.57 | 0.67 | 0.67 | 0.00 | 0.00 |
+
+Finding:
+
+- The bad windows line up with DFU location-object layout (`loadGateActive`) rather than Deep Waters decoration queue depth.
+- Decoration queue was tiny during the bad transition windows, so continuing to tune decoration spawning was the wrong target.
+
+## Iteration 8: Defer Peripheral Location Layouts Offshore
+
+Change:
+
+- Added `DeepWaterLocationUpdateSkipper`.
+- It reflects `StreamingWorld.terrainArray` and clears `updateLocation` for non-current, non-owned-ship location pixels while the player is in an ocean/deep-water context.
+- Deferred location keys are remembered; if a deferred key later becomes the current map pixel, it is re-enabled so DFU can build it then.
+- This is intentionally not a Harmony patch and does not require changing standalone managed DLLs.
+
+Intermediate CSV:
+
+- `deep-waters-diagnostics-20260614-193509.csv`
+
+Key result:
+
+| Save | Event | FPS Before | FPS After | LoadGateActive After | LocationDeferred |
+| --- | --- | ---: | ---: | ---: | ---: |
+| ccc | above_water_levitation / map_pixel_transition | 4.18 | 63.89 | 0.00 | 1.60 |
+| ccc | underwater_return / phase_start | 18.57 | 75.70 | 0.00 | 2.00 |
+
+Finding:
+
+- Keep. This fixed the worst reproducible `ccc` transition by preventing multiple peripheral coastal locations from laying out while the player is offshore.
+- It did not yet fix first load because the hook returned early while `GameManager.IsPlayingGame()` was still false during save-load terrain promotion.
+
+## Iteration 9: Treat Ocean-Connected Current Pixels As Offshore Context
+
+Change:
+
+- Broadened the skipper predicate:
+  - exact player deep-water/underwater context, or
+  - current map pixel has an ocean-connected Deep Waters tile.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-195008.csv`
+
+Key result:
+
+| Save | Event | FPS | LoadGateActive | LocationDeferred |
+| --- | --- | ---: | ---: | ---: |
+| bbb | above_water_levitation / map_pixel_transition | 68.69 | 0.00 | 0.00 |
+| ccc | initial_load / first_10s | 6.93 | 0.78 | 0.00 |
+| ccc | above_water_levitation / map_pixel_transition | 65.70 | 0.00 | 1.60 |
+| ccc | surface_boat_like / map_pixel_transition | 76.75 | 0.00 | 2.00 |
+
+Finding:
+
+- Partial keep. Transition behavior stayed good and `ccc` initial improved a little, but first-load still hit the location gate because the save-load hook was running before `IsPlayingGame()`.
+
+## Iteration 10: Let Location Skipper Run During Save Load
+
+Change:
+
+- Removed the `GameManager.IsPlayingGame()` guard from `DeepWaterLocationUpdateSkipper.OnUpdateTerrainsEnd`.
+- The hook now requires only `GameManager`, `StreamingWorld`, and `PlayerGPS`; this lets it defer peripheral locations during save-load terrain promotion, before DFU starts location layout.
+- Added a lightweight deferred-location restore pump. If deferred locations exist and the player is no longer in deep water, it re-enables those location updates and flips DFU's `updateLocations` flag so land-side functionality can recover without requiring another map-pixel transition.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-195822.csv`
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble | LoadGateActive | LocationDeferred |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 97.16 | 42.00 | 0.00 | 6.09 | 1.00 | 1.00 | 0.00 | 4.00 |
+| bbb | above_water_levitation / map_pixel_transition | 103.00 | 256.00 | 2.00 | 27.40 | 11.00 | 5.00 | 0.00 | 4.00 |
+| bbb | surface_boat_like / phase_start | 121.06 | 256.00 | 5.60 | 32.00 | 19.60 | 51.30 | 0.00 | 4.00 |
+| ccc | initial_load / first_10s | 415.82 | 256.00 | 2.00 | 10.55 | 14.00 | 50.00 | 0.00 | 5.00 |
+| ccc | above_water_levitation / map_pixel_transition | 239.84 | 256.00 | 0.00 | 9.70 | 2.00 | 1.00 | 0.00 | 6.60 |
+| ccc | surface_boat_like / map_pixel_transition | 298.28 | 256.00 | 7.00 | 30.50 | 22.00 | 53.00 | 0.00 | 7.00 |
+
+Finding:
+
+- Keep, pending manual visual/function check.
+- This removes the load-gate overlap from the automated run and keeps decorations/enemies/fish/loot/rubble present.
+- Trade-off: peripheral coastal/town exterior locations can remain deferred while the player stays offshore. The current pixel and owned ship are preserved; a deferred location is re-enabled when it becomes the current map pixel. This is the right performance trade for ocean traversal, but it should be checked manually near visible coasts/towns.
+
+## Iteration 11: Track Missing Swim World Position
+
+Problem found by longer transition run:
+
+- CSV `deep-waters-diagnostics-20260614-201757.csv` was stopped after it exposed the issue.
+- During a long underwater leg, `PlayerGPS.CurrentMapPixel` stayed at `207:223`.
+- On the next above-water phase, it jumped to `209:222`, overlapping DFU location layout and producing the old transition cliff:
+
+| Save | Event | FPS | LoadGateActive | LocationSkippedLast | Decorations |
+| --- | --- | ---: | ---: | ---: | ---: |
+| bbb | above_water_levitation / phase_start | 5.14 | 0.67 | 1.33 | 42.00 |
+| bbb | above_water_levitation / map_pixel_transition 207:223 -> 209:222 | 5.07 | 0.67 | 1.33 | 0.00 |
+
+Change:
+
+- Added `DeepWaterSwimWorldTracker`.
+- It keeps only the useful part of the old `DeepWaterStreamingBuffer`: while the player is in the exterior deep-water swim band, it compares transform delta against actual `PlayerGPS.WorldX/Z` delta and applies only the missing world-coordinate movement.
+- It does not widen `TerrainDistance`, force terrain updates, or install the old buffer ring.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-202711.csv`
+
+Key rows:
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble | LoadGateActive | LocationDeferred |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 95.47 | 42.00 | 0.00 | 0.00 | 1.00 | 1.00 | 0.00 | 4.00 |
+| bbb | underwater_outbound / map_pixel_transition 207:223 -> 207:222 | 134.74 | 256.00 | 0.00 | 2.50 | 4.00 | 4.00 | 0.00 | 4.00 |
+| bbb | underwater_outbound / map_pixel_transition 207:222 -> 208:222 | 123.98 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 5.60 |
+| bbb | above_water_levitation / phase_start | 102.93 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 6.00 |
+| bbb | above_water_levitation / map_pixel_transition 208:222 -> 207:223 | 103.57 | 42.00 | 0.00 | 0.00 | 3.00 | 6.00 | 0.00 | 6.00 |
+| ccc | initial_load / first_10s | 358.49 | 256.00 | 6.00 | 32.00 | 17.00 | 65.00 | 0.00 | 5.00 |
+| ccc | underwater_outbound / map_pixel_transition 207:222 -> 208:222 | 269.11 | 256.00 | 0.00 | 1.60 | 1.00 | 1.00 | 0.00 | 6.20 |
+| ccc | surface_boat_like / phase_start | 258.87 | 256.00 | 0.40 | 21.40 | 4.90 | 16.00 | 0.00 | 7.00 |
+
+Finding:
+
+- Keep.
+- The delayed above-water catch-up transition is gone in the 300-second run.
+- Underwater map-pixel transitions now record incrementally, with the worst sampled row at `95.41 FPS` in the hidden harness.
+
+## Iteration 12: Skip Peripheral Locations While Any Loaded Ocean Tile Is Nearby
+
+Problem found by the longer transition run after iteration 11:
+
+- The underwater position tracker fixed delayed pixel transitions.
+- A later above-water coastal crossing still triggered a batch of DFU location layouts:
+
+| Log Event | Time |
+| --- | ---: |
+| Time to update location 8 | 312ms |
+| Time to update location 75 | 1572ms |
+| Time to update location 65 | 2344ms |
+| Time to update location 51 | 3045ms |
+| Time to update location 25 | 3771ms |
+| Time to update location 78 | 12602ms |
+
+Change:
+
+- Broadened `DeepWaterLocationUpdateSkipper`.
+- Instead of skipping peripheral locations only when the current pixel is ocean-connected, it now skips peripheral locations while any active loaded terrain tile is ocean-connected.
+- The current pixel is still preserved; this only defers surrounding coastal/town locations while ocean traversal is nearby.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-205120.csv`
+
+Key rows:
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble | LoadGateActive | LocationDeferred |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 107.04 | 42.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 4.00 |
+| bbb | underwater_outbound / map_pixel_transition 207:223 -> 207:222 | 147.49 | 256.00 | 0.70 | 2.20 | 3.00 | 6.00 | 0.00 | 4.00 |
+| bbb | above_water_levitation / map_pixel_transition 209:222 -> 208:223 | 129.66 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 7.00 |
+| bbb | surface_boat_like / phase_start | 97.06 | 25.60 | 0.00 | 0.00 | 2.00 | 3.00 | 0.00 | 7.00 |
+| bbb | surface_boat_like / map_pixel_transition 207:222 -> 204:227 | 98.14 | 230.40 | 0.80 | 16.80 | 5.60 | 34.40 | 0.00 | 6.60 |
+| ccc | initial_load / first_10s | 380.86 | 256.00 | 0.00 | 15.00 | 6.00 | 11.00 | 0.00 | 5.00 |
+| ccc | underwater_outbound / map_pixel_transition 207:222 -> 208:222 | 266.82 | 256.00 | 0.00 | 8.00 | 6.00 | 11.00 | 0.00 | 6.20 |
+| ccc | underwater_return / map_pixel_transition 209:221 -> 208:221 | 203.40 | 256.00 | 5.10 | 18.70 | 10.00 | 22.00 | 0.00 | 7.00 |
+| ccc | surface_boat_like / map_pixel_transition 208:221 -> 208:222 | 152.55 | 256.00 | 1.30 | 6.60 | 6.00 | 11.00 | 0.00 | 7.00 |
+
+Log check:
+
+- After the initial save-load location update, the long run had many map-pixel crossings and no repeated `Time to update location ...` batch.
+- Largest remaining transition cost in the log was terrain update work, with the biggest sampled line around `2432ms`.
+
+Finding:
+
+- Keep, pending manual visual pass.
+- The old `12.6s` location-layout cliff was removed.
+- The worst sampled 600-second FPS row was `97.06` in the hidden harness.
+- Caveat: pixel `209:222` reports zero decorations/fish/loot/rubble in both saves. This appears deterministic for that coastal/edge pixel, not a random spawn pulse failure, and needs visual inspection before forcing content into it.
+
+## Iteration 13: Fine-Mask Self-Gate for Ocean-Connected Tiles
+
+Problem found after iteration 12:
+
+- The deterministic zero-content pixel `209:222` was not random spawn loss.
+- Offline bake inspection showed `209:222` was a coarse-mask false positive:
+  - coarse water cells: `64/64`
+  - fine water cells: `0/4096`
+  - distance field: `0` throughout
+- `DeepWaterTileData.ComputeOceanConnectivity()` still checked `MapPixelHasWaterCellsNear(mx, my, 2)` before the fine mask, so a dry fine-mask coastal pixel could be treated as ocean-connected.
+
+Change:
+
+- For v4+/v5 bakes with a fine water mask, ocean connectivity now uses the exact pixel's fine-mask water cells.
+- The old coarse-neighbor fallback remains only for legacy bakes without a fine mask.
+- Added `contentEligibleCurrent` and `contentEligibleFormer` diagnostics columns so zero-content rows can be separated from spawn failures.
+
+Validation note:
+
+- First full run after the source edit was discarded: the bundle patcher had written UnityPy `TextAsset.script`, but the serialized field is `TextAsset.m_Script`, so the game still loaded the old script.
+- Fixed the packer and confirmed both playable bundles contain the changed `DeepWaters.Bootstrap.cs` and `DeepWaterTileData.cs`.
+- Smoke CSV `deep-waters-diagnostics-20260614-220451.csv` confirmed the new eligibility columns were loaded.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-220737.csv`
+
+Key rows:
+
+| Save | Event | FPS | Decorations | Enemies | Fish | Loot | Rubble | Eligible | LocationDeferred |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| bbb | initial_load / first_10s | 99.71 | 42.00 | 0.00 | 0.00 | 0.00 | 0.00 | 1 | 4.00 |
+| bbb | underwater_outbound / map_pixel_transition 208:222 -> 209:222 | 136.10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0 | 6.00 |
+| bbb | above_water_levitation / phase_start 209:222 | 131.48 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0 | 6.00 |
+| bbb | above_water_levitation / map_pixel_transition 209:222 -> 208:223 | 132.46 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0 | 6.00 |
+| bbb | surface_boat_like / phase_start | 89.95 | 25.60 | 0.00 | 0.00 | 0.00 | 0.00 | 1 | 6.00 |
+| bbb | surface_boat_like / map_pixel_transition 207:222 -> 204:227 | 90.66 | 230.40 | 0.80 | 4.90 | 2.10 | 2.80 | 1 | 6.00 |
+| ccc | underwater_outbound / map_pixel_transition 208:222 -> 209:222 | 392.63 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0 | 7.00 |
+| ccc | above_water_levitation / phase_start 209:222 | 336.30 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0 | 7.00 |
+| ccc | above_water_levitation / map_pixel_transition 209:222 -> 209:221 | 271.99 | 256.00 | 0.00 | 0.00 | 0.00 | 0.00 | 1 | 7.00 |
+| ccc | initial_load / first_10s | 376.78 | 256.00 | 0.00 | 16.00 | 5.00 | 7.00 | 1 | 5.00 |
+
+Log check:
+
+- `Time to update location`: `0` after startup; the old DFU location-layout cliff did not recur.
+- Terrain update lines: `20`; worst `2476ms`, then `2290ms`, `1583ms`, `1527ms`.
+- Deep Waters errors: `0`.
+- Other-mod noise: one `DynamicEnemiesMod.DynamicEnemyMotor.ChargeAttack` null reference.
+
+Finding:
+
+- Keep.
+- The zero-content `209:222` rows are now explained by `contentEligible=0`; forcing spawns there would place content into a pixel the bake says has no carved underwater area.
+- This did not target the remaining performance floor. The next bottleneck is still terrain update work around transitions, especially the bbb surface/boat route where sampled FPS bottoms near `90`.
+
+## Iteration 14 Rejected: Lazy Seafloor Collider Cooking
+
+Hypothesis:
+
+- Terrain update spikes might include seafloor `MeshCollider` cooking during `DaggerfallTerrain.OnPromoteTerrainData`.
+- Tried moving collider cooking out of the promote path:
+  - build the floor mesh during promote,
+  - invalidate stale floor colliders,
+  - cook a floor collider only when the swim collider gate is about to disable a nearby vanilla `TerrainCollider`.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-223459.csv`
+
+Comparison to Iteration 13:
+
+| Metric | Iteration 13 | Lazy Collider Test |
+| --- | ---: | ---: |
+| Worst sampled FPS | 89.95 | 79.78 |
+| bbb surface phase_start FPS | 89.95 | 79.78 |
+| bbb surface transition FPS | 90.66 | 80.49 |
+| Max terrain update | 2476ms | 2557ms |
+| Location update count after startup | 0 | 2 |
+| Max location update | 0ms | 2775ms |
+| Deep Waters errors | 0 | 0 |
+| Interesting Terrain duplicate-key exceptions | 0 | 4 |
+
+Finding:
+
+- Rejected and reverted.
+- It made the measured FPS floor worse, did not reduce terrain-update max time, and coincided with location updates plus `Monobelisk.TileDataCache.Add` duplicate-key exceptions.
+- Active playable bundles were repacked back to the Iteration 13 kept code after this test.
+
+## Iteration 15: Passive Fish Obstacle Raycast Throttling
+
+Hypothesis:
+
+- The remaining worst transition spikes are terrain update work, but fish-heavy windows still pay per-frame physics raycasts from every live passive fish.
+- GitHub latest throttles those probes, so this is a low-risk runtime improvement that should not affect spawn correctness.
+
+Change:
+
+- `PassiveFishBehaviour` now:
+  - probes obstacles every 5 frames instead of every frame,
+  - randomizes each fish's probe phase,
+  - skips obstacle probes for fish farther than `60m` from the player,
+  - extends probe length to cover the skipped stride.
+
+Result CSV:
+
+- `deep-waters-diagnostics-20260614-230324.csv`
+
+Comparison to Iteration 13:
+
+| Metric | Iteration 13 | Fish Throttle |
+| --- | ---: | ---: |
+| Worst sampled FPS | 89.95 | 97.99 |
+| bbb initial_load FPS | 99.71 | 110.66 |
+| bbb surface phase_start FPS | 89.95 | 97.99 |
+| bbb surface transition 207:222 -> 204:227 FPS | 90.66 | 98.97 |
+| ccc initial_load FPS | 376.78 | 443.38 |
+| Max terrain update | 2476ms | 2560ms |
+| Deep Waters errors | 0 | 0 |
+| Interesting Terrain duplicate-key exceptions | 0 | 0 |
+
+Fish-heavy rows after the change:
+
+| Save | Event | FPS | Fish | Decorations | TerrainUpdateActive |
+| --- | --- | ---: | ---: | ---: | ---: |
+| bbb | surface_boat_like / map_pixel_transition 204:227 -> 203:227 | 119.13 | 18.00 | 256.00 | 0.10 |
+| bbb | surface_boat_like / map_pixel_transition 203:228 -> 203:229 | 355.20 | 16.90 | 256.00 | 0.10 |
+| ccc | initial_load / first_10s | 443.38 | 16.00 | 256.00 | 0.00 |
+| ccc | underwater_outbound / phase_start | 465.78 | 18.00 | 256.00 | 0.00 |
+| ccc | surface_boat_like / map_pixel_transition 208:221 -> 207:221 | 257.45 | 14.20 | 256.00 | 0.10 |
+
+Log check:
+
+- `Time to update location`: one `2714ms` line around initial/current-location loading and DET material deserialization, not the old repeated transition-location batch.
+- Terrain update lines: `20`; worst `2560ms`, then `2360ms`, `1620ms`, `1522ms`.
+- Deep Waters errors: `0`.
+- Other-mod noise: two `DynamicEnemiesMod.DynamicEnemyMotor.ChargeAttack` null references.
+
+Finding:
+
+- Keep.
+- This improved sampled FPS without changing content generation or reintroducing the old location-layout cliff.
+- It does not solve terrain update spikes; the next optimization needs to identify whether the remaining `~2.5s` terrain work is DFU/Interesting Terrain sampling, Deep Waters promote handlers, or another terrain-subscriber cost.
+
+## Current Best Kept Set After Iteration 15
+
+- Decoration cap at 256 per tile.
+- Do not install `DeepWaterStreamingBuffer`.
+- Install only `DeepWaterSwimWorldTracker`, which fills missing underwater `PlayerGPS.WorldX/Z` movement without changing `TerrainDistance`.
+- Fine-mask bakes use exact fine-mask self-connectivity before legacy coarse-neighbor fallback.
+- Passive fish obstacle raycasts are staggered, near-player only, and once per 5 frames.
+- Enumerate `StreamingTarget` children for terrain lookup.
+- Mesh build bundle:
+  - water surface grid `64 -> 16`,
+  - seafloor vertex grid `65 -> 33`,
+  - simplified shore skirt,
+  - no forced `Physics.SyncTransforms()` after seafloor collider assignment.
+- Collider gate cadence/radius reduction:
+  - `ColliderGateTileProximityMeters = 96`,
+  - `ColliderGateEjectGuardPaddingMeters = 96`,
+  - refresh at most every `0.15s`.
+- Post-transition refresh only queues decoration refresh; no whole-ring terrain/surface rebuild.
+- Transition diagnostics columns remain in CSV.
+- Peripheral location layout deferral while offshore, including during save-load terrain promotion.
+- Peripheral location layout deferral while any active loaded terrain tile is ocean-connected.
+- Deferred-location restore pump when the player leaves deep water and the current pixel is not ocean-connected.
+- Diagnostics include current/former content eligibility so dry coastal pixels are not mistaken for spawn failures.
+
+## Next Ideas After Iteration 15
+
+1. Manual visual pass near a coast/town from boat and underwater: verify deferred peripheral locations do not create unacceptable empty shoreline views.
+2. Add targeted attribution for terrain update spikes before another streaming change: time Deep Waters promote handlers versus DFU/Interesting Terrain terrain sampling.
+3. Do not retry lazy seafloor collider cooking without a tighter theory; it worsened FPS and brought back location/Interesting Terrain noise.
+4. If deferred towns are too visible, tighten the skip to only locations outside a near radius or only while camera is underwater.
+
+## Spawn Density Pass
+
+Problem:
+
+- The kept performance build is playable, but max decoration/enemy/fish sliders still feel nearly empty.
+- The UI max was being multiplied down by conservative midpoint defaults and a hidden `SpawnRateScale = 0.4`.
+
+Change:
+
+- `EnemyFrequencyAtMidpoint`: `0.3 -> 0.5`
+- `PassiveFishFrequencyAtMidpoint`: `0.6 -> 1.0`
+- `DecorationFrequencyAtMidpoint`: `1.0 -> 1.5`
+- `SpawnRateScale`: `0.4 -> 0.75`
+- Enemy placement attempts per spawn: `4 -> 8`
+
+Expected max-slider effect:
+
+- Enemies: about `3` target spawns per pulse before placement/caps, up from about `1`.
+- Fish: about `12` target spawns per deep-water pulse before placement/caps, up from about `4`.
+- Decorations: `3` decoration passes per eligible tile, up from `2`.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed into both playable `.dfmod` files for manual testing.
+
+## Spawn Visibility And Decoration Rendering Pass
+
+Reference:
+
+- Compared current branch against GitHub `jet082/iliac-puddle-no-more` latest `9355dc8 cleanup`.
+- Latest cap/settings reference:
+  - `MaxLiveFish`: default `36`, max `180`.
+  - `FishParadiseMaxLiveFish`: default `72`, max `240`.
+  - `DecorationPopulateRadius`: default `1`, max `3`.
+  - Latest has no per-tile decoration trim cap.
+  - Latest decoration material path uses `DeepWaters/UnderwaterBillboardBatchUnlit` with a material cache.
+  - Latest fog shader starts its hard distance curtain at `0.50x` effective vision; this branch had drifted to `1.0x`, which reads as a tighter spotlight.
+
+Change:
+
+- Restored fish cap settings to `modsettings.json` and read them in `DeepWaters.Settings`.
+- Restored `DecorationPopulateRadius` setting/readback.
+- Raised max-slider density:
+  - `PassiveFishFrequencyAtMidpoint`: `2.0` so max slider targets about `24` deep-water fish per pulse before caps/placement.
+  - `DecorationFrequencyAtMidpoint`: `2.5` so max slider rolls about `5` placement passes.
+- Raised per-tile decoration trim cap from `256` to `768` instead of removing it entirely.
+- Decoupled passive fish from enemy clear-water spawn distance:
+  - fish now spawn in a `20m..85m` ring,
+  - fish view-safety distance is `25m`,
+  - fish despawn distance is `160m`.
+- Restored underwater unlit/cutout decoration material creation and cache, removing the source-shader preservation path that made replacement decorations too dark.
+- Raised decoration base clearance from `0.25m` to `0.75m`.
+- Matched source fog shader to latest softer curtain and widened live C# fog vision defaults from `70/260` to `95/360` so the currently packed compiled shader reads less like a tight cone.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Read back installed `StreamingAssets\Mods\iliac puddle no more.dfmod` and confirmed scripts plus `modsettings` contain the new values.
+
+## Density And Decoration Alpha Follow-Up
+
+Problem:
+
+- Manual testing showed enemies were good, but fish and decorations still wanted about `1.5x` density.
+- A global `0.75m` decoration floor clearance fixed some sinking but made ordinary decorations float.
+- Some replacement decorations still rendered as opaque black rectangles because their black padding was connected to the texture edge and had alpha `1`.
+
+Change:
+
+- `PassiveFishFrequencyAtMidpoint`: `3.0` (`1.5x` from previous `2.0`).
+- `DecorationFrequencyAtMidpoint`: `3.75` (`1.5x` from previous `2.5`).
+- `MaxDecorationsPerTile`: `1152` (`1.5x` from previous `768`).
+- Passive fish live caps now default/effectively scale `1.5x`, clamped to the existing latest GitHub max:
+  - normal default `54`, max `180`,
+  - Fish Paradise default `108`, max `240`.
+- Decoration placement now uses record-aware clearance:
+  - ordinary/static/replacement batches: `0.25m`,
+  - archive-animated decorations: `0.75m`.
+- Underwater replacement decoration materials now cache an edge-cleaned texture copy that flood-fills near-black/transparent pixels from texture edges to alpha `0`.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Read back installed `StreamingAssets\Mods\iliac puddle no more.dfmod` and confirmed the changed constants and settings are present.

@@ -186,66 +186,54 @@ namespace DeepWaters
             lastHitIndex = -1;
             frameSnapshotFrame = frame;
 
-            // Streamed terrains all live as direct children of DFU's
-            // StreamingTarget, so iterating its children gives the same set as
-            // FindObjectsOfType<DaggerfallTerrain> — for tens of microseconds
-            // instead of a whole-scene object sweep. The perf probe measured
-            // the sweep at 3-6ms per frame inside a town (the scene's object
-            // count multiplies its cost), which made the swim collider gate
-            // the single most expensive thing the mod did. The activeSelf
-            // filter preserves the load-bearing semantics: tiles mid-recycle
-            // are deactivated and must not be matched.
-            GameManager gameManager = GameManager.Instance;
-            StreamingWorld streamingWorld = gameManager != null ? gameManager.StreamingWorld : null;
-            Transform streamingTarget = streamingWorld != null ? streamingWorld.StreamingTarget : null;
-            if (streamingTarget != null)
-            {
-                int childCount = streamingTarget.childCount;
-                for (int i = 0; i < childCount; i++)
-                {
-                    try
-                    {
-                        Transform child = streamingTarget.GetChild(i);
-                        if (child == null || !child.gameObject.activeInHierarchy)
-                            continue;
-
-                        DaggerfallTerrain candidate = child.GetComponent<DaggerfallTerrain>();
-                        if (candidate == null)
-                            continue;
-
-                        AddSnapshotEntry(candidate);
-                    }
-                    catch
-                    {
-                        // Destroy race mid-iteration; skip, next frame re-snaps.
-                    }
-                }
-
-                return frameSnapshot;
-            }
-
-            // Fallback (no streaming world yet): the legacy whole-scene sweep.
-            DaggerfallTerrain[] terrains;
+            Transform streamingTarget = null;
             try
             {
-                terrains = UnityEngine.Object.FindObjectsOfType<DaggerfallTerrain>();
+                GameManager gameManager = GameManager.Instance;
+                StreamingWorld streamingWorld = gameManager != null ? gameManager.StreamingWorld : null;
+                streamingTarget = streamingWorld != null ? streamingWorld.StreamingTarget : null;
+            }
+            catch
+            {
+                streamingTarget = null;
+            }
+
+            if (streamingTarget != null)
+            {
+                for (int i = 0; i < streamingTarget.childCount; i++)
+                {
+                    Transform child = streamingTarget.GetChild(i);
+                    if (child == null || !child.gameObject.activeInHierarchy)
+                        continue;
+
+                    TryAddSnapshotEntry(child.GetComponent<DaggerfallTerrain>());
+                }
+
+                if (frameSnapshot.Count > 0)
+                    return frameSnapshot;
+            }
+
+            // Fallback for early init or nonstandard scene layouts. This is
+            // slower, but should now be rare.
+            try
+            {
+                DaggerfallTerrain[] terrains = UnityEngine.Object.FindObjectsOfType<DaggerfallTerrain>();
+                for (int i = 0; i < terrains.Length; i++)
+                    TryAddSnapshotEntry(terrains[i]);
             }
             catch (System.Exception)
             {
                 return frameSnapshot;
             }
 
-            for (int i = 0; i < terrains.Length; i++)
-            {
-                if (terrains[i] != null)
-                    AddSnapshotEntry(terrains[i]);
-            }
-
             return frameSnapshot;
         }
 
-        private static void AddSnapshotEntry(DaggerfallTerrain candidate)
+        private static void TryAddSnapshotEntry(DaggerfallTerrain candidate)
         {
+            if (candidate == null)
+                return;
+
             try
             {
                 Terrain candidateTerrain = candidate.GetComponent<Terrain>();

@@ -30,8 +30,6 @@ namespace DeepWaters
     {
         private const int ExtraTerrainRings = 1;
         private const int MaxBufferedTerrainDistance = 7;
-        private static readonly bool EnableTerrainDistanceBuffer = false;
-        private static readonly bool EnableSwimWorldPositionOverride = false;
         private const float ExitLingerSeconds = 3f;
         private const float SurfaceActivationMargin = 2f;
         private const float MinimumBufferedDepth = 1f;
@@ -75,29 +73,20 @@ namespace DeepWaters
                     return;
 
                 StreamingWorld streamingWorld = GameManager.Instance != null ? GameManager.Instance.StreamingWorld : null;
-                if (!EnableTerrainDistanceBuffer && !EnableSwimWorldPositionOverride)
-                {
-                    RestoreOriginalDistance();
-                    swimTrackInitialized = false;
-                    return;
-                }
-
-                bool shouldTrackSwimming = ShouldTrackSwimming(streamingWorld);
-                bool shouldExpandTerrainDistance = EnableTerrainDistanceBuffer &&
-                                                   shouldTrackSwimming &&
-                                                   ShouldExpandTerrainDistance();
-                if (shouldExpandTerrainDistance)
+                bool shouldBuffer = ShouldBufferStreaming(streamingWorld);
+                if (shouldBuffer)
                     keepBufferUntil = Time.realtimeSinceStartup + ExitLingerSeconds;
 
-                if (streamingWorld != null && (shouldExpandTerrainDistance || Time.realtimeSinceStartup < keepBufferUntil))
+                if (streamingWorld != null && (shouldBuffer || Time.realtimeSinceStartup < keepBufferUntil))
+                {
                     ApplyBuffer(streamingWorld);
-                else
-                    RestoreOriginalDistance();
-
-                if (EnableSwimWorldPositionOverride && streamingWorld != null && shouldTrackSwimming)
                     OverrideSwimWorldPosition();
+                }
                 else
+                {
                     swimTrackInitialized = false;
+                    RestoreOriginalDistance();
+                }
             }
             catch (System.Exception ex)
             {
@@ -233,7 +222,7 @@ namespace DeepWaters
             appliedTerrainDistance = -1;
         }
 
-        private bool ShouldTrackSwimming(StreamingWorld streamingWorld)
+        private bool ShouldBufferStreaming(StreamingWorld streamingWorld)
         {
             if (DeepWaterRuntime.IsLoadGraceActive)
                 return false;
@@ -262,12 +251,127 @@ namespace DeepWaters
 
             return column.Depth >= MinimumBufferedDepth;
         }
+    }
 
-        private static bool ShouldExpandTerrainDistance()
+    internal sealed class DeepWaterSwimWorldTracker : MonoBehaviour
+    {
+        private const float SurfaceActivationMargin = 2f;
+        private const float RecenterJumpThreshold = 300f;
+        private const float RecenterJumpThresholdSq = RecenterJumpThreshold * RecenterJumpThreshold;
+
+        private Vector3 lastTrackPos;
+        private int lastWorldX;
+        private int lastWorldZ;
+        private double pendingWorldX;
+        private double pendingWorldZ;
+        private bool tracking;
+
+        private void OnEnable()
+        {
+            SaveLoadManager.OnStartLoad += OnStartLoad;
+            StreamingWorld.OnTeleportToCoordinates += OnTeleportToCoordinates;
+        }
+
+        private void OnDisable()
+        {
+            SaveLoadManager.OnStartLoad -= OnStartLoad;
+            StreamingWorld.OnTeleportToCoordinates -= OnTeleportToCoordinates;
+            ResetTracking();
+        }
+
+        private void LateUpdate()
         {
             GameManager gameManager = GameManager.Instance;
-            PlayerGPS playerGPS = gameManager != null ? gameManager.PlayerGPS : null;
-            return playerGPS == null || !playerGPS.IsPlayerInLocationRect;
+            if (gameManager == null || !gameManager.IsPlayingGame() ||
+                gameManager.PlayerGPS == null || gameManager.PlayerObject == null)
+            {
+                ResetTracking();
+                return;
+            }
+
+            if (!ShouldTrack(gameManager))
+            {
+                ResetTracking();
+                return;
+            }
+
+            Vector3 position = gameManager.PlayerGPS.transform.position;
+            if (!tracking)
+            {
+                BeginTracking(gameManager, position);
+                return;
+            }
+
+            Vector3 delta = position - lastTrackPos;
+            if (delta.sqrMagnitude > RecenterJumpThresholdSq)
+            {
+                BeginTracking(gameManager, position);
+                return;
+            }
+
+            float ratio = StreamingWorld.SceneMapRatio;
+            pendingWorldX += delta.x * ratio - (gameManager.PlayerGPS.WorldX - lastWorldX);
+            pendingWorldZ += delta.z * ratio - (gameManager.PlayerGPS.WorldZ - lastWorldZ);
+
+            int nudgeX = (int)pendingWorldX;
+            int nudgeZ = (int)pendingWorldZ;
+            if (nudgeX != 0)
+            {
+                gameManager.PlayerGPS.WorldX += nudgeX;
+                pendingWorldX -= nudgeX;
+            }
+
+            if (nudgeZ != 0)
+            {
+                gameManager.PlayerGPS.WorldZ += nudgeZ;
+                pendingWorldZ -= nudgeZ;
+            }
+
+            lastTrackPos = position;
+            lastWorldX = gameManager.PlayerGPS.WorldX;
+            lastWorldZ = gameManager.PlayerGPS.WorldZ;
+        }
+
+        private static bool ShouldTrack(GameManager gameManager)
+        {
+            if (gameManager.PlayerEnterExit != null && gameManager.PlayerEnterExit.IsPlayerInside)
+                return false;
+
+            if (!DeepWaterWorld.IsPlayerInExteriorWaterContext())
+                return false;
+
+            float oceanSurfaceY;
+            if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY))
+                return false;
+
+            return gameManager.PlayerObject.transform.position.y <= oceanSurfaceY + SurfaceActivationMargin;
+        }
+
+        private void BeginTracking(GameManager gameManager, Vector3 position)
+        {
+            lastTrackPos = position;
+            lastWorldX = gameManager.PlayerGPS.WorldX;
+            lastWorldZ = gameManager.PlayerGPS.WorldZ;
+            pendingWorldX = 0d;
+            pendingWorldZ = 0d;
+            tracking = true;
+        }
+
+        private void ResetTracking()
+        {
+            tracking = false;
+            pendingWorldX = 0d;
+            pendingWorldZ = 0d;
+        }
+
+        private void OnStartLoad(SaveData_v1 saveData)
+        {
+            ResetTracking();
+        }
+
+        private void OnTeleportToCoordinates(DFPosition worldPos)
+        {
+            ResetTracking();
         }
     }
 }

@@ -27,17 +27,15 @@ namespace DeepWaters
         // ring re-promotes. Prevents a flurry of GameObject
         // instantiation while DFU is still rebuilding terrain.
         private const float PostLoadHeavyWorkGraceSeconds = 1.5f;
-        private const int PostTransitionRefreshTilesPerFrame = 2;
         private static float heavyWorkResumeTime;
         private static bool postTransitionRefreshPending;
-        private static DaggerfallTerrain[] postTransitionRefreshTerrains;
-        private static int postTransitionRefreshIndex;
 
         private static bool installed;
         private static bool terrainUpdateEventActive;
         private static bool terrainUpdateReflectionWarningLogged;
         private static FieldInfo terrainUpdateRunningField;
         private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+        public static bool DiagnosticProfiling;
 
         // === API consumed by newer subsystems (StreamingBuffer, spawners,
         // OutdoorSwimDriver, Settings). The working-backup version of
@@ -70,6 +68,22 @@ namespace DeepWaters
         public static bool IsLoadGraceActive
         {
             get { return !CanRunHeavyRuntimeWork || DeepWaterLocationLoadGate.IsAnyLocationLoading; }
+        }
+
+        public static bool IsPostTransitionRefreshPending
+        {
+            get { return postTransitionRefreshPending; }
+        }
+
+        public static float HeavyWorkResumeInSeconds
+        {
+            get
+            {
+                if (float.IsPositiveInfinity(heavyWorkResumeTime))
+                    return -1f;
+
+                return Mathf.Max(0f, heavyWorkResumeTime - Time.realtimeSinceStartup);
+            }
         }
 
         public static bool IsTerrainUpdateActive
@@ -157,8 +171,6 @@ namespace DeepWaters
             // Suspend heavy work until OnLoad re-arms the grace timer.
             heavyWorkResumeTime = float.PositiveInfinity;
             postTransitionRefreshPending = false;
-            postTransitionRefreshTerrains = null;
-            postTransitionRefreshIndex = 0;
             ResetTransientState();
         }
 
@@ -166,16 +178,12 @@ namespace DeepWaters
         {
             heavyWorkResumeTime = Time.realtimeSinceStartup + PostLoadHeavyWorkGraceSeconds;
             postTransitionRefreshPending = true;
-            postTransitionRefreshTerrains = null;
-            postTransitionRefreshIndex = 0;
         }
 
         private static void OnTeleportToCoordinates(DFPosition worldPos)
         {
             heavyWorkResumeTime = Time.realtimeSinceStartup + PostLoadHeavyWorkGraceSeconds;
             postTransitionRefreshPending = true;
-            postTransitionRefreshTerrains = null;
-            postTransitionRefreshIndex = 0;
             ResetTransientState();
         }
 
@@ -183,6 +191,26 @@ namespace DeepWaters
         {
             if (OnTransientReset != null)
                 OnTransientReset();
+        }
+
+        public static System.Diagnostics.Stopwatch StartProfile()
+        {
+            return DiagnosticProfiling ? System.Diagnostics.Stopwatch.StartNew() : null;
+        }
+
+        public static void LogProfile(System.Diagnostics.Stopwatch stopwatch, string label, DaggerfallTerrain dfTerrain)
+        {
+            if (stopwatch == null)
+                return;
+
+            stopwatch.Stop();
+            if (stopwatch.ElapsedMilliseconds < 10)
+                return;
+
+            int mx = dfTerrain != null ? dfTerrain.MapPixelX : -1;
+            int my = dfTerrain != null ? dfTerrain.MapPixelY : -1;
+            Debug.Log("[DeepWaters.Profile] " + label + " tile=(" + mx + "," + my + ") " +
+                      stopwatch.ElapsedMilliseconds + "ms");
         }
 
         public static void PumpPostTransitionRefresh()
@@ -193,36 +221,9 @@ namespace DeepWaters
             if (!CanMutateTerrainData)
                 return;
 
-            if (postTransitionRefreshTerrains == null)
-            {
-                postTransitionRefreshTerrains = Object.FindObjectsOfType<DaggerfallTerrain>();
-                postTransitionRefreshIndex = 0;
-            }
-
-            int processed = 0;
-            while (postTransitionRefreshIndex < postTransitionRefreshTerrains.Length &&
-                   processed < PostTransitionRefreshTilesPerFrame)
-            {
-                DaggerfallTerrain dfTerrain = postTransitionRefreshTerrains[postTransitionRefreshIndex++];
-                if (dfTerrain == null)
-                    continue;
-
-                // After a save load / teleport, rebuild any loaded tile whose
-                // seafloor mesh is stale, keeping current meshes and colliders
-                // intact (the IsCurrentBuild guard skips them). Settings changes
-                // still call RefreshLoadedTiles(force: true).
-                DeepWaterFloorBuilder.RefreshLoadedTile(dfTerrain, force: false);
-                WaterSurfaceManager.RefreshLoadedSurface(dfTerrain);
-                processed++;
-            }
-
-            if (postTransitionRefreshIndex < postTransitionRefreshTerrains.Length)
-                return;
-
             postTransitionRefreshPending = false;
-            postTransitionRefreshTerrains = null;
-            postTransitionRefreshIndex = 0;
-            Debug.Log("[DeepWaters.Runtime] Post-transition water terrain refresh complete.");
+            UnderwaterDecorations.RefreshPlayerArea();
+            Debug.Log("[DeepWaters.Runtime] Post-transition decoration refresh queued.");
         }
     }
 }

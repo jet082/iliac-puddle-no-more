@@ -70,14 +70,14 @@ namespace DeepWaters
         private const float EnemySurfaceClearance = 3f;
         private const float EnemyColumnFractionMin = 0.28f;
         private const float EnemyColumnFractionMax = 0.78f;
-        private const int CandidateAttemptsPerSpawn = 4;
+        private const int CandidateAttemptsPerSpawn = 8;
         private const float TreasureGuardMinDistance = 8f;
         private const float TreasureGuardMaxDistance = 30f;
         private const int MaxTreasureGuardCount = 5;
         private const float EnemyFrequencyForMaxTreasureGuards = 0.6f;
 
         public const int FullSpawnCount = 4;
-        public const float SpawnRateScale = 0.4f;
+        public const float SpawnRateScale = 0.75f;
 
         private static readonly TransientObjectTracker liveEnemies = new TransientObjectTracker();
         private static float nextAllowedPulseTime;

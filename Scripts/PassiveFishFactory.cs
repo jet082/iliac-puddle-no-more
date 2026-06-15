@@ -42,17 +42,6 @@ namespace DeepWaters
             go.transform.position = worldPos;
             DeepWaterRendering.FaceMainCamera(go.transform);
             AddClickCollider(go, billboardSize);
-
-            // Fish move their transform every frame. A collider WITHOUT a
-            // rigidbody is a STATIC collider to PhysX, and moving statics
-            // dirties the physics scene — at the fish cap that multiplied
-            // into the per-step physics cost behind the town crawl. A
-            // kinematic rigidbody is the supported cheap path for
-            // script-moved colliders; activation raycasts still hit the
-            // trigger box exactly as before.
-            Rigidbody body = go.AddComponent<Rigidbody>();
-            body.isKinematic = true;
-            body.useGravity = false;
             DeepWaterRendering.DisableShadows(go.GetComponent<MeshRenderer>());
 
             DaggerfallLoot loot = go.AddComponent<DaggerfallLoot>();

@@ -16,11 +16,22 @@ namespace DeepWaters
     public static class UnderwaterDecorations
     {
         private const int MaxTilesPerWorkCycle = 1;
+        private const int MaxDecorationsPerTile = 1152;
 
         private static readonly Queue<DaggerfallTerrain> workQueue = new Queue<DaggerfallTerrain>();
         private static readonly HashSet<DaggerfallTerrain> queuedTerrains = new HashSet<DaggerfallTerrain>();
         private static GameObject workerObject;
         private static bool installed;
+
+        public static int PendingWorkCount
+        {
+            get { return workQueue.Count; }
+        }
+
+        public static int QueuedTerrainCount
+        {
+            get { return queuedTerrains.Count; }
+        }
 
         private class DecorationMarker : MonoBehaviour
         {
@@ -173,11 +184,8 @@ namespace DeepWaters
                 return;
 
             // A recycled tile still carries the PREVIOUS map pixel's
-            // decorations (local positions for the old seafloor — they show
-            // as kelp hanging in the sky until the rebuild queue reaches the
-            // tile, or indefinitely if the tile sits outside the populate
-            // radius below). Purge stale groups synchronously, BEFORE the
-            // radius early-out; the throttled queue only rebuilds.
+            // decorations until the rebuild queue reaches it. Purge stale
+            // groups synchronously; the throttled queue only rebuilds.
             var staleMarker = sender.GetComponent<DecorationMarker>();
             if (staleMarker != null &&
                 (staleMarker.MapPixelX != sender.MapPixelX || staleMarker.MapPixelY != sender.MapPixelY))
@@ -232,6 +240,7 @@ namespace DeepWaters
                     return;
                 }
 
+                TrimDecorationPositions(positions);
                 UnderwaterDecorationBatchFactory.Spawn(dfTerrain.transform, positions);
                 MarkCurrentTerrain(dfTerrain);
             }
@@ -249,6 +258,22 @@ namespace DeepWaters
             {
                 return (mapPixelX * 73856093) ^ (mapPixelY * 19349663);
             }
+        }
+
+        private static void TrimDecorationPositions(List<UnderwaterDecorationPlacementInfo> positions)
+        {
+            if (positions == null || positions.Count <= MaxDecorationsPerTile)
+                return;
+
+            for (int i = positions.Count - 1; i > 0; i--)
+            {
+                int j = UnityEngine.Random.Range(0, i + 1);
+                UnderwaterDecorationPlacementInfo swap = positions[i];
+                positions[i] = positions[j];
+                positions[j] = swap;
+            }
+
+            positions.RemoveRange(MaxDecorationsPerTile, positions.Count - MaxDecorationsPerTile);
         }
 
         private static void MarkCurrentTerrain(DaggerfallTerrain dfTerrain)

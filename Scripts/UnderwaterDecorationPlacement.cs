@@ -21,6 +21,7 @@ namespace DeepWaters
         private const float MinimumDecorationSpacing = 5f;
         private const float MinimumSeafloorDepth = 8f;
         private const float SeafloorClearance = 0.25f;
+        private const float AnimatedSeafloorClearance = 0.75f;
         private const float SurfaceDecorationClearance = 0.5f;
         // Slope filter: probe seafloor Y a few meters in each cardinal
         // direction around the candidate and reject if the surface tilts
@@ -100,7 +101,7 @@ namespace DeepWaters
                 float visualHeight;
                 if (!TryGetDecorationVisualHeight(record, out visualHeight)) continue;
 
-                float billboardBaseLocalY = seafloorLocalY + SeafloorClearance;
+                float billboardBaseLocalY = seafloorLocalY + GetSeafloorClearance(record);
                 if (billboardBaseLocalY >= oceanLocalY) continue;
                 if (!HasDecorationSurfaceClearance(billboardBaseLocalY, visualHeight, oceanLocalY)) continue;
 
@@ -134,6 +135,13 @@ namespace DeepWaters
             float scaleFactor)
         {
             return visibleBottomWorldY;
+        }
+
+        private static float GetSeafloorClearance(UnderwaterDecorationRecord record)
+        {
+            return UnderwaterDecorationCatalog.UsesArchiveAnimation(record)
+                ? AnimatedSeafloorClearance
+                : SeafloorClearance;
         }
 
         private static bool IsBubbleDecorationRecord(UnderwaterDecorationRecord record)

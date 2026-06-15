@@ -140,6 +140,7 @@ namespace DeepWaters
 
         private static void HandlePromote(DaggerfallTerrain dfTerrain, TerrainData terrainData, bool force, bool fromPromoteEvent)
         {
+            System.Diagnostics.Stopwatch profile = DeepWaterRuntime.StartProfile();
             try
             {
                 HandlePromoteCore(dfTerrain, terrainData, force, fromPromoteEvent);
@@ -150,6 +151,10 @@ namespace DeepWaters
                 int my = dfTerrain != null ? dfTerrain.MapPixelY : -1;
                 Debug.LogError("[DeepWaters] HandlePromote crashed for tile (" + mx + "," + my +
                                "): " + ex.Message + "\n" + ex.StackTrace);
+            }
+            finally
+            {
+                DeepWaterRuntime.LogProfile(profile, "floor-promote", dfTerrain);
             }
         }
 
@@ -341,13 +346,6 @@ namespace DeepWaters
                     bool isWater = true;
                     if (isWater && useBakeMask)
                     {
-                        // The bake's fine mask is AUTHORITATIVE — including
-                        // its deliberate shore buffer (no carve within
-                        // HoleBufferMeters of the coast, so no shore tile is
-                        // ever swimmable). A "rescue" that carved painted
-                        // pure-water cells the mask rejected bulldozed that
-                        // buffer right up to the waterline (swim-through
-                        // shores + seams) — do not override the mask.
                         isWater = DeepWaterDistanceBake.IsCarvedWater(
                             mapPixelX, mapPixelY, fracX, fracZ);
                     }

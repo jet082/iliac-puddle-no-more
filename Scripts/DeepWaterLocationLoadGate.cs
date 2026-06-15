@@ -1,8 +1,11 @@
 // Project:         Iliac Puddle No More
 // License:         MIT
 
+using System.Collections.Generic;
+using System.Reflection;
 using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
+using DaggerfallWorkshop.Game.Banking;
 using DaggerfallWorkshop.Game.Serialization;
 using UnityEngine;
 
@@ -34,6 +37,16 @@ namespace DeepWaters
         // location" we see in logs (~4 s), with margin.
         private const float StuckCounterResetSeconds = 12f;
         private static float lastIncrementTime;
+
+        public static int ActiveLoadCount
+        {
+            get { return activeLoads; }
+        }
+
+        public static float ActiveLoadAgeSeconds
+        {
+            get { return activeLoads > 0 ? Time.realtimeSinceStartup - lastIncrementTime : 0f; }
+        }
 
         public static bool IsAnyLocationLoading
         {
@@ -100,6 +113,205 @@ namespace DeepWaters
             // any straggler counts from the previous location can't hold
             // the gate forever.
             activeLoads = 0;
+        }
+    }
+
+    internal static class DeepWaterLocationUpdateSkipper
+    {
+        private const float MinimumSkipDepth = 4f;
+        private const float DeferredRestoreCheckInterval = 0.5f;
+        private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+
+        private static readonly HashSet<int> deferredLocationKeys = new HashSet<int>();
+        private static FieldInfo terrainArrayField;
+        private static FieldInfo updateLocationsField;
+        private static bool installed;
+        private static float nextDeferredRestoreCheckTime;
+
+        public static int LastSkippedCount { get; private set; }
+
+        public static int DeferredLocationCount
+        {
+            get { return deferredLocationKeys.Count; }
+        }
+
+        public static void Install()
+        {
+            if (installed)
+                return;
+
+            terrainArrayField = typeof(StreamingWorld).GetField("terrainArray", PrivateInstance);
+            updateLocationsField = typeof(StreamingWorld).GetField("updateLocations", PrivateInstance);
+            if (terrainArrayField == null || updateLocationsField == null)
+            {
+                Debug.LogWarning("[DeepWaters.LocationSkip] Could not reflect StreamingWorld location fields; peripheral location skip disabled.");
+                installed = true;
+                return;
+            }
+
+            StreamingWorld.OnUpdateTerrainsEnd += OnUpdateTerrainsEnd;
+            SaveLoadManager.OnStartLoad += OnStartLoad;
+            StreamingWorld.OnTeleportToCoordinates += OnTeleport;
+            installed = true;
+        }
+
+        public static void PumpDeferredRestore()
+        {
+            if (deferredLocationKeys.Count == 0 || Time.time < nextDeferredRestoreCheckTime)
+                return;
+
+            nextDeferredRestoreCheckTime = Time.time + DeferredRestoreCheckInterval;
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null || gameManager.StreamingWorld == null || gameManager.PlayerGPS == null)
+                return;
+
+            if (HasOceanConnectedActiveTerrain(gameManager.StreamingWorld))
+                return;
+
+            if (DeepWaterWorld.IsPlayerInOrAboveDeepWater(MinimumSkipDepth) ||
+                IsCurrentPixelOceanConnected(gameManager.StreamingWorld, gameManager.PlayerGPS.CurrentMapPixel))
+            {
+                return;
+            }
+
+            RestoreDeferredLocations(gameManager.StreamingWorld);
+        }
+
+        private static void OnStartLoad(SaveData_v1 saveData)
+        {
+            deferredLocationKeys.Clear();
+            LastSkippedCount = 0;
+        }
+
+        private static void OnTeleport(DaggerfallConnect.Utility.DFPosition pos)
+        {
+            deferredLocationKeys.Clear();
+            LastSkippedCount = 0;
+        }
+
+        private static void OnUpdateTerrainsEnd()
+        {
+            LastSkippedCount = 0;
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null || gameManager.StreamingWorld == null || gameManager.PlayerGPS == null)
+                return;
+
+            StreamingWorld.TerrainDesc[] terrains = terrainArrayField.GetValue(gameManager.StreamingWorld) as StreamingWorld.TerrainDesc[];
+            if (terrains == null)
+                return;
+
+            DaggerfallConnect.Utility.DFPosition current = gameManager.PlayerGPS.CurrentMapPixel;
+            bool oceanNearby = HasOceanConnectedActiveTerrain(terrains);
+            bool overDeepWater =
+                DeepWaterWorld.IsPlayerInOrAboveDeepWater(MinimumSkipDepth) ||
+                IsCurrentPixelOceanConnected(gameManager.StreamingWorld, current) ||
+                oceanNearby;
+
+            for (int i = 0; i < terrains.Length; i++)
+            {
+                StreamingWorld.TerrainDesc desc = terrains[i];
+                if (!desc.active || !desc.hasLocation)
+                    continue;
+
+                int key = TerrainHelper.MakeTerrainKey(desc.mapPixelX, desc.mapPixelY);
+                bool isCurrentPixel = desc.mapPixelX == current.X && desc.mapPixelY == current.Y;
+                if (isCurrentPixel && deferredLocationKeys.Remove(key))
+                {
+                    desc.updateLocation = true;
+                    terrains[i] = desc;
+                    updateLocationsField.SetValue(gameManager.StreamingWorld, true);
+                    continue;
+                }
+
+                if (!overDeepWater || isCurrentPixel || IsOwnedShipPixel(desc.mapPixelX, desc.mapPixelY) || !desc.updateLocation)
+                    continue;
+
+                desc.updateLocation = false;
+                terrains[i] = desc;
+                deferredLocationKeys.Add(key);
+                LastSkippedCount++;
+            }
+        }
+
+        private static void RestoreDeferredLocations(StreamingWorld streamingWorld)
+        {
+            StreamingWorld.TerrainDesc[] terrains = terrainArrayField.GetValue(streamingWorld) as StreamingWorld.TerrainDesc[];
+            if (terrains == null)
+                return;
+
+            bool restoredAny = false;
+            for (int i = 0; i < terrains.Length; i++)
+            {
+                StreamingWorld.TerrainDesc desc = terrains[i];
+                if (!desc.active || !desc.hasLocation)
+                    continue;
+
+                int key = TerrainHelper.MakeTerrainKey(desc.mapPixelX, desc.mapPixelY);
+                if (!deferredLocationKeys.Remove(key))
+                    continue;
+
+                desc.updateLocation = true;
+                terrains[i] = desc;
+                restoredAny = true;
+            }
+
+            if (restoredAny)
+                updateLocationsField.SetValue(streamingWorld, true);
+        }
+
+        private static bool IsOwnedShipPixel(int mapPixelX, int mapPixelY)
+        {
+            if (!DaggerfallBankManager.OwnsShip)
+                return false;
+
+            DaggerfallConnect.Utility.DFPosition shipCoords = DaggerfallBankManager.GetShipCoords();
+            return shipCoords != null && shipCoords.X == mapPixelX && shipCoords.Y == mapPixelY;
+        }
+
+        private static bool IsCurrentPixelOceanConnected(StreamingWorld streamingWorld, DaggerfallConnect.Utility.DFPosition current)
+        {
+            DaggerfallTerrain dfTerrain;
+            Terrain terrain;
+            if (!DeepWaterTerrainLookup.TryGet(streamingWorld, current.X, current.Y, out dfTerrain, out terrain))
+                return false;
+
+            DeepWaterTileData tile = dfTerrain != null ? dfTerrain.GetComponent<DeepWaterTileData>() : null;
+            return tile != null &&
+                   tile.IsOceanConnected &&
+                   tile.HasDistanceField &&
+                   DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData);
+        }
+
+        private static bool HasOceanConnectedActiveTerrain(StreamingWorld streamingWorld)
+        {
+            StreamingWorld.TerrainDesc[] terrains = terrainArrayField.GetValue(streamingWorld) as StreamingWorld.TerrainDesc[];
+            return terrains != null && HasOceanConnectedActiveTerrain(terrains);
+        }
+
+        private static bool HasOceanConnectedActiveTerrain(StreamingWorld.TerrainDesc[] terrains)
+        {
+            for (int i = 0; i < terrains.Length; i++)
+            {
+                StreamingWorld.TerrainDesc desc = terrains[i];
+                if (!desc.active || desc.terrainObject == null)
+                    continue;
+
+                DaggerfallTerrain dfTerrain = desc.terrainObject.GetComponent<DaggerfallTerrain>();
+                if (dfTerrain == null)
+                    continue;
+
+                DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+                if (tile != null &&
+                    tile.IsOceanConnected &&
+                    tile.HasDistanceField &&
+                    DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

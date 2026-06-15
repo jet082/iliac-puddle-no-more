@@ -1,6 +1,6 @@
 {
     "ModTitle": "Iliac Puddle No More",
-    "ModVersion": "0.56.9",
+    "ModVersion": "0.55.0",
     "ModAuthor": "jet082",
     "ContactInfo": "",
     "DFUnity_Version": "1.1.1",
@@ -30,7 +30,6 @@
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaterTerrainCapRenderer.cs",
         "Assets/Game/Mods/deep-waters/Scripts/UnderwaterEncounterPulse.cs",
         "Assets/Game/Mods/deep-waters/Scripts/TransientObjectTracker.cs",
-        "Assets/Game/Mods/deep-waters/Scripts/TimedGateCache.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaterRendering.cs",
         "Assets/Game/Mods/deep-waters/Scripts/UnderwaterDecorationCatalog.cs",
         "Assets/Game/Mods/deep-waters/Scripts/UnderwaterDecorationReplacementCache.cs",
@@ -89,12 +88,32 @@
     ],
     "Dependencies": [
         {
-            "Name": "world of daggerfall - terrain",
+            "Name": "wilderness overhaul",
             "IsOptional": true,
             "IsPeer": false
         },
         {
-            "Name": "interesting terrains",
+            "Name": "Wilderness Overhaul",
+            "IsOptional": true,
+            "IsPeer": false
+        },
+        {
+            "Name": "basicroads",
+            "IsOptional": true,
+            "IsPeer": false
+        },
+        {
+            "Name": "BasicRoads",
+            "IsOptional": true,
+            "IsPeer": false
+        },
+        {
+            "Name": "wod-terrain",
+            "IsOptional": true,
+            "IsPeer": false
+        },
+        {
+            "Name": "World of Daggerfall - Terrain",
             "IsOptional": true,
             "IsPeer": false
         }

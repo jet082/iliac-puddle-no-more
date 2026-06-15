@@ -148,15 +148,6 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 // is hidden at depth while shallows by the shore stay clear.
                 float occlusionRate = lerp(1.2, 3.0, fogStrength);
                 float bodyOpacity = saturate(1.0 - exp2(-(waterPath / visionRef) * occlusionRate));
-                // Short-path tint: submerged objects are lit sprites/geometry
-                // (fish use DFU's lit billboard), so without their own water
-                // attenuation they read as pale inverted cutouts against the
-                // fogged deep when seen from above. Beer-Lambert with a short
-                // ~6m extinction pulls anything beyond a few meters of water
-                // path toward the water color (capped so the shallow seabed
-                // stays readable); under ~1m of water keeps ~90% clarity so
-                // wading stays clear.
-                bodyOpacity = max(bodyOpacity, 0.75 * (1.0 - exp2(-waterPath / 6.0)));
 
                 // Opaque horizon curtain. The surface goes FULLY opaque at
                 // distance, independent of the transparency setting, so open
