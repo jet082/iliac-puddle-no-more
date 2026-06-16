@@ -15,31 +15,37 @@ namespace DeepWaters
 
         public static bool TrySpawn(TransientObjectTracker trackedObjects)
         {
+            Vector3 centre;
             return TrySpawn(
                 trackedObjects,
                 UnderwaterLootPlacement.MinSpawnDistance,
-                UnderwaterLootPlacement.MaxSpawnDistance);
+                UnderwaterLootPlacement.MaxSpawnDistance,
+                out centre);
         }
 
         public static bool TrySpawn(
             TransientObjectTracker trackedObjects,
             float minSpawnDistance,
-            float maxSpawnDistance)
+            float maxSpawnDistance,
+            out Vector3 centre)
         {
-            Vector3 centre;
+            centre = Vector3.zero;
+
+            Vector3 pickedCentre;
             Transform parent;
             long spawnCellKey;
-            if (!UnderwaterLootPlacement.PickSpawnSpot(minSpawnDistance, maxSpawnDistance, out centre, out parent, out spawnCellKey))
+            if (!UnderwaterLootPlacement.PickSpawnSpot(minSpawnDistance, maxSpawnDistance, out pickedCentre, out parent, out spawnCellKey))
                 return false;
 
-            int debrisPlaced = SpawnDebris(centre, trackedObjects);
-            int lootPlaced = SpawnTreasure(centre, trackedObjects);
+            int debrisPlaced = SpawnDebris(pickedCentre, trackedObjects);
+            int lootPlaced = SpawnTreasure(pickedCentre, trackedObjects);
 
             if (debrisPlaced == 0 && lootPlaced == 0)
                 return false;
 
             UnderwaterLootPlacement.RememberSpawnCell(spawnCellKey);
-            UnderwaterEnemySpawner.TrySpawnRareEnemiesNearTreasureCluster(centre);
+            UnderwaterEnemySpawner.TrySpawnRareEnemiesNearTreasureCluster(pickedCentre);
+            centre = pickedCentre;
             return true;
         }
 

@@ -93,6 +93,7 @@ namespace DeepWaters
             hasNearbyWaterGateCache = false;
             lastNearbyWaterGateResult = false;
             trackedObjects.Clear();
+            liveClusterCentres.Clear();
         }
 
         private class LootPulseDriver : MonoBehaviour
@@ -143,6 +144,7 @@ namespace DeepWaters
             GetLootSpawnDistanceRange(out spawnMinDistance, out spawnMaxDistance);
 
             trackedObjects.PruneByDistance(playerPos, GetLootDespawnDistance());
+            PruneLiveClusters(playerPos);
             int maxLiveLoot = GetMaxLiveLootObjects();
             trackedObjects.PruneToCount(playerPos, maxLiveLoot);
             if (trackedObjects.Count >= maxLiveLoot)
@@ -171,8 +173,13 @@ namespace DeepWaters
             if (rate <= 0f)
                 return false;
 
+            if (liveClusterCentres.Count >= GetMaxLiveTreasureClusters())
+                return false;
+
             float multiplier = DeepWaters.Instance.TreasureCove ? TreasureCoveClusterChanceMultiplier : NormalLootMultiplier;
-            float chance = Mathf.Min(rate * multiplier * GetWaterContextSpawnMultiplier(), MaxClusterChance);
+            float chance = Mathf.Min(
+                rate * multiplier * GetWaterContextSpawnMultiplier() * DeepWaterWorld.DepthSpawnMultiplier(),
+                MaxClusterChance);
             return Random.value < chance;
         }
 
@@ -187,7 +194,8 @@ namespace DeepWaters
             if (rate <= 0f) return 0;
 
             float multiplier = DeepWaters.Instance.TreasureCove ? TreasureCoveStrayMultiplier : NormalLootMultiplier;
-            float scaledCount = FullStrayLootPerPulse * rate * multiplier * GetWaterContextSpawnMultiplier();
+            float scaledCount = FullStrayLootPerPulse * rate * multiplier *
+                                GetWaterContextSpawnMultiplier() * DeepWaterWorld.DepthSpawnMultiplier();
             int count = DeepWaterWorld.RollCount(scaledCount);
 
             int max = DeepWaters.Instance.TreasureCove
@@ -260,7 +268,12 @@ namespace DeepWaters
 
         private static bool TrySpawnTreasureCluster(float minSpawnDistance, float maxSpawnDistance)
         {
-            return UnderwaterTreasureClusterSpawner.TrySpawn(trackedObjects, minSpawnDistance, maxSpawnDistance);
+            Vector3 centre;
+            if (!UnderwaterTreasureClusterSpawner.TrySpawn(trackedObjects, minSpawnDistance, maxSpawnDistance, out centre))
+                return false;
+
+            liveClusterCentres.Add(centre);
+            return true;
         }
 
         private static bool CanRunLootPulse()
@@ -337,7 +350,41 @@ namespace DeepWaters
 
         private static int GetMaxLiveLootObjects()
         {
-            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveLootObjects : 32;
+            if (DeepWaters.Instance == null)
+                return 32;
+
+            return DeepWaters.Instance.TreasureCove
+                ? DeepWaters.Instance.TreasureCoveMaxLiveLootObjects
+                : DeepWaters.Instance.MaxLiveLootObjects;
+        }
+
+        // Live treasure clusters near the player, tracked by centre position so
+        // 'max treasure' caps how many wreck sites exist around you at once
+        // without splitting the shared loot tracker. Pruned by distance each
+        // pulse and cleared on world rebuild.
+        private static readonly List<Vector3> liveClusterCentres = new List<Vector3>();
+
+        private static void PruneLiveClusters(Vector3 playerPos)
+        {
+            float maxDistance = GetLootDespawnDistance();
+            float maxSq = maxDistance * maxDistance;
+            for (int i = liveClusterCentres.Count - 1; i >= 0; i--)
+            {
+                Vector3 delta = liveClusterCentres[i] - playerPos;
+                delta.y = 0f;
+                if (delta.sqrMagnitude > maxSq)
+                    liveClusterCentres.RemoveAt(i);
+            }
+        }
+
+        private static int GetMaxLiveTreasureClusters()
+        {
+            if (DeepWaters.Instance == null)
+                return 3;
+
+            return DeepWaters.Instance.TreasureCove
+                ? DeepWaters.Instance.TreasureCoveMaxLiveTreasureClusters
+                : DeepWaters.Instance.MaxLiveTreasureClusters;
         }
 
     }

@@ -38,6 +38,26 @@ namespace DeepWaters
         private const float FallbackEncounterMinSpawnDistance = 35f;
         private const float FallbackEncounterMaxSpawnDistance = 55f;
         private const float FallbackEncounterViewSafetyDistance = 55f;
+
+        // Forward "emerge from the fog" spawns. A point past the fog reveal
+        // distance (vision distance + how far the player swims in the next
+        // SpawnRevealLeadSeconds) is hidden now and stays hidden long enough
+        // that it won't visibly pop as the player advances. FogAheadSpawnChance
+        // is how often a spawner tries ahead-in-fog instead of its near ring.
+        public const float FogAheadSpawnChance = 0.5f;
+        private const float SpawnRevealLeadSeconds = 2f;
+        private const float FogAheadBandMeters = 25f;
+        private const float FogAheadArcDegrees = 45f;
+
+        // Spawn-direction policy: entities never spawn in the rear hemisphere of
+        // the player's heading (so nothing pops in when you turn around). Points
+        // within this horizontal radius are treated as directly above/below and
+        // stay allowed.
+        private const float AboveBelowHorizontalRadius = 12f;
+        private const float FrontRingArcDegrees = 90f;
+        // Enemy/loot spawn rate scales up to this multiplier at full water depth.
+        public const float MaxDepthSpawnMultiplier = 2.0f;
+
         private static readonly Dictionary<Transform, DeepWaterFloorMesh> floorMeshCache =
             new Dictionary<Transform, DeepWaterFloorMesh>();
 
@@ -138,6 +158,83 @@ namespace DeepWaters
             return Mathf.Sqrt(Mathf.Lerp(minSq, maxSq, Random.value));
         }
 
+        // Ring point biased into the front hemisphere of the player's heading, so
+        // off-screen spawns land ahead/to the sides rather than behind (where the
+        // not-behind gate would reject them anyway). Falls back to a full circle
+        // when the heading is unknown.
+        public static Vector3 PickFrontRingPoint(Vector3 center, float minDistance, float maxDistance)
+        {
+            float distance = PickRingDistance(minDistance, maxDistance);
+
+            Vector3 forward = Vector3.zero;
+            var gameManager = GameManager.Instance;
+            if (gameManager != null && gameManager.MainCamera != null)
+                forward = gameManager.MainCamera.transform.forward;
+            forward.y = 0f;
+
+            float angle;
+            if (forward.sqrMagnitude < 0.001f)
+            {
+                angle = Random.Range(0f, Mathf.PI * 2f);
+            }
+            else
+            {
+                forward.Normalize();
+                float baseAngle = Mathf.Atan2(forward.z, forward.x);
+                float arc = FrontRingArcDegrees * Mathf.Deg2Rad;
+                angle = baseAngle + Random.Range(-arc, arc);
+            }
+
+            return new Vector3(
+                center.x + Mathf.Cos(angle) * distance,
+                center.y,
+                center.z + Mathf.Sin(angle) * distance);
+        }
+
+        // A spawn is "behind" when it sits in the rear horizontal hemisphere of
+        // the player's heading. Near-vertical (above/below) points within
+        // AboveBelowHorizontalRadius are exempt so overhead/under spawns stay
+        // valid. Unknown heading -> not restricted.
+        public static bool IsBehindPlayerHeading(Vector3 worldPos, Vector3 playerPos)
+        {
+            Vector3 forward = Vector3.zero;
+            var gameManager = GameManager.Instance;
+            if (gameManager != null && gameManager.MainCamera != null)
+                forward = gameManager.MainCamera.transform.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.001f)
+                return false;
+
+            Vector3 to = worldPos - playerPos;
+            to.y = 0f;
+            if (to.sqrMagnitude < AboveBelowHorizontalRadius * AboveBelowHorizontalRadius)
+                return false;
+
+            return Vector3.Dot(forward, to) < 0f;
+        }
+
+        // Water depth under the player as a fraction of max ocean depth (0 over
+        // shallow/no water, 1 over the deepest ocean).
+        public static float GetPlayerDepthFraction()
+        {
+            Vector3 playerPos;
+            if (!TryGetPlayerPosition(out playerPos))
+                return 0f;
+
+            DeepWaterColumn column;
+            if (!TryGetWaterColumn(playerPos.x, playerPos.z, out column))
+                return 0f;
+
+            float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
+            return Mathf.Clamp01(column.Depth / maxDepth);
+        }
+
+        // Enemy/loot spawn-rate multiplier that rises with the player's depth.
+        public static float DepthSpawnMultiplier()
+        {
+            return Mathf.Lerp(1f, MaxDepthSpawnMultiplier, GetPlayerDepthFraction());
+        }
+
         public static int RollCount(float scaledCount)
         {
             int targetCount = Mathf.FloorToInt(Mathf.Max(0f, scaledCount));
@@ -147,19 +244,92 @@ namespace DeepWaters
             return targetCount;
         }
 
+        public static float GetPlayerHorizontalSpeed()
+        {
+            var gameManager = GameManager.Instance;
+            if (gameManager == null || gameManager.PlayerController == null)
+                return 0f;
+
+            Vector3 velocity = gameManager.PlayerController.velocity;
+            velocity.y = 0f;
+            return velocity.magnitude;
+        }
+
+        // Distance past which a point dead ahead is fully hidden by fog AND
+        // stays hidden for the next SpawnRevealLeadSeconds of swimming.
+        public static float SpawnRevealDistance()
+        {
+            return UnderwaterVisionDistance + GetPlayerHorizontalSpeed() * SpawnRevealLeadSeconds;
+        }
+
+        // Pick a spawn XZ out ahead in the fog: beyond the reveal distance but
+        // within maxDistance (the caller's despawn range, so it isn't culled the
+        // instant it spawns). Returns false when the reveal distance already
+        // reaches maxDistance — i.e. the water is clear enough that nothing can
+        // hide ahead within range, so callers fall back to their off-screen ring.
+        public static bool TryPickFogAheadPoint(Vector3 center, float maxDistance, out Vector3 point)
+        {
+            point = center;
+
+            Vector3 forward = Vector3.zero;
+            var gameManager = GameManager.Instance;
+            if (gameManager != null && gameManager.MainCamera != null)
+                forward = gameManager.MainCamera.transform.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.001f)
+                return false;
+
+            // +2m so the picked distance is strictly past the reveal distance
+            // and clears the gate's (> reveal) test even when the band roll is 0.
+            float minAhead = SpawnRevealDistance() + 2f;
+            if (minAhead >= maxDistance)
+                return false;
+
+            forward.Normalize();
+            float baseAngle = Mathf.Atan2(forward.z, forward.x);
+            float arc = FogAheadArcDegrees * Mathf.Deg2Rad;
+            float angle = baseAngle + Random.Range(-arc, arc);
+            float dist = Mathf.Min(minAhead + Random.value * FogAheadBandMeters, maxDistance);
+            point = new Vector3(
+                center.x + Mathf.Cos(angle) * dist,
+                center.y,
+                center.z + Mathf.Sin(angle) * dist);
+            return true;
+        }
+
         public static bool IsOutsideImmediateView(Vector3 worldPos, Vector3 playerPos, float visibleDistance, float viewportMargin)
         {
             var gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.MainCamera == null)
                 return true;
 
-            Vector3 flatDelta = worldPos - playerPos;
-            flatDelta.y = 0f;
-            if (flatDelta.sqrMagnitude > visibleDistance * visibleDistance)
-                return true;
+            // Never spawn behind the player's heading — turning around shouldn't
+            // reveal things that weren't there. Front and above/below stay valid.
+            if (IsBehindPlayerHeading(worldPos, playerPos))
+                return false;
 
             Vector3 viewport = gameManager.MainCamera.WorldToViewportPoint(worldPos);
             if (viewport.z <= 0f)
+                return true;
+
+            if (viewport.x >= -viewportMargin &&
+                viewport.x <= 1f + viewportMargin &&
+                viewport.y >= -viewportMargin &&
+                viewport.y <= 1f + viewportMargin)
+            {
+                // On-screen: safe only when fog fully hides it now and the player
+                // can't swim into clear sight of it within the lead window. This
+                // is what lets fish/enemies/loot emerge from the fog ahead instead
+                // of only ever popping in behind or beside the player.
+                Vector3 frontDelta = worldPos - playerPos;
+                frontDelta.y = 0f;
+                float reveal = SpawnRevealDistance();
+                return frontDelta.sqrMagnitude > reveal * reveal;
+            }
+
+            Vector3 flatDelta = worldPos - playerPos;
+            flatDelta.y = 0f;
+            if (flatDelta.sqrMagnitude > visibleDistance * visibleDistance)
                 return true;
 
             return viewport.x < -viewportMargin ||

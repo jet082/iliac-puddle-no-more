@@ -14,6 +14,11 @@ namespace DeepWaters
 
         private const float ForwardSpawnArcDegrees = 110f;
         private const float ForwardBiasChance = 0.7f;
+        // Cap for ahead-in-fog loot, kept under the loot despawn distance (140m)
+        // so a forward find isn't culled the moment it spawns. The loot ring
+        // (MaxSpawnDistance ~72m) sits inside the fog, so without this longer
+        // reach forward loot would land on-screen and be rejected.
+        private const float FogAheadMaxDistance = 130f;
         private const float SeafloorYClearance = 2f;
         private const float LootFloorLift = 0.08f;
         private const int SpawnSpotAttempts = 18;
@@ -57,10 +62,21 @@ namespace DeepWaters
 
             for (int attempt = 0; attempt < SpawnSpotAttempts; attempt++)
             {
-                float angle = PickSpawnAngle();
-                float dist = DeepWaterWorld.PickRingDistance(minDistance, maxDistance);
-                float worldX = playerPos.x + Mathf.Cos(angle) * dist;
-                float worldZ = playerPos.z + Mathf.Sin(angle) * dist;
+                float worldX, worldZ;
+                Vector3 aheadPoint;
+                if (Random.value < DeepWaterWorld.FogAheadSpawnChance &&
+                    DeepWaterWorld.TryPickFogAheadPoint(playerPos, FogAheadMaxDistance, out aheadPoint))
+                {
+                    worldX = aheadPoint.x;
+                    worldZ = aheadPoint.z;
+                }
+                else
+                {
+                    float angle = PickSpawnAngle();
+                    float dist = DeepWaterWorld.PickRingDistance(minDistance, maxDistance);
+                    worldX = playerPos.x + Mathf.Cos(angle) * dist;
+                    worldZ = playerPos.z + Mathf.Sin(angle) * dist;
+                }
                 long key = SpawnCellKey(worldX, worldZ);
                 if (recentSpawnCells.Contains(key))
                     continue;

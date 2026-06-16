@@ -50,9 +50,12 @@ namespace DeepWaters
         public float DecorationFrequency { get; private set; } = DecorationFrequencyAtMidpoint;
         public float SeafloorLootRate { get; private set; } = SeafloorLootRateAtMidpoint;
         public int MaxLiveLootObjects { get; private set; } = 32;
+        public int TreasureCoveMaxLiveLootObjects { get; private set; } = 64;
         public int MaxStrayLootPerPulse { get; private set; } = 4;
         public int TreasureCoveMaxStrayLootPerPulse { get; private set; } = 6;
         public float TreasureClusterRate { get; private set; } = TreasureClusterRateAtMidpoint;
+        public int MaxLiveTreasureClusters { get; private set; } = 3;
+        public int TreasureCoveMaxLiveTreasureClusters { get; private set; } = 8;
         public bool TreasureCove { get; private set; }
         public int LootSpawnMinDistance { get; private set; } = 42;
         public int LootSpawnMaxDistance { get; private set; } = 72;
@@ -164,6 +167,7 @@ namespace DeepWaters
             SpawnWaterSurfaces = GetBoolSetting(s, "SpawnWaterSurfaces");
             SpawnUnderwaterEnemies = GetBoolSetting(s, "SpawnUnderwaterEnemies");
             EnemyFrequency = GetScaledSliderSetting(s, "EnemyFrequency", EnemyFrequencyAtMidpoint);
+            MaxLiveEnemies = Mathf.Max(0, GetIntSetting(s, "MaxLiveEnemies"));
             PassiveFishFrequency = GetScaledSliderSetting(s, "PassiveFishFrequency", PassiveFishFrequencyAtMidpoint);
             MaxLiveFish = Mathf.Clamp(
                 Mathf.RoundToInt(GetIntSetting(s, "MaxLiveFish") * PassiveFishLiveCapMultiplier),
@@ -178,7 +182,11 @@ namespace DeepWaters
             DecorationPopulateRadius = Mathf.Clamp(GetIntSetting(s, "DecorationPopulateRadius"), 1, 3);
             DecorationFrequency = GetScaledSliderSetting(s, "DecorationFrequency", DecorationFrequencyAtMidpoint);
             SeafloorLootRate = GetScaledSliderSetting(s, "SeafloorLootRate", SeafloorLootRateAtMidpoint);
+            MaxLiveLootObjects = Mathf.Max(0, GetIntSetting(s, "MaxLiveLootObjects"));
+            TreasureCoveMaxLiveLootObjects = Mathf.Max(0, GetIntSetting(s, "TreasureCoveMaxLiveLootObjects"));
             TreasureClusterRate = GetScaledSliderSetting(s, "TreasureClusterRate", TreasureClusterRateAtMidpoint);
+            MaxLiveTreasureClusters = Mathf.Max(0, GetIntSetting(s, "MaxLiveTreasureClusters"));
+            TreasureCoveMaxLiveTreasureClusters = Mathf.Max(0, GetIntSetting(s, "TreasureCoveMaxLiveTreasureClusters"));
             TreasureCove = GetBoolSetting(s, "TreasureCove");
             WaterSurfaceTopTransparency = GetFloatSetting(s, "WaterSurfaceTopTransparency");
             WaterSurfaceBottomTransparency = GetFloatSetting(s, "WaterSurfaceBottomTransparency");

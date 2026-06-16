@@ -176,10 +176,15 @@ namespace DeepWaters
 
             for (int i = 0; i < CandidateAttemptsPerSpawn; i++)
             {
-                Vector3 spawnPoint = DeepWaterWorld.PickRingPoint(
-                    playerPos,
-                    DeepWaterWorld.EncounterSpawnMinDistance,
-                    DeepWaterWorld.EncounterSpawnMaxDistance);
+                Vector3 spawnPoint;
+                if (Random.value >= DeepWaterWorld.FogAheadSpawnChance ||
+                    !DeepWaterWorld.TryPickFogAheadPoint(playerPos, DespawnDistance, out spawnPoint))
+                {
+                    spawnPoint = DeepWaterWorld.PickFrontRingPoint(
+                        playerPos,
+                        DeepWaterWorld.EncounterSpawnMinDistance,
+                        DeepWaterWorld.EncounterSpawnMaxDistance);
+                }
 
                 Vector3 resolvedPos;
                 Transform parent;
@@ -205,6 +210,10 @@ namespace DeepWaters
             if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
                 return 0;
 
+            Vector3 playerPos;
+            if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
+                return 0;
+
             int targetCount = RollTreasureGuardCount();
             if (targetCount <= 0)
                 return 0;
@@ -226,6 +235,9 @@ namespace DeepWaters
                 if (!TryResolveSpawnPosition(worldX, worldZ, out resolvedPos, out parent, out depthFraction))
                     continue;
 
+                if (!DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.UnderwaterVisionDistance, SpawnViewportMargin))
+                    continue;
+
                 if (SpawnEnemy(resolvedPos, parent, PickRare()) != null)
                     spawned++;
             }
@@ -237,7 +249,8 @@ namespace DeepWaters
                 float depthFraction;
                 if (TryResolveSpawnPosition(centre.x, centre.z, out resolvedPos, out parent, out depthFraction))
                 {
-                    spawned = SpawnEnemy(resolvedPos, parent, PickRare()) != null ? 1 : 0;
+                    if (DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.UnderwaterVisionDistance, SpawnViewportMargin))
+                        spawned = SpawnEnemy(resolvedPos, parent, PickRare()) != null ? 1 : 0;
                 }
             }
 
@@ -362,7 +375,8 @@ namespace DeepWaters
 
         public static int RollScaledSpawnCount(int fullSpawnCount)
         {
-            float scaledCount = fullSpawnCount * DeepWaters.Instance.EnemyFrequency * SpawnRateScale;
+            float scaledCount = fullSpawnCount * DeepWaters.Instance.EnemyFrequency * SpawnRateScale *
+                                DeepWaterWorld.DepthSpawnMultiplier();
             return DeepWaterWorld.RollCount(scaledCount);
         }
 

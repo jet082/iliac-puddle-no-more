@@ -31,8 +31,10 @@ namespace DeepWaters
             DeepWaterRendering.DisableShadows(loot != null ? loot.gameObject : null);
             if (loot != null)
             {
-                if (!DaggerfallUnity.Settings.AssetInjection)
-                    BrightenUnderwaterBillboards(loot.gameObject);
+                // Always brighten: DFU's scene-lit billboard material renders dark
+                // in the dim bay even when AssetInjection (HD/DREAM) is on, so the
+                // treasure pile read much darker than the unlit decorations.
+                BrightenUnderwaterBillboards(loot.gameObject);
 
                 DeepWaterWorld.AlignObjectBottomToWorldY(loot.gameObject, worldPos.y);
             }
@@ -93,12 +95,40 @@ namespace DeepWaters
 
                 group.name = "DeepWaters_LootRubbleBatch";
                 if (tracker != null)
-                    tracker.Add(group);
+                {
+                    // The batch mesh is baked relative to the tile origin, so the
+                    // group's transform sits at the tile corner — often far from
+                    // the wreck. Track an anchor at the rubble centroid instead so
+                    // distance/count pruning measures from the actual wreck, not
+                    // the corner (otherwise the immediate pulse fired when a loot
+                    // menu closes prunes still-nearby rubble). Reparent the group
+                    // under the anchor with a compensating offset so its baked
+                    // billboards keep rendering at the original tile-relative spots.
+                    Vector3 centroidLocal = ComputeCentroidLocal(pair.Value);
+                    var anchor = new GameObject("DeepWaters_LootRubbleAnchor");
+                    anchor.transform.SetParent(pair.Key, false);
+                    anchor.transform.localPosition = centroidLocal;
+                    group.transform.SetParent(anchor.transform, false);
+                    group.transform.localPosition = -centroidLocal;
+                    tracker.Add(anchor);
+                }
 
                 placed += pair.Value.Count;
             }
 
             return placed;
+        }
+
+        private static Vector3 ComputeCentroidLocal(List<UnderwaterDecorationPlacementInfo> items)
+        {
+            if (items == null || items.Count == 0)
+                return Vector3.zero;
+
+            Vector3 sum = Vector3.zero;
+            for (int i = 0; i < items.Count; i++)
+                sum += items[i].LocalPosition;
+
+            return sum / items.Count;
         }
 
         // Loot piles and wreck rubble are dark underwater because DFU's billboard

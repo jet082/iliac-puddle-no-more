@@ -240,7 +240,7 @@ namespace DeepWaters
                 fleeDartHoldMax: 1.8f,
                 biomes: WaterBiome.Any,
                 minDepthFraction: 0.10f,
-                maxDepthFraction: 0.70f),
+                maxDepthFraction: 1.0f),
             new PassiveFishSpecies(
                 WhiteZebraAngelfishTemplateIndex,
                 "White Zebra Angelfish",
@@ -263,7 +263,7 @@ namespace DeepWaters
                 FinulonTemplateIndex,
                 "Finulon",
                 48,
-                1,
+                5,
                 1.8f,
                 GenerateTextureAssetNames("finulon", 48),
                 1.2f,

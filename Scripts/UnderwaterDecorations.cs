@@ -16,7 +16,7 @@ namespace DeepWaters
     public static class UnderwaterDecorations
     {
         private const int MaxTilesPerWorkCycle = 1;
-        private const int MaxDecorationsPerTile = 1152;
+        private const int MaxDecorationsPerTile = 2304;
 
         private static readonly Queue<DaggerfallTerrain> workQueue = new Queue<DaggerfallTerrain>();
         private static readonly HashSet<DaggerfallTerrain> queuedTerrains = new HashSet<DaggerfallTerrain>();
@@ -81,6 +81,9 @@ namespace DeepWaters
                         continue;
                     }
 
+                    if (!HasReadyFloor(dfTerrain))
+                        continue;
+
                     if (ShouldPreservePlayerTileDecorations(dfTerrain))
                         continue;
 
@@ -105,6 +108,7 @@ namespace DeepWaters
 
             DeepWaterRuntime.OnTransientReset += ResetRuntimeState;
             DaggerfallTerrain.OnPromoteTerrainData += HandlePromote;
+            DeepWaterFloorBuilder.OnFloorRefreshed += HandleFloorRefreshed;
             PlayerGPS.OnMapPixelChanged += HandleMapPixelChanged;
             installed = true;
         }
@@ -194,17 +198,35 @@ namespace DeepWaters
                 ClearDecorationMarker(sender);
             }
 
-            var pgps = GameManager.Instance?.PlayerGPS;
-            if (pgps != null)
-            {
-                int populateRadius = GetPopulateRadius(GameManager.Instance?.StreamingWorld);
-                int dx = sender.MapPixelX - pgps.CurrentMapPixel.X;
-                int dy = sender.MapPixelY - pgps.CurrentMapPixel.Y;
-                if (System.Math.Abs(dx) > populateRadius || System.Math.Abs(dy) > populateRadius)
-                    return;
-            }
+            if (!IsWithinPopulateRadius(sender))
+                return;
             
             Enqueue(sender);
+        }
+
+        private static void HandleFloorRefreshed(DaggerfallTerrain sender)
+        {
+            if (sender == null) return;
+            if (!DeepWaterRuntime.CanRunLightRuntimeWork)
+                return;
+
+            if (!IsWithinPopulateRadius(sender))
+                return;
+
+            Enqueue(sender);
+        }
+
+        private static bool IsWithinPopulateRadius(DaggerfallTerrain dfTerrain)
+        {
+            var pgps = GameManager.Instance?.PlayerGPS;
+            if (pgps == null || dfTerrain == null)
+                return true;
+
+            int populateRadius = GetPopulateRadius(GameManager.Instance?.StreamingWorld);
+            int dx = dfTerrain.MapPixelX - pgps.CurrentMapPixel.X;
+            int dy = dfTerrain.MapPixelY - pgps.CurrentMapPixel.Y;
+            return System.Math.Abs(dx) <= populateRadius &&
+                   System.Math.Abs(dy) <= populateRadius;
         }
 
         private static int GetPopulateRadius(StreamingWorld streamingWorld)
@@ -235,10 +257,7 @@ namespace DeepWaters
                 List<UnderwaterDecorationPlacementInfo> positions =
                     UnderwaterDecorationPlacement.BuildPositions(dfTerrain, terrainData, passes);
                 if (positions.Count == 0)
-                {
-                    MarkCurrentTerrain(dfTerrain);
                     return;
-                }
 
                 TrimDecorationPositions(positions);
                 UnderwaterDecorationBatchFactory.Spawn(dfTerrain.transform, positions);
@@ -307,6 +326,15 @@ namespace DeepWaters
                    marker.MapPixelX == dfTerrain.MapPixelX &&
                    marker.MapPixelY == dfTerrain.MapPixelY &&
                    marker.FloorBuildVersion == CurrentFloorBuildVersion(dfTerrain);
+        }
+
+        private static bool HasReadyFloor(DaggerfallTerrain dfTerrain)
+        {
+            DeepWaterFloorMesh floorMesh = dfTerrain != null ? dfTerrain.GetComponentInChildren<DeepWaterFloorMesh>() : null;
+            return floorMesh != null &&
+                   floorMesh.BuildVersion > 0 &&
+                   floorMesh.BuiltMapPixelX == dfTerrain.MapPixelX &&
+                   floorMesh.BuiltMapPixelY == dfTerrain.MapPixelY;
         }
 
         private static bool ShouldPreservePlayerTileDecorations(DaggerfallTerrain dfTerrain)

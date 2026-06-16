@@ -181,10 +181,15 @@ namespace DeepWaters
                 return 0;
 
             Vector3 playerPos = gameManager.PlayerObject.transform.position;
-            Vector3 spawnPoint = DeepWaterWorld.PickRingPoint(
-                playerPos,
-                FishSpawnMinDistance,
-                FishSpawnMaxDistance);
+            Vector3 spawnPoint;
+            if (Random.value >= DeepWaterWorld.FogAheadSpawnChance ||
+                !DeepWaterWorld.TryPickFogAheadPoint(playerPos, DespawnDistance, out spawnPoint))
+            {
+                spawnPoint = DeepWaterWorld.PickFrontRingPoint(
+                    playerPos,
+                    FishSpawnMinDistance,
+                    FishSpawnMaxDistance);
+            }
 
             Vector3 worldPos;
             Transform parent;

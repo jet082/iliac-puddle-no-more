@@ -39,6 +39,15 @@
                     "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
                 },
                 {
+                    "Min": 0,
+                    "Max": 32,
+                    "Value": 8,
+                    "Name": "MaxLiveEnemies",
+                    "Description": "Maximum live underwater enemies near the player.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderIntKey"
+                },
+                {
                     "Min": 0.0,
                     "Max": 1.0,
                     "Value": 0.5,
@@ -107,6 +116,24 @@
                     "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
                 },
                 {
+                    "Min": 0,
+                    "Max": 128,
+                    "Value": 32,
+                    "Name": "MaxLiveLootObjects",
+                    "Description": "Maximum live loot objects near the player in normal water.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderIntKey"
+                },
+                {
+                    "Min": 0,
+                    "Max": 256,
+                    "Value": 64,
+                    "Name": "TreasureCoveMaxLiveLootObjects",
+                    "Description": "Maximum live loot objects near the player when Treasure Trove is enabled.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderIntKey"
+                },
+                {
                     "Min": 0.0,
                     "Max": 1.0,
                     "Value": 0.5,
@@ -114,6 +141,24 @@
                     "Description": "Wreckage treasure rate",
                     "$version": "v1",
                     "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0,
+                    "Max": 16,
+                    "Value": 3,
+                    "Name": "MaxLiveTreasureClusters",
+                    "Description": "Maximum live treasure clusters near the player in normal water.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderIntKey"
+                },
+                {
+                    "Min": 0,
+                    "Max": 32,
+                    "Value": 8,
+                    "Name": "TreasureCoveMaxLiveTreasureClusters",
+                    "Description": "Maximum live treasure clusters near the player when Treasure Trove is enabled.",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderIntKey"
                 },
                 {
                     "Value": false,
