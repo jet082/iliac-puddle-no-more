@@ -191,22 +191,23 @@ namespace DeepWaters
                     FishSpawnMaxDistance);
             }
 
-            Vector3 worldPos;
-            Transform parent;
-            if (!PassiveFishPlacement.TryResolvePosition(spawnPoint.x, spawnPoint.z, out worldPos, out parent))
-                return 0;
-
-            if (!DeepWaterWorld.IsOutsideImmediateView(worldPos, playerPos, FishSpawnViewSafetyDistance, SpawnViewportMargin))
-                return 0;
-
             // Pick the species for THIS location's biome + depth so each region
             // reads distinctly: reef fish in tropical shallows, abyssal fish out
-            // in the cold deep, etc. (issues 6 & 7)
+            // in the cold deep, etc. (issues 6 & 7) Chosen before the position so
+            // its preferred depth band can drive the vertical spawn height.
             int climateIndex;
             float depthFraction;
             ResolveSpeciesContext(spawnPoint.x, spawnPoint.z, out climateIndex, out depthFraction);
             PassiveFishSpecies species = PassiveFishSpeciesCatalog.PickRandom(climateIndex, depthFraction);
             if (species == null)
+                return 0;
+
+            Vector3 worldPos;
+            Transform parent;
+            if (!PassiveFishPlacement.TryResolvePosition(spawnPoint.x, spawnPoint.z, species, out worldPos, out parent))
+                return 0;
+
+            if (!DeepWaterWorld.IsOutsideImmediateView(worldPos, playerPos, FishSpawnViewSafetyDistance, SpawnViewportMargin))
                 return 0;
 
             int schoolSize = Random.Range(species.MinSchoolSize, species.MaxSchoolSize + 1);

@@ -12,9 +12,6 @@ namespace DeepWaters
 
         private const float SeafloorClearance = 1.2f;
         private const float SurfaceClearance = 1.4f;
-        private const float SurfaceSpawnDepthMin = 2.2f;
-        private const float SurfaceSpawnDepthMax = 4.5f;
-        private const float SpawnDepthColumnFraction = 0.45f;
         private const float SchoolMemberMinRadius = 1.2f;
         private const float SchoolMemberMaxRadius = 5f;
         private const float SchoolMemberMinSeparation = 2.2f;
@@ -25,9 +22,47 @@ namespace DeepWaters
             return Mathf.Clamp(2.5f + schoolSize * 0.45f, SchoolMemberMinRadius, SchoolMemberMaxRadius);
         }
 
+        // School-center resolve: vertical position comes from the species'
+        // absolute depth band. Returns false when that band doesn't overlap this
+        // column, so a deep-water species is never forced onto a shallow floor.
+        public static bool TryResolvePosition(float worldX, float worldZ, PassiveFishSpecies species, out Vector3 worldPos, out Transform parent)
+        {
+            worldPos = Vector3.zero;
+
+            float minY, maxY, oceanY;
+            if (!TryResolveColumnRange(worldX, worldZ, out minY, out maxY, out oceanY, out parent))
+                return false;
+
+            float y;
+            if (!TryPickFishY(minY, maxY, oceanY, species, out y))
+            {
+                parent = null;
+                return false;
+            }
+
+            worldPos = new Vector3(worldX, y, worldZ);
+            return true;
+        }
+
+        // Band-agnostic resolve for schoolmate base positions, whose Y is then
+        // overridden by ClampToSchoolDepth — only XZ/column validity matters here.
         public static bool TryResolvePosition(float worldX, float worldZ, out Vector3 worldPos, out Transform parent)
         {
             worldPos = Vector3.zero;
+
+            float minY, maxY, oceanY;
+            if (!TryResolveColumnRange(worldX, worldZ, out minY, out maxY, out oceanY, out parent))
+                return false;
+
+            worldPos = new Vector3(worldX, Random.Range(minY, maxY), worldZ);
+            return true;
+        }
+
+        private static bool TryResolveColumnRange(float worldX, float worldZ, out float minY, out float maxY, out float oceanY, out Transform parent)
+        {
+            minY = 0f;
+            maxY = 0f;
+            oceanY = 0f;
             parent = null;
 
             DeepWaterColumn column;
@@ -41,12 +76,12 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, worldX, worldZ, out seafloorWorldY))
                 return false;
 
-            float minY = seafloorWorldY + SeafloorClearance;
-            float maxY = column.OceanWorldY - SurfaceClearance;
+            oceanY = column.OceanWorldY;
+            minY = seafloorWorldY + SeafloorClearance;
+            maxY = oceanY - SurfaceClearance;
             if (maxY <= minY)
                 return false;
 
-            worldPos = new Vector3(worldX, PickFishY(minY, maxY, column.OceanWorldY), worldZ);
             parent = column.Parent;
             return true;
         }
@@ -112,15 +147,37 @@ namespace DeepWaters
             return true;
         }
 
-        private static float PickFishY(float minY, float maxY, float oceanY)
+        // Vertical spawn position from the species' ABSOLUTE depth band — a
+        // fraction of the deepest possible ocean (the WaterDepth setting), not of
+        // this column. So a reef fish's shallow band keeps it near the surface
+        // even over the abyss, while a deep fish's band doesn't fit a shallow
+        // column at all (returns false -> it won't spawn there). The chosen depth
+        // is the band intersected with the column's swimmable range; schoolmates
+        // then cluster around it via ClampToSchoolDepth.
+        private static bool TryPickFishY(float minY, float maxY, float oceanY, PassiveFishSpecies species, out float y)
         {
-            float span = maxY - minY;
-            if (span <= 0f)
-                return minY;
+            y = 0f;
+            if (maxY <= minY)
+                return false;
 
-            float depthMax = Mathf.Min(Mathf.Max(SurfaceSpawnDepthMax, span * SpawnDepthColumnFraction), span);
-            float depthMin = Mathf.Min(SurfaceSpawnDepthMin, depthMax);
-            return Mathf.Clamp(oceanY - Random.Range(depthMin, depthMax), minY, maxY);
+            float maxOceanDepth = DeepWaters.Instance != null
+                ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth)
+                : DeepBathymetry.MaxAbsoluteDepth;
+
+            // Species' preferred window and the column's swimmable window, both as
+            // metres below the surface (maxY is shallowest, minY is deepest).
+            float bandShallow = species.MinDepthFraction * maxOceanDepth;
+            float bandDeep = species.MaxDepthFraction * maxOceanDepth;
+            float availShallow = oceanY - maxY;
+            float availDeep = oceanY - minY;
+
+            float lo = Mathf.Max(bandShallow, availShallow);
+            float hi = Mathf.Min(bandDeep, availDeep);
+            if (hi <= lo)
+                return false;
+
+            y = oceanY - Random.Range(lo, hi);
+            return true;
         }
     }
 }

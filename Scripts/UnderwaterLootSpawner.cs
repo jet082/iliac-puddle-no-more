@@ -23,8 +23,8 @@ namespace DeepWaters
     /// </summary>
     public static class UnderwaterLootSpawner
     {
-        // Distance-based top-up. Tile boundaries are 819m apart; this keeps loot
-        // rhythm responsive while searching a bay or circling a wreck site.
+        // Distance-based top-up: re-roll loot after this much horizontal travel,
+        // so finds track exploration rather than time spent idling.
         private const float LootPulseDistance = 90f;
         private const float MinPulseIntervalSeconds = 8f;
         private const float FailedPulseRetrySeconds = 3f;

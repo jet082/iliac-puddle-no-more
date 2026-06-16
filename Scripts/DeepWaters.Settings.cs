@@ -51,8 +51,8 @@ namespace DeepWaters
         public float SeafloorLootRate { get; private set; } = SeafloorLootRateAtMidpoint;
         public int MaxLiveLootObjects { get; private set; } = 32;
         public int TreasureCoveMaxLiveLootObjects { get; private set; } = 64;
-        public int MaxStrayLootPerPulse { get; private set; } = 4;
-        public int TreasureCoveMaxStrayLootPerPulse { get; private set; } = 6;
+        public int MaxStrayLootPerPulse { get; private set; } = 12;
+        public int TreasureCoveMaxStrayLootPerPulse { get; private set; } = 18;
         public float TreasureClusterRate { get; private set; } = TreasureClusterRateAtMidpoint;
         public int MaxLiveTreasureClusters { get; private set; } = 3;
         public int TreasureCoveMaxLiveTreasureClusters { get; private set; } = 8;
