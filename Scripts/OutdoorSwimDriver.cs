@@ -92,15 +92,11 @@ namespace DeepWaters
         private const float ColliderGateEjectGuardPaddingMeters = 96f;
 
         // Boats.
-        private const float BoatBoardingSurfaceClearance = 1.10f;
-        private const float BoatSnapCooldownSeconds = 0.75f;
         private const string BoatEffectBundleName = "ImOnABoat";
         private const string ComeSailAwayBoatEffectBundleName = "I'm On A Boat";
 
         private readonly OutdoorSwimDfuBridge dfuBridge = new OutdoorSwimDfuBridge();
         private bool currentlyForged;
-        private bool wasPlayerOnBoat;
-        private float nextBoatSnapTime;
         private float shoreExitGraceUntil;
         private float shoreAssistAfterWaterUntil;
         private static bool headWaterStateInitialized;
@@ -182,10 +178,9 @@ namespace DeepWaters
             if (IsPlayerOnBoat())
             {
                 RestoreWaterTerrainCollider();
-                SuppressOutdoorSwimming(true);
+                SuppressOutdoorSwimming();
                 return;
             }
-            wasPlayerOnBoat = false;
 
             float oceanSurfaceY = ComputeOceanSurfaceY();
             UpdateWaterTerrainColliderGate(oceanSurfaceY);
@@ -266,7 +261,7 @@ namespace DeepWaters
 
             if (IsPlayerOnBoat())
             {
-                SuppressOutdoorSwimming(false);
+                SuppressOutdoorSwimming();
                 return;
             }
 
@@ -298,7 +293,7 @@ namespace DeepWaters
                 if (currentlyForged)
                     Restore();
 
-                ClearBoatSwimPose(false);
+                ClearBoatSwimPose();
                 return;
             }
 
@@ -890,21 +885,18 @@ namespace DeepWaters
             suppressedSwimMotorForFrameSpike = false;
         }
 
-        private void SuppressOutdoorSwimming(bool allowSnap)
+        private void SuppressOutdoorSwimming()
         {
-            bool justEnteredBoat = !wasPlayerOnBoat;
             ResetHeadWaterState(false);
             ReleaseSwimMotorFrameSpikeGuard();
             RestoreWaterTerrainCollider();
             if (currentlyForged)
                 Restore();
 
-            ClearBoatSwimPose(allowSnap && justEnteredBoat);
-            if (allowSnap)
-                wasPlayerOnBoat = true;
+            ClearBoatSwimPose();
         }
 
-        private void ClearBoatSwimPose(bool snapAboveSurface)
+        private void ClearBoatSwimPose()
         {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null)
@@ -932,27 +924,6 @@ namespace DeepWaters
 
                 heightChanger.IsInWaterTile = false;
             }
-
-            if (snapAboveSurface)
-                TrySnapPlayerAboveWaterSurface(player);
-        }
-
-        private void TrySnapPlayerAboveWaterSurface(GameObject player)
-        {
-            if (Time.time < nextBoatSnapTime)
-                return;
-
-            float oceanSurfaceY;
-            if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY))
-                return;
-
-            Vector3 position = player.transform.position;
-            float targetY = oceanSurfaceY + BoatBoardingSurfaceClearance;
-            if (position.y >= targetY)
-                return;
-
-            player.transform.position = new Vector3(position.x, targetY, position.z);
-            nextBoatSnapTime = Time.time + BoatSnapCooldownSeconds;
         }
 
         private static void DismountForSwimming()
