@@ -520,21 +520,22 @@ namespace DeepWaters
             if (tile == null || !tile.IsOceanConnected || !tile.HasDistanceField)
                 return false;
 
-            if (DeepWaterDistanceBake.HasFineWaterMask)
-                return tile.IsCarvedWater(worldX, worldZ);
-
-            float tileWorldSize = DeepWaterWorld.TileWorldSize;
-            if (tileWorldSize <= 0f)
-                return false;
+			float tileWorldSize = DeepWaterWorld.TileWorldSize;
+			if (tileWorldSize <= 0f)
+				return false;
 
             Vector3 origin = dfTerrain.transform.position;
             float fracX = (worldX - origin.x) / tileWorldSize;
             float fracZ = (worldZ - origin.z) / tileWorldSize;
-            if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
-                return false;
+			if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
+				return false;
 
-            return DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ||
-                   tile.IsBakedWater(worldX, worldZ);
+			if (DeepWaterDistanceBake.HasFineWaterMask)
+				return DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) &&
+					   tile.IsCarvedWater(worldX, worldZ);
+
+			return DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ||
+				   tile.IsBakedWater(worldX, worldZ);
         }
 
         private bool TryRecoverToVanillaTerrain(float oceanSurfaceY)
@@ -1156,12 +1157,14 @@ namespace DeepWaters
             if (terrainWorldY < oceanSurfaceY - ColliderGateShoreTerrainMargin)
                 return false;
 
-            bool waterLike;
-            if (DeepWaterDistanceBake.HasFineWaterMask)
-            {
-                waterLike = DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ);
-            }
-            else
+			bool waterLike;
+			if (DeepWaterDistanceBake.HasFineWaterMask)
+			{
+				waterLike =
+					DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) &&
+					DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ);
+			}
+			else
             {
                 bool pureBakedWater =
                     DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&

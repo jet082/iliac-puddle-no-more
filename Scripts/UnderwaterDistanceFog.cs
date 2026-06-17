@@ -37,6 +37,7 @@ namespace DeepWaters
             }
 
             EnsureCameraHooks(gameManager.MainCamera);
+            EnsureAllCameraHooks(gameManager.MainCamera);
 
             float oceanSurfaceY;
             bool underwaterPresentation = TryGetUnderwaterPresentation(gameManager, gameManager.MainCamera, out oceanSurfaceY);
@@ -65,13 +66,34 @@ namespace DeepWaters
                 return;
 
             hookedCamera = camera;
+            EnsureCameraHook(camera);
             hookedDepthEnabler = camera.GetComponent<WaterSurfaceDepthTextureEnabler>();
-            if (hookedDepthEnabler == null)
-                hookedDepthEnabler = camera.gameObject.AddComponent<WaterSurfaceDepthTextureEnabler>();
-
             hookedEffect = camera.GetComponent<UnderwaterDistanceFogEffect>();
-            if (hookedEffect == null)
-                hookedEffect = camera.gameObject.AddComponent<UnderwaterDistanceFogEffect>();
+        }
+
+        private static void EnsureAllCameraHooks(Camera mainCamera)
+        {
+            Camera[] cameras = Camera.allCameras;
+            for (int i = 0; i < cameras.Length; i++)
+            {
+                Camera camera = cameras[i];
+                if (camera == null || camera == mainCamera || !camera.isActiveAndEnabled)
+                    continue;
+
+                EnsureCameraHook(camera);
+            }
+        }
+
+        private static void EnsureCameraHook(Camera camera)
+        {
+            if (camera == null)
+                return;
+
+            if (camera.GetComponent<WaterSurfaceDepthTextureEnabler>() == null)
+                camera.gameObject.AddComponent<WaterSurfaceDepthTextureEnabler>();
+
+            if (camera.GetComponent<UnderwaterDistanceFogEffect>() == null)
+                camera.gameObject.AddComponent<UnderwaterDistanceFogEffect>();
         }
 
         internal static bool ShouldRequireDepthTexture(GameManager gameManager)

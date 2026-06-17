@@ -1020,3 +1020,46 @@ Notes:
 - The physical classifications for `qqq`, `rrr`, and `sss` now match the intended behavior in diagnostics.
 - `sss` still has a visually hard water/shore edge, but it no longer reports a ghost water column at the dry standing point.
 - The third-person fog fix is code-path validated by compile only; this harness does not yet automate camera-mode switching.
+
+## QQQ/RRR/SSS Follow-Up: Shared Shoreline Classification
+
+Root cause found:
+
+- The C# terrain-cap patcher already had a conservative safety check: only remove promoted water texels when the whole texel is safely below ocean level.
+- The shipped clip shaders ignored that decision and clipped every water-like terrain texel by tile id.
+- That split explains the recurring shoreline holes: CPU code could decide a shore texel was not safe to delete, but the shader still deleted it.
+
+Changes:
+
+- `OutdoorSwimDriver` now uses the same live-terrain local-water gate as `DeepWaterWorld.TryGetWaterColumn()` before accepting fine-mask water for swimming/collider gating.
+- `DeepWaterFloorMesh` raises near-shore seafloor vertices toward the live terrain height over the first `180m` from shore, reducing fine-mask ravines without lowering existing seabed.
+- `DeepWaterTerrainCapRenderer` now rewrites unsafe shore-water texels to the nearest solid shoreline texel in the patched tilemap texture, so the currently shipped old shader no longer clips those shore texels.
+- The clip shader sources were also updated to clip only an explicit magenta sentinel written by C#, for the next full Unity bundle rebuild.
+- `UnderwaterDistanceFog` now hooks every active camera, so third-person below-water cameras get the fog image effect even when the player object is above water.
+- Tracked `.meta` files were removed from the mod repository index; local files remain on disk.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- A full Unity bundle rebuild was attempted but Unity 2019 batch mode stopped at licensing, so the playable bundle was repacked with the TextAsset patcher. The C# tilemap rewrite makes the SSS fix testable with the current compiled shader.
+- Packed both playable `.dfmod` files: live install and staging install.
+- Latest combined diagnostics sweep: `DeepWatersDiagnostics\deep-waters-diagnostics-20260617-200938.csv`.
+- `qqq`:
+  - `1855` frame movement samples.
+  - `minY=99.04`, `maxY=99.44`; no large boat snap returned.
+  - Latest end screenshot: `DeepWatersDiagnostics\deep-waters-qqq-qqq_straight_boat_probe-end-20260617-201022.png`.
+- `rrr`:
+  - 10-second visual hold: `211.38 FPS`.
+  - `columnDepth=3.81m`, `renderedSeafloorY=99.65`, `carvedPresent=1`.
+  - Screenshot is improved from the original ravine, but still shows a hard/dark horizontal shoreline band.
+  - Latest screenshot: `DeepWatersDiagnostics\deep-waters-rrr-shoreline-hold-20260617-201040.png`.
+- `sss`:
+  - 10-second visual hold: `151.36 FPS`.
+  - `waterGateActive=0`, `waterGateDisabled=0`, `waterGateDesired=0`.
+  - Latest screenshot no longer shows the giant deleted shoreline face/hole from the previous run.
+  - Latest screenshot: `DeepWatersDiagnostics\deep-waters-sss-shoreline-hold-20260617-201059.png`.
+
+Remaining:
+
+- `rrr` still needs a deeper visual fix for the dark horizontal shore band/void. The next likely target is not another swim-state patch; it is the geometry/render boundary between the generated seafloor skirt and mixed live terrain.
+- Third-person fog still needs a manual or automated camera-mode validation save.

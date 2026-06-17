@@ -36,6 +36,8 @@ namespace DeepWaters
         private const float BoundarySkirtMinWidthMeters = 2.0f;
         private const float BoundarySkirtMaxWidthMeters = 8.0f;
         private const float BoundaryMixedShoreWallMaxDistanceMeters = 48f;
+        private const float ShoreTerrainFitMeters = 180f;
+        private const float ShoreTerrainFitClearance = 0.15f;
 
         private Mesh mesh;
         private MeshCollider meshCollider;
@@ -127,6 +129,8 @@ namespace DeepWaters
                 floorQuadWater = new bool[n - 1, n - 1];
 
             float cellSpacing = tileWorldSize / (n - 1);
+            var sampler = DaggerfallUnity.Instance.TerrainSampler;
+            float oceanThreshold = sampler != null ? sampler.OceanElevation / sampler.MaxTerrainHeight : 0.5f;
 
             for (int z = 0; z < n; z++)
             {
@@ -156,6 +160,16 @@ namespace DeepWaters
                     tile.GetNoiseWorldCoords(worldX, worldZ, out noiseX, out noiseZ);
                     float depth = DeepBathymetry.SampleDepthMeters(noiseX, noiseZ, climateBase, shoreDistance);
                     float localY = oceanLocalY - depth;
+                    localY = FitSeafloorToShoreTerrain(
+                        localY,
+                        localX,
+                        localZ,
+                        oceanLocalY,
+                        oceanThreshold,
+                        shoreDistance,
+                        terrainOrigin,
+                        tileWorldSize);
+                    depth = Mathf.Max(0f, oceanLocalY - localY);
 
                     vertices.Add(new Vector3(localX, localY, localZ));
                     vertexLocalY[z, x] = localY;
@@ -691,7 +705,7 @@ namespace DeepWaters
             float worldX = terrainOrigin.x + localX;
             float worldZ = terrainOrigin.z + localZ;
             float topDistance, topDepthUnused, topClimateBand;
-            float seafloorTop = SampleSeafloorLocalY(worldX, worldZ, oceanLocalY, out topDistance, out topDepthUnused, out topClimateBand);
+            float seafloorTop = SampleSeafloorLocalY(worldX, worldZ, oceanLocalY, oceanThreshold, terrainOrigin, tileWorldSize, out topDistance, out topDepthUnused, out topClimateBand);
             float meshTop;
             if (TrySampleMeshLocalY(worldX, worldZ, out meshTop))
                 seafloorTop = meshTop;
@@ -707,7 +721,7 @@ namespace DeepWaters
             float bottomWorldZ = terrainOrigin.z + bottomLocalZ;
 
             float bottomDistance, bottomDepth, bottomClimateBand;
-            float seafloorBottom = SampleSeafloorLocalY(bottomWorldX, bottomWorldZ, oceanLocalY, out bottomDistance, out bottomDepth, out bottomClimateBand);
+            float seafloorBottom = SampleSeafloorLocalY(bottomWorldX, bottomWorldZ, oceanLocalY, oceanThreshold, terrainOrigin, tileWorldSize, out bottomDistance, out bottomDepth, out bottomClimateBand);
             float meshBottom;
             if (TrySampleMeshLocalY(bottomWorldX, bottomWorldZ, out meshBottom))
                 seafloorBottom = meshBottom;
@@ -815,6 +829,30 @@ namespace DeepWaters
                 bestWorldY = worldY;
         }
 
+        private float FitSeafloorToShoreTerrain(
+            float localY,
+            float localX,
+            float localZ,
+            float oceanLocalY,
+            float oceanThreshold,
+            float shoreDistance,
+            Vector3 terrainOrigin,
+            float tileWorldSize)
+        {
+            if (shoreDistance >= ShoreTerrainFitMeters || tileWorldSize <= 0f)
+                return localY;
+
+            float fracX = localX / tileWorldSize;
+            float fracZ = localZ / tileWorldSize;
+            float terrainLocalY = SampleVanillaLocalY(fracX, fracZ, oceanLocalY, oceanThreshold);
+            terrainLocalY = Mathf.Max(terrainLocalY, SampleNearbyVanillaLocalY(localX, localZ, terrainLocalY, terrainOrigin));
+            float shoreLocalY = Mathf.Min(oceanLocalY - ShoreTerrainFitClearance, terrainLocalY - ShoreTerrainFitClearance);
+            shoreLocalY = Mathf.Max(localY, shoreLocalY);
+
+            float t = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(shoreDistance / ShoreTerrainFitMeters));
+            return Mathf.Lerp(localY, shoreLocalY, t);
+        }
+
         private struct SkirtEdge
         {
             public int ax;
@@ -837,6 +875,9 @@ namespace DeepWaters
             float worldX,
             float worldZ,
             float oceanLocalY,
+            float oceanThreshold,
+            Vector3 terrainOrigin,
+            float tileWorldSize,
             out float distanceToCoast,
             out float depth,
             out float climateBand)
@@ -847,7 +888,19 @@ namespace DeepWaters
             float noiseX, noiseZ;
             tileData.GetNoiseWorldCoords(worldX, worldZ, out noiseX, out noiseZ);
             depth = DeepBathymetry.SampleDepthMeters(noiseX, noiseZ, climateBase, distanceToCoast);
-            return oceanLocalY - depth;
+            float localX = worldX - terrainOrigin.x;
+            float localZ = worldZ - terrainOrigin.z;
+            float localY = FitSeafloorToShoreTerrain(
+                oceanLocalY - depth,
+                localX,
+                localZ,
+                oceanLocalY,
+                oceanThreshold,
+                distanceToCoast,
+                terrainOrigin,
+                tileWorldSize);
+            depth = Mathf.Max(0f, oceanLocalY - localY);
+            return localY;
         }
 
         private static Color CreateVertexColor(float depth, float climateBand, float distanceToCoast, float textureStrength = 1f)

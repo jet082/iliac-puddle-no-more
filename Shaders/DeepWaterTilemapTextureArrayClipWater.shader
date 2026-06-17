@@ -94,19 +94,16 @@ Shader "DeepWaters/TilemapTextureArrayClipWater" {
             float2 unwrappedUV = IN.uv_MainTex * _TilemapDim;
 
             // Get offset to tile in atlas
-            uint tileData = tex2D(_TilemapTex, floor(unwrappedUV) / _TilemapDim).a * _MaxIndex + 0.5;
+            float4 mapSample = tex2D(_TilemapTex, floor(unwrappedUV) / _TilemapDim);
+            uint tileData = mapSample.a * _MaxIndex + 0.5;
             uint tileIndex = tileData >> 2; // compute correct texture array index from data
             uint tileTransformation = tileData & 0x3;
 
-            // DeepWaters: discard the same water-like terrain records used by
-            // DeepWaterWaterClassification. Keeping shore-water transition
-            // texels opaque leaves a hard rectangular cap beside the generated
-            // water surface on mixed shoreline tiles.
-            bool isWaterTile =
-                tileIndex == 0 ||
-                (tileIndex >= 5 && tileIndex <= 7) ||
-                tileIndex == 48;
-            clip(isWaterTile ? -1.0 : 1.0);
+            // DeepWaters: C# marks only safe-to-remove water texels magenta.
+            // Do not clip every water tile here; shore water texels with relief
+            // must stay rendered or the coastline gets rectangular holes.
+            bool deepWatersClip = mapSample.r > 0.99 && mapSample.g < 0.01 && mapSample.b > 0.99;
+            clip(deepWatersClip ? -1.0 : 1.0);
 
             // Offset to fragment position inside tile
             float2 tileUV = frac(unwrappedUV);

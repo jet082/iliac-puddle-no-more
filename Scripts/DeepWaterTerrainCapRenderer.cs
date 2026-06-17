@@ -158,15 +158,22 @@ namespace DeepWaters
                 {
                     int i = z * dim + x;
                     Color32 color = source[i];
-                    if (ShouldClipPromotedWaterTexel(dfTerrain, color.a, textureArray, x, z, dim))
-                    {
-                        color.r = 0;
-                        color.a = 0;
-                        changed = true;
-                    }
-                    pixels[i] = color;
-                }
-            }
+					bool waterTexel = IsClippedWaterTileData(color.a, textureArray);
+					if (waterTexel && ShouldClipPromotedWaterTexel(dfTerrain, color.a, textureArray, x, z, dim))
+					{
+						color.r = 255;
+						color.g = 0;
+						color.b = 255;
+						color.a = 0;
+						changed = true;
+					}
+					else if (waterTexel && TryFindNearestSolidTexel(source, textureArray, x, z, dim, out color))
+					{
+						changed = true;
+					}
+					pixels[i] = color;
+				}
+			}
 
             if (!changed)
                 return;
@@ -184,11 +191,51 @@ namespace DeepWaters
             texture.SetPixels32(pixels);
             texture.Apply(false, true);
 
-            marker.PatchedTilemapTexture = texture;
-            material.SetTexture(TilemapTexProperty, texture);
-        }
+			marker.PatchedTilemapTexture = texture;
+			material.SetTexture(TilemapTexProperty, texture);
+		}
 
-        private static void RestoreTilemapTexture(Material material, HiddenCapMarker marker)
+		private static bool TryFindNearestSolidTexel(
+			Color32[] source,
+			bool textureArray,
+			int texelX,
+			int texelZ,
+			int dim,
+			out Color32 replacement)
+		{
+			replacement = default(Color32);
+			if (source == null || dim <= 0)
+				return false;
+
+			const int maxRadius = 8;
+			for (int radius = 1; radius <= maxRadius; radius++)
+			{
+				for (int dz = -radius; dz <= radius; dz++)
+				{
+					for (int dx = -radius; dx <= radius; dx++)
+					{
+						if (Mathf.Abs(dx) != radius && Mathf.Abs(dz) != radius)
+							continue;
+
+						int x = texelX + dx;
+						int z = texelZ + dz;
+						if (x < 0 || z < 0 || x >= dim || z >= dim)
+							continue;
+
+						Color32 candidate = source[z * dim + x];
+						if (!IsClippedWaterTileData(candidate.a, textureArray))
+						{
+							replacement = candidate;
+							return true;
+						}
+					}
+				}
+			}
+
+			return false;
+		}
+
+		private static void RestoreTilemapTexture(Material material, HiddenCapMarker marker)
         {
             if (material != null && marker.OriginalTilemapTexture != null)
                 material.SetTexture(TilemapTexProperty, marker.OriginalTilemapTexture);
