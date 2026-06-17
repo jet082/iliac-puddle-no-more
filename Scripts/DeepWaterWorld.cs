@@ -427,6 +427,9 @@ namespace DeepWaters
 
             if (DeepWaterDistanceBake.HasFineWaterMask)
             {
+                if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ))
+                    return false;
+
                 if (!tile.IsCarvedWater(worldX, worldZ))
                     return false;
             }

@@ -107,6 +107,9 @@ namespace DeepWaters
             if (!hasOceanSurface)
                 return false;
 
+            if (camera != null && camera.transform.position.y <= oceanSurfaceY + 0.25f)
+                return true;
+
             if (OutdoorSwimDriver.IsPresentationUnderwater(oceanSurfaceY))
                 return true;
 

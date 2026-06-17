@@ -417,7 +417,10 @@ namespace DeepWaters
                    string.Equals(saveName, "lll", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(saveName, "nnn", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase);
+                   string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "rrr", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase);
         }
 
         private IEnumerator RunTargetedScenario(string saveName)
@@ -429,7 +432,9 @@ namespace DeepWaters
                 string.Equals(saveName, "hhh", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(saveName, "jjj", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(saveName, "nnn", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase))
+                string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "rrr", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase))
             {
                 string visualPhase = saveName.ToLowerInvariant() + "_shoreline_visual";
                 yield return RunStationaryPhase(saveName, visualPhase, TargetedVisualHoldSeconds);
@@ -448,6 +453,8 @@ namespace DeepWaters
                 phase = "lll_straight_shore_probe";
             else if (string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase))
                 phase = "mmm_straight_water_entry";
+            else if (string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase))
+                phase = "qqq_straight_boat_probe";
             else
                 phase = "fff_straight_seam_probe";
             float seconds = Mathf.Min(TargetedScenarioSeconds, Mathf.Max(10f, durationSeconds));
@@ -475,7 +482,8 @@ namespace DeepWaters
                 string.Equals(saveName, "iii", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(saveName, "kkkk", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(saveName, "lll", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase);
+                string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase);
             if (writeFrameMovement)
                 ResetFrameMovementProbe();
 

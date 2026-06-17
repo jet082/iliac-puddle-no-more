@@ -16,6 +16,7 @@ namespace DeepWaters
         private const float MinimumLandingNormalY = 0.45f;
         private const float ShoreLandingWaterMargin = 0.25f;
         private const float MaximumLandingAboveOcean = 8f;
+        private const float MinimumOpenWaterColumnDepth = 2f;
 
         public static bool TryMoveToShore(
             PlayerEnterExit pex,
@@ -92,10 +93,13 @@ namespace DeepWaters
                 return false;
 
             DeepWaterColumn column;
-            if (DeepWaterWorld.TryGetWaterColumn(hit.point.x, hit.point.z, out column) &&
-                hit.point.y <= column.OceanWorldY + ShoreLandingWaterMargin)
+            if (DeepWaterWorld.TryGetWaterColumn(hit.point.x, hit.point.z, out column))
             {
-                return false;
+                if (column.Depth >= MinimumOpenWaterColumnDepth)
+                    return false;
+
+                if (hit.point.y <= column.OceanWorldY + ShoreLandingWaterMargin)
+                    return false;
             }
 
             return hit.point.y >= oceanY - 1f;

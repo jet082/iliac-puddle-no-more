@@ -143,6 +143,7 @@ namespace DeepWaters
         // contact, then ramp to a hard offshore minimum depth.
         private const float MinimumOffshoreNavigableDepthMeters = 11.2f;
         private const float NoStandDepthRampMeters = 128f;
+        private const float NearShoreReliefRampMeters = 180f;
         private const float ShallowFloorReliefPeriodMeters = 150f;
         private const float ShallowFloorReliefMeters = 8f;
 
@@ -206,13 +207,14 @@ namespace DeepWaters
             // (shallow swamps, deep open ocean) is preserved between boundaries.
             climateBaseDepth = ApplyDeepPlainHeadroom(climateBaseDepth, userMax, minimumDepth, scale, deepOcean);
             float shelf = ComputeShelfDepth(climateBaseDepth, distanceToCoastMeters);
+            float nearShoreRelief = ComputeNearShoreRelief01(distanceToCoastMeters);
 
             float macro = SampleSignedPerlin(worldX, worldZ, MacroPeriodMeters, MacroSeedX, MacroSeedZ);
             float macroScale = Mathf.Lerp(1f, DeepMacroAmplitudeScale, deepOcean);
             float aroundShelf = shelf + macro * MacroAmplitudeFraction * macroScale * shelf;
 
-            float mid = SampleSignedPerlin(worldX, worldZ, MidPeriodMeters, MidSeedX, MidSeedZ) * MidAmplitudeMeters;
-            float high = SampleSignedPerlin(worldX, worldZ, HighPeriodMeters, HighSeedX, HighSeedZ) * HighAmplitudeMeters;
+            float mid = SampleSignedPerlin(worldX, worldZ, MidPeriodMeters, MidSeedX, MidSeedZ) * MidAmplitudeMeters * nearShoreRelief;
+            float high = SampleSignedPerlin(worldX, worldZ, HighPeriodMeters, HighSeedX, HighSeedZ) * HighAmplitudeMeters * nearShoreRelief;
             float abyssal = ComputeAbyssalRelief(worldX, worldZ, deepOcean);
             float ravine = ComputeRavineAddition(worldX, worldZ, distanceToCoastMeters);
             float featureBaseDepth = aroundShelf + mid + high + abyssal + ravine;
@@ -371,6 +373,12 @@ namespace DeepWaters
             float t = Mathf.Clamp01(distanceToCoastMeters / NoStandDepthRampMeters);
             float smooth = t * t * (3f - 2f * t);
             return Mathf.Lerp(effectiveShelfMin, noStandDepth, smooth);
+        }
+
+        private static float ComputeNearShoreRelief01(float distanceToCoastMeters)
+        {
+            float t = Mathf.Clamp01(distanceToCoastMeters / NearShoreReliefRampMeters);
+            return t * t * (3f - 2f * t);
         }
 
         private static float ComputeSafetyFloorRelief(float worldX, float worldZ, float distanceToCoastMeters, float userMaxDepth)

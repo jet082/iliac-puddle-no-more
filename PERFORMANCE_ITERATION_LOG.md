@@ -950,3 +950,73 @@ Validation:
 - `hhh` sanity run:
   - 10-second visual hold: `95.56 FPS`.
   - The seam is still visually abrupt, but the through-world hole was not visible in the latest diagnostic screenshot.
+
+## QQQ/RRR/SSS Shoreline And Boat Diagnostics
+
+Baseline:
+
+- Reset `Assets/Game/Mods/deep-waters` to `origin/master` at `5dfb8f3` and restored the large `Resources/DistanceBake.bytes` and `Resources/DistanceBakeVanilla.bytes` files.
+- Added targeted harness support for `qqq`, `rrr`, and `sss`.
+- `qqq` runs as a natural forward swim probe with frame-level movement logging.
+- `rrr` and `sss` run as stationary visual shoreline probes with screenshots and shore profiles.
+
+Problems:
+
+- `qqq`: swimming forward under a boat snapped the player upward.
+- `rrr`: save started inside a shoreline ravine with high walls on both sides.
+- `sss`: shoreline hole/invisible-floor case where the player could stand above water at a spot that should not be a swimmable column.
+- Third-person fog: camera below water was not enough to trigger underwater fog when the player was above the water.
+
+Diagnostics:
+
+- Baseline `qqq` CSV: `deep-waters-diagnostics-20260617-185614.csv`.
+  - Player Y jumped from `92.07` to `102.54` in one frame.
+  - Maximum sampled Y reached `102.99`.
+  - The player remained in the same map pixel, so this was not a streaming transition.
+- Baseline `rrr`:
+  - Player position reported `columnDepth=15.56m` after the first depth fix attempt and roughly `15.78m` before that.
+  - Shore profile showed `localPointWater=1`, `bakedWater=0`, `carvedWater=1`.
+  - The visual ravine matched seafloor relief being too deep immediately beside a fine-mask shore edge.
+- Baseline `sss`:
+  - Shore profile showed `localPointWater=0`, `bakedWater=0`, `carvedWater=1`, `columnPresent=1`.
+  - This meant the fine carve mask was creating a water column over a dry live-terrain point.
+
+Changes:
+
+- Boat snap:
+  - `OutdoorShoreExitAssist` now rejects shore-exit landing hits whose X/Z is still inside a real open-water column (`Depth >= 2m`).
+  - This prevents boats, docks, and other overhead colliders above swimmable water from being treated as shore.
+- Shoreline ravines:
+  - `DeepWaterDistanceBake.SampleEdgeDistanceMeters()` now caps the coarse edge distance with a small nearby fine-mask edge search, so narrow fine-mask shore edges do not sample as fully offshore.
+  - `DeepBathymetry` now fades mid/high seafloor relief in over the first `180m` from the shore edge. This keeps random bathymetry noise from cutting deep trenches right at shoreline contact.
+- Dry-point water columns:
+  - `DeepWaterFloorBuilder` now refuses fine-mask carving where `DeepWaterWaterClassification.IsLocalPointWater()` says the live terrain point is dry.
+  - `DeepWaterWorld.TryGetWaterColumn()` applies the same live-terrain local-water gate before accepting a fine-mask water column.
+- Third-person fog:
+  - `UnderwaterDistanceFog.TryGetUnderwaterPresentation()` now treats the camera being below the ocean surface as underwater presentation, independent of whether the player is currently swimming.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Final combined diagnostics sweep: `DeepWatersDiagnostics\deep-waters-diagnostics-20260617-191505.csv`.
+- `qqq`:
+  - `2068` frame movement samples.
+  - `minY=94.78`, `maxY=94.78`, `delta=0.0`.
+  - `0` vertical jumps greater than `0.05m`.
+  - Latest end screenshot: `DeepWatersDiagnostics\deep-waters-qqq-qqq_straight_boat_probe-end-20260617-191548.png`.
+- `rrr`:
+  - 10-second visual hold: `225.11 FPS`.
+  - `columnDepth=3.81m`, down from roughly `15.6m`.
+  - Latest screenshot shows a shallow shore slope instead of the prior ravine wall.
+  - Latest screenshot: `DeepWatersDiagnostics\deep-waters-rrr-shoreline-hold-20260617-191607.png`.
+- `sss`:
+  - 10-second visual hold: `183.07 FPS`.
+  - `columnPresent=0`, `carvedPresent=0` at the dry shoreline position.
+  - Latest screenshot: `DeepWatersDiagnostics\deep-waters-sss-shoreline-hold-20260617-191625.png`.
+
+Notes:
+
+- The physical classifications for `qqq`, `rrr`, and `sss` now match the intended behavior in diagnostics.
+- `sss` still has a visually hard water/shore edge, but it no longer reports a ghost water column at the dry standing point.
+- The third-person fog fix is code-path validated by compile only; this harness does not yet automate camera-mode switching.

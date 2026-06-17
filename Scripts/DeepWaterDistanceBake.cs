@@ -3,6 +3,7 @@
 
 using System.IO;
 using DaggerfallConnect.Arena2;
+using DaggerfallWorkshop;
 using UnityEngine;
 
 namespace DeepWaters
@@ -66,6 +67,7 @@ namespace DeepWaters
         private static bool hasFineWaterMask;
         private static bool hasEdgeField;
         private static ushort loadedVersion;
+        private const int FineEdgeSearchRadiusCells = 8;
 
         public static bool IsLoaded { get { return loaded; } }
         public static int SubCellsPerPixel { get { return subCellsPerPixelX; } }
@@ -282,7 +284,43 @@ namespace DeepWaters
             if (!loaded || !hasEdgeField || edgeData == null)
                 return SampleDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
 
-            return BilinearSampleMeters(edgeData, mapPixelX, mapPixelY, fracX, fracZ);
+            float coarseDistance = BilinearSampleMeters(edgeData, mapPixelX, mapPixelY, fracX, fracZ);
+            float fineDistance = SampleNearbyFineEdgeDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
+            return Mathf.Min(coarseDistance, fineDistance);
+        }
+
+        private static float SampleNearbyFineEdgeDistanceMeters(int mapPixelX, int mapPixelY, float fracX, float fracZ)
+        {
+            if (!hasFineWaterMask || fineWaterMaskBits == null || subCellsPerPixelFine <= 0)
+                return float.MaxValue;
+
+            float gx = mapPixelX * subCellsPerPixelFine + Mathf.Clamp01(fracX) * subCellsPerPixelFine - 0.5f;
+            float gy = mapPixelY * subCellsPerPixelFine + BakedSouthFraction(fracZ) * subCellsPerPixelFine - 0.5f;
+            int x = Mathf.Clamp(Mathf.RoundToInt(gx), 0, widthCellsFine - 1);
+            int y = Mathf.Clamp(Mathf.RoundToInt(gy), 0, heightCellsFine - 1);
+
+            if (!FineCellHasWater(x, y))
+                return 0f;
+
+            int radius = Mathf.Min(FineEdgeSearchRadiusCells, Mathf.Max(widthCellsFine, heightCellsFine));
+            for (int r = 1; r <= radius; r++)
+            {
+                for (int dy = -r; dy <= r; dy++)
+                {
+                    int y0 = y + dy;
+                    if (!FineCellHasWater(x - r, y0) || !FineCellHasWater(x + r, y0))
+                        return FineCellDistanceMeters(r);
+                }
+
+                for (int dx = -r + 1; dx <= r - 1; dx++)
+                {
+                    int x0 = x + dx;
+                    if (!FineCellHasWater(x0, y - r) || !FineCellHasWater(x0, y + r))
+                        return FineCellDistanceMeters(r);
+                }
+            }
+
+            return float.MaxValue;
         }
 
         // Convert tile-local fractions to global sub-cell coordinates.
@@ -481,6 +519,22 @@ namespace DeepWaters
                 return (waterMaskBits[index >> 3] & (1 << (index & 7))) != 0;
 
             return data != null && data[index] > 0;
+        }
+
+        private static bool FineCellHasWater(int x, int y)
+        {
+            if (x < 0 || y < 0 || x >= widthCellsFine || y >= heightCellsFine)
+                return false;
+
+            int index = y * widthCellsFine + x;
+            return fineWaterMaskBits != null &&
+                   (fineWaterMaskBits[index >> 3] & (1 << (index & 7))) != 0;
+        }
+
+        private static float FineCellDistanceMeters(int radiusCells)
+        {
+            float tileMeters = MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale;
+            return Mathf.Max(0f, radiusCells) * tileMeters / Mathf.Max(1, subCellsPerPixelFine);
         }
 
         private static void LogSeamContinuityDiagnostics()

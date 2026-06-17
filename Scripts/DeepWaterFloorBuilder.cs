@@ -336,6 +336,9 @@ namespace DeepWaters
                     bool pureBakedWater = !useBakeMask &&
                         DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&
                         DeepWaterDistanceBake.IsWaterAt(mapPixelX, mapPixelY, fracX, fracZ);
+                    bool localWater = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ);
+                    if (useBakeMask && !localWater)
+                        continue;
 
                     // Reject cells with any shore relief (see crash-fix note):
                     // a holed patch with relief subdivides and crashes the render
