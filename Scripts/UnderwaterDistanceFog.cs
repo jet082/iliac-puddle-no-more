@@ -80,6 +80,15 @@ namespace DeepWaters
                 if (camera == null || camera == mainCamera || !camera.isActiveAndEnabled)
                     continue;
 
+                // ponytail: skip cameras that render no scene geometry (cullingMask 0).
+                // DFU's sky is a second camera (DaggerfallSky) that clears to a solid
+                // color and draws the sky dome in OnPostRender for the main camera to
+                // composite over. Attaching an OnRenderImage effect forces it through an
+                // offscreen RenderTexture and breaks that compositing (skybox off, scene
+                // tinted). An image effect on a no-geometry camera is pointless anyway.
+                if (camera.cullingMask == 0)
+                    continue;
+
                 EnsureCameraHook(camera);
             }
         }
