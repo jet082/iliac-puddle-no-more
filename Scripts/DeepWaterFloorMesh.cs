@@ -990,13 +990,12 @@ namespace DeepWaters
             mc.enabled = true;
             colliderBuildVersion = buildVersion;
 
-            // Push to Ignore Raycast so the shore-exit-assist raycast still
-            // finds vanilla shore terrain first. The seafloor remains
-            // physically present for swim/fall collision via the trigger
-            // path that doesn't filter by layer.
-            int ignoreRaycastLayer = LayerMask.NameToLayer("Ignore Raycast");
-            if (ignoreRaycastLayer >= 0)
-                gameObject.layer = ignoreRaycastLayer;
+			// EnemyMotor uses raycasts for ground/fall checks, so the seafloor
+			// must be visible to DefaultRaycastLayers. Shore helpers filter this
+			// component explicitly when they need vanilla land.
+			int defaultLayer = LayerMask.NameToLayer("Default");
+			if (defaultLayer >= 0)
+				gameObject.layer = defaultLayer;
         }
     }
 }

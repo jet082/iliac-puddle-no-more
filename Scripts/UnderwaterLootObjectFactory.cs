@@ -60,7 +60,7 @@ namespace DeepWaters
             Vector3 worldPos,
             Transform parent,
             Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches,
-            int record)
+            UnderwaterDecorationRecord record)
         {
             List<UnderwaterDecorationPlacementInfo> batchItems;
             if (!rubbleBatches.TryGetValue(parent, out batchItems))
@@ -70,12 +70,12 @@ namespace DeepWaters
             }
 
             worldPos.y = UnderwaterDecorationPlacement.ResolveBillboardBaseWorldY(
-                UnderwaterLootCatalog.RubbleArchive,
-                record,
+                record.Archive,
+                record.Record,
                 worldPos.y);
 
             batchItems.Add(new UnderwaterDecorationPlacementInfo(
-                new UnderwaterDecorationRecord(UnderwaterLootCatalog.RubbleArchive, record),
+                record,
                 worldPos - parent.position));
         }
 

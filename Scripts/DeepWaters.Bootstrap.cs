@@ -13,11 +13,82 @@ using UnityEngine;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Game.Entity;
 using DaggerfallWorkshop.Game.Serialization;
+using Wenzil.Console;
 
 namespace DeepWaters
 {
     public partial class DeepWaters
     {
+        // Registers the mod's debug console commands (open with the backquote key).
+        internal static class DeepWaterConsoleCommands
+        {
+			private static bool loggedCurrentDepth;
+
+            public static void RegisterCommands()
+            {
+                try
+                {
+					if (!ConsoleCommandsDatabase.HasCommand(CurrentDepth.name))
+					{
+						ConsoleCommandsDatabase.RegisterCommand(CurrentDepth.name, CurrentDepth.description, CurrentDepth.usage, CurrentDepth.Execute);
+						if (!loggedCurrentDepth)
+						{
+							Debug.Log("[DeepWaters] Registered console command: " + CurrentDepth.name);
+							loggedCurrentDepth = true;
+						}
+					}
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogException(ex);
+                }
+            }
+
+            private static class CurrentDepth
+            {
+                public static readonly string name = "currentdepth";
+                public static readonly string description = "Prints how deep the player is below the ocean surface and the water-column depth at the player's position.";
+                public static readonly string usage = "currentdepth";
+
+                public static string Execute(params string[] args)
+                {
+                    GameManager gameManager = GameManager.Instance;
+                    if (gameManager == null || gameManager.PlayerObject == null)
+                        return Report("No player.");
+
+                    Vector3 playerPos = gameManager.PlayerObject.transform.position;
+					Vector3 probePos = playerPos;
+					string probeName = "player";
+                    DeepWaterColumn column;
+                    if (!DeepWaterWorld.TryGetWaterColumn(playerPos.x, playerPos.z, out column))
+					{
+						if (gameManager.MainCamera == null)
+							return Report("No Deep Waters ocean column at player.");
+
+						probePos = gameManager.MainCamera.transform.position;
+						probeName = "camera";
+						if (!DeepWaterWorld.TryGetWaterColumn(probePos.x, probePos.z, out column))
+							return Report("No Deep Waters ocean column at player or camera.");
+					}
+
+                    float belowSurface = column.OceanWorldY - probePos.y;
+                    string playerDepth = belowSurface >= 0f
+                        ? belowSurface.ToString("F1", CultureInfo.InvariantCulture) + "m below surface"
+                        : (-belowSurface).ToString("F1", CultureInfo.InvariantCulture) + "m above surface";
+
+                    return Report(probeName + ": " + playerDepth +
+						" | column: " + column.Depth.ToString("F1", CultureInfo.InvariantCulture) + "m deep");
+                }
+
+				private static string Report(string message)
+				{
+					Debug.Log("[DeepWaters.currentdepth] " + message);
+					DaggerfallUI.AddHUDText(message);
+					return message;
+				}
+            }
+        }
+
         private static void InstallSubsystems(GameObject go)
         {
             // Keep streaming hitches from turning into multi-step physics catch-up
@@ -48,6 +119,8 @@ namespace DeepWaters
             UnderwaterEncounterPulse.Install();
             UnderwaterDecorations.Install();
             UnderwaterLootSpawner.Install();
+            DeepWaterConsoleCommands.RegisterCommands();
+			go.AddComponent<DeepWaterConsoleCommandInstaller>();
             go.AddComponent<PlayerShipWaterlineFix>();
             go.AddComponent<CutoutDepthQueueFix>();
             go.AddComponent<UnderwaterDistanceFog>();
@@ -79,6 +152,14 @@ namespace DeepWaters
             DaggerfallUnity.Instance.TerrainTexturing = new DeepWaterTexturing(inner);
         }
     }
+
+	internal sealed class DeepWaterConsoleCommandInstaller : MonoBehaviour
+	{
+		void Start()
+		{
+			DeepWaters.DeepWaterConsoleCommands.RegisterCommands();
+		}
+	}
 
     internal sealed class DeepWaterDiagnosticsRunner : MonoBehaviour
     {
@@ -705,6 +786,7 @@ namespace DeepWaters
             LogTerrainSurfaceSnapshot(saveName, safeLabel);
             LogShoreProfileSnapshot(saveName, safeLabel);
             LogClassificationGrid(saveName, safeLabel);
+            LogSpawnDiagnostics(saveName, safeLabel);
             yield return new WaitForEndOfFrame();
             ScreenCapture.CaptureScreenshot(path);
             Debug.Log("[DeepWaters.Diagnostics] Screenshot: " + path);
@@ -967,6 +1049,26 @@ namespace DeepWaters
             sb.Append("[HEIGHT]").Append(Environment.NewLine).Append(heightRows)
               .Append("[CLASS]").Append(Environment.NewLine).Append(classRows)
               .Append("[CAP] .=not-water-texel X=clipped W=water-NOT-clipped(pokes)").Append(Environment.NewLine).Append(capRows);
+        }
+
+        private static void LogSpawnDiagnostics(string saveName, string label)
+        {
+            var s = DeepWaters.Instance;
+            string line = "[DeepWaters.Diagnostics] Spawn save=" + saveName + " label=" + label +
+                " fishLive=" + UnderwaterPassiveFishSpawner.LiveCount +
+                " enemyLive=" + UnderwaterEnemySpawner.LiveCount +
+                " | fishCap=" + (s != null ? UnderwaterPassiveFishSpawner.EffectiveFishCap() : 0) +
+                " enemyCap=" + (s != null ? UnderwaterEnemySpawner.EffectiveEnemyCap() : 0) +
+                " fishFreq=" + (s != null ? s.PassiveFishFrequency.ToString("F2", CultureInfo.InvariantCulture) : "0") +
+                " enemyFreq=" + (s != null ? s.EnemyFrequency.ToString("F2", CultureInfo.InvariantCulture) : "0") +
+                " waterDepth=" + (s != null ? s.WaterDepth.ToString("F0", CultureInfo.InvariantCulture) : "0");
+
+            Debug.Log(line);
+            string dir = Path.Combine(Application.persistentDataPath, "DeepWatersDiagnostics");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(
+                Path.Combine(dir, "spawn-counts.log"),
+                DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) + " " + line + Environment.NewLine);
         }
 
         private static char HeightChar(float aboveOcean)

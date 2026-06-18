@@ -2,6 +2,7 @@
 // License:         MIT
 
 using System.Collections.Generic;
+using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Game.Items;
 using UnityEngine;
@@ -10,27 +11,37 @@ namespace DeepWaters
 {
     /// <summary>
     /// Spawns passive underwater fish as lightweight lootable billboards.
+    ///
+    /// Population is per-MAP-PIXEL, not player-relative: when a water map pixel
+    /// comes into range the spawner scatters base points uniformly across its
+    /// whole area and seeds a small school at each that lands in valid water, so
+    /// fish density tracks the pixel's water area (open ocean fills, shallow coves
+    /// stay sparse) and nothing clumps along the player's path. The shared driver
+    /// (UnderwaterEncounterPulse) decides which pixels to populate/despawn and
+    /// meters the per-frame work; this class just owns the fish.
     /// </summary>
     public static class UnderwaterPassiveFishSpawner
     {
         public static readonly int[] CustomItemTemplateIndices = PassiveFishSpeciesCatalog.CustomItemTemplateIndices;
         public const ItemGroups FishItemGroup = PassiveFishSpeciesCatalog.FishItemGroup;
 
-        private const int FullFishCount = UnderwaterEnemySpawner.FullSpawnCount * 2;
-        private const float FishParadiseSpawnMultiplier = 4f;
-        private const float FishParadisePulseIntervalMultiplier = 0.5f;
-        private const float SpawnViewportMargin = 0.08f;
-        private const float MinFishPulseIntervalSeconds = 10f;
-        private const float FailedFishRetrySeconds = 4f;
-        private const float DespawnDistance = 160f;
-        private const float ShoreFishPulseMultiplier = 0.5f;
-        private const float FishSpawnMinDistance = 20f;
-        private const float FishSpawnMaxDistance = 85f;
-        private const float FishSpawnViewSafetyDistance = 25f;
+        // Base spawn attempts scattered uniformly across a map pixel. Each attempt
+        // that lands in valid water seeds a SCHOOL (species school size), so the
+        // realized fish count scales with the pixel's water area (open ocean fills,
+        // shallow coves stay sparse). The hard ceiling on total live fish is the
+        // MaxLiveFish setting; density below it is set by the frequency setting.
+        private const int FishAttemptsPerPixel = 90;
+        private const float PassiveFishFrequencyAtMidpoint = 3.0f;
 
-        private static readonly TransientObjectTracker liveFish = new TransientObjectTracker();
+        private sealed class PixelFishGroup
+        {
+            public readonly TransientObjectTracker Fish = new TransientObjectTracker();
+            public int AttemptsRemaining;
+        }
+
+        private static readonly Dictionary<long, PixelFishGroup> pixelGroups = new Dictionary<long, PixelFishGroup>();
+        private static readonly List<long> despawnScratch = new List<long>();
         private static GameObject iconBridgeObject;
-        private static float nextAllowedPulseTime;
         private static bool installed;
 
         public static void Install()
@@ -50,15 +61,9 @@ namespace DeepWaters
             installed = true;
         }
 
-
         public static DaggerfallUnityItem CreateLongnoseButterflyfishItem()
         {
             return PassiveFishResources.CreateLongnoseButterflyfishItem();
-        }
-
-        private static void OnTransientReset()
-        {
-            ResetRuntimeState(true);
         }
 
         internal static void UpdateInventoryState()
@@ -66,92 +71,182 @@ namespace DeepWaters
             PassiveFishResources.UpdateInventoryState();
         }
 
-        internal static bool CanRunFromEncounterPulse()
+        internal static int LiveCount
         {
-            return CanKeepFishAlive();
+            get
+            {
+                int total = 0;
+                foreach (var kv in pixelGroups)
+                    total += kv.Value.Fish.Count;
+                return total;
+            }
         }
 
-        internal static bool RunEncounterPulse(bool allowImmediate)
+        // True when fish should exist at all right now (settings on, in an
+        // exterior water context, species available). The driver gates on this.
+        internal static bool CanPopulate()
         {
-            if (!CanKeepFishAlive())
-                return false;
+            return DeepWaters.Instance != null &&
+                   DeepWaterRuntime.CanRunHeavyRuntimeWork &&
+                   DeepWaters.Instance.PassiveFishFrequency > 0f &&
+                   DeepWaterWorld.IsPlayerInExteriorWaterContext() &&
+                   PassiveFishSpeciesCatalog.HasAnySpawnableSpecies();
+        }
 
-            if (!allowImmediate && Time.time < nextAllowedPulseTime)
-                return false;
+        private static void OnTransientReset()
+        {
+            ClearAll();
+        }
 
-            Vector3 playerPos;
-            if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
-                return false;
+        internal static void ClearAll()
+        {
+            foreach (var kv in pixelGroups)
+                kv.Value.Fish.Clear();
+            pixelGroups.Clear();
+        }
 
-            int maxLiveFish = GetMaxLiveFish();
-            liveFish.PruneByDistance(playerPos, DespawnDistance);
-            liveFish.PruneToCount(playerPos, maxLiveFish);
-            if (liveFish.Count >= maxLiveFish)
-                return true;
-
-            int targetCount = RollScaledFishCount(FullFishCount);
-            targetCount = Mathf.Min(targetCount, maxLiveFish - liveFish.Count);
-            if (targetCount <= 0)
-                return true;
-
-            int spawned = 0;
-            int attempts = 0;
-            while (spawned < targetCount && attempts < 5 * targetCount + 10)
+        // Drop the fish of any populated pixel no longer in the keep set (out of
+        // despawn range or unloaded). By the time a pixel leaves the keep range it
+        // is far enough that all its fish are well past vision, so the cull is not
+        // visible.
+        internal static void TickDespawn(HashSet<long> keepKeys)
+        {
+            despawnScratch.Clear();
+            foreach (var kv in pixelGroups)
             {
-                attempts++;
-                int remainingPulseBudget = Mathf.Min(targetCount - spawned, maxLiveFish - liveFish.Count);
-                int spawnedThisAttempt = TrySpawnNearPlayer(remainingPulseBudget);
-                if (spawnedThisAttempt > 0)
-                    spawned += spawnedThisAttempt;
+                if (!keepKeys.Contains(kv.Key))
+                    despawnScratch.Add(kv.Key);
             }
 
-            bool spawnedAny = spawned > 0;
-            nextAllowedPulseTime = Time.time + (spawnedAny ? GetFishPulseInterval() : FailedFishRetrySeconds);
-            return true;
+            for (int i = 0; i < despawnScratch.Count; i++)
+            {
+                long key = despawnScratch[i];
+                pixelGroups[key].Fish.Clear();
+                pixelGroups.Remove(key);
+            }
         }
 
-        internal static void PruneFromEncounterPulse(Vector3 playerPos)
+        // Scatter up to attemptBudget base points across this pixel, seeding a
+        // school at each that lands in valid water, until the pixel's attempt
+        // allowance is spent. The driver caps attemptBudget per frame so a newly
+        // entered pixel fills over a few ticks instead of hitching.
+        internal static void TickPopulate(DaggerfallTerrain dfTerrain, ref int attemptBudget)
         {
-            liveFish.PruneByDistance(playerPos, DespawnDistance);
-            liveFish.PruneToCount(playerPos, GetMaxLiveFish());
+            if (attemptBudget <= 0 || dfTerrain == null)
+                return;
+
+            long key = DeepWaterWorld.TileKey(dfTerrain.MapPixelX, dfTerrain.MapPixelY);
+            PixelFishGroup group;
+            if (!pixelGroups.TryGetValue(key, out group))
+            {
+                group = new PixelFishGroup { AttemptsRemaining = ScaledAttemptsPerPixel() };
+                pixelGroups[key] = group;
+            }
+
+            if (group.AttemptsRemaining <= 0)
+                return;
+
+            int liveCap = EffectiveFishCap();
+            Vector3 origin = dfTerrain.transform.position;
+            float tileSize = DeepWaterWorld.TileWorldSize;
+
+            while (attemptBudget > 0 && group.AttemptsRemaining > 0)
+            {
+                if (LiveCount >= liveCap)
+                {
+                    group.AttemptsRemaining = 0;
+                    return;
+                }
+
+                attemptBudget--;
+                group.AttemptsRemaining--;
+
+                float worldX = origin.x + Random.value * tileSize;
+                float worldZ = origin.z + Random.value * tileSize;
+
+                int climateIndex;
+                float depthFraction;
+                ResolveSpeciesContext(worldX, worldZ, out climateIndex, out depthFraction);
+                PassiveFishSpecies species = PassiveFishSpeciesCatalog.PickRandom(climateIndex, depthFraction);
+                if (species == null)
+                    continue;
+
+                Vector3 worldPos;
+                Transform parent;
+                if (!PassiveFishPlacement.TryResolvePosition(worldX, worldZ, species, out worldPos, out parent))
+                    continue;
+
+				int remaining = liveCap - LiveCount;
+				int schoolSize = Mathf.Min(Random.Range(species.MinSchoolSize, species.MaxSchoolSize + 1), remaining);
+				if (schoolSize <= 0)
+				{
+					group.AttemptsRemaining = 0;
+					return;
+				}
+
+				SpawnSchool(worldPos, parent, species, schoolSize, group);
+            }
         }
 
-        internal static void ClearEncounterPulseObjects()
+		private static int SpawnSchool(Vector3 worldPos, Transform parent, PassiveFishSpecies species, int schoolSize, PixelFishGroup group)
+		{
+			float schoolRadius = PassiveFishPlacement.GetSchoolRadius(schoolSize);
+			PassiveFishSchool school = schoolSize > 1
+				? new PassiveFishSchool(worldPos, schoolRadius, species.CruiseSpeedMultiplier, species.FleeSpeedMultiplier)
+				: null;
+			List<Vector3> schoolPositions = schoolSize > 1 ? new List<Vector3>() : null;
+
+			int spawned = SpawnFish(worldPos, parent, species, school, group);
+			if (spawned == 0)
+				return 0;
+
+			if (schoolPositions != null)
+				schoolPositions.Add(worldPos);
+
+			for (int i = 1; i < schoolSize && LiveCount < EffectiveFishCap(); i++)
+			{
+				Vector3 schoolmatePos;
+				Transform schoolmateParent;
+				if (!PassiveFishPlacement.TryPickSchoolmatePosition(worldPos, schoolRadius, schoolPositions, out schoolmatePos, out schoolmateParent))
+					continue;
+
+				int added = SpawnFish(schoolmatePos, schoolmateParent, species, school, group);
+				spawned += added;
+				if (added > 0 && schoolPositions != null)
+					schoolPositions.Add(schoolmatePos);
+			}
+
+			return spawned;
+		}
+
+		private static int SpawnFish(Vector3 worldPos, Transform parent, PassiveFishSpecies species, PassiveFishSchool school, PixelFishGroup group)
+		{
+			GameObject go = PassiveFishFactory.Spawn(worldPos, parent, species, school);
+			if (go == null)
+				return 0;
+
+			group.Fish.Add(go);
+			return 1;
+		}
+
+        // Hard ceiling on total live fish from the MaxLiveFish setting.
+        internal static int EffectiveFishCap()
         {
-            liveFish.Clear();
+            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveFish : 54;
         }
 
-        private static void ResetRuntimeState(bool destroyFish)
+        private static int ScaledAttemptsPerPixel()
         {
-            nextAllowedPulseTime = 0f;
+            float scale = DeepWaters.Instance != null
+                ? DeepWaters.Instance.PassiveFishFrequency / PassiveFishFrequencyAtMidpoint
+                : 1f;
 
-            if (destroyFish)
-                liveFish.Clear();
-        }
-
-        private static bool CanKeepFishAlive()
-        {
-            if (DeepWaters.Instance == null)
-                return false;
-
-            if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
-                return false;
-
-            if (DeepWaters.Instance.PassiveFishFrequency <= 0f)
-                return false;
-
-            if (!DeepWaterWorld.IsPlayerInExteriorWaterContext())
-                return false;
-
-            if (!PassiveFishSpeciesCatalog.HasAnySpawnableSpecies())
-                return false;
-
-            return true;
+            return Mathf.Max(0, Mathf.RoundToInt(FishAttemptsPerPixel * scale));
         }
 
         // Resolve the owning tile's climate biome and the water-column depth
         // fraction (0..1 of max depth) at a candidate spawn point, so species
-        // selection can favour biome- and depth-appropriate fish.
+        // selection favours biome- and depth-appropriate fish.
         private static void ResolveSpeciesContext(float worldX, float worldZ, out int climateIndex, out float depthFraction)
         {
             climateIndex = 0;
@@ -170,138 +265,5 @@ namespace DeepWaters
             float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
             depthFraction = Mathf.Clamp01(column.Depth / maxDepth);
         }
-
-        private static int TrySpawnNearPlayer(int maxFishToSpawn)
-        {
-            if (maxFishToSpawn <= 0)
-                return 0;
-
-            var gameManager = GameManager.Instance;
-            if (gameManager == null || gameManager.PlayerObject == null)
-                return 0;
-
-            Vector3 playerPos = gameManager.PlayerObject.transform.position;
-            Vector3 spawnPoint;
-            if (Random.value >= DeepWaterWorld.FogAheadSpawnChance ||
-                !DeepWaterWorld.TryPickFogAheadPoint(playerPos, DespawnDistance, out spawnPoint))
-            {
-                spawnPoint = DeepWaterWorld.PickFrontRingPoint(
-                    playerPos,
-                    FishSpawnMinDistance,
-                    FishSpawnMaxDistance);
-            }
-
-            // Pick the species for THIS location's biome + depth so each region
-            // reads distinctly: reef fish in tropical shallows, abyssal fish out
-            // in the cold deep, etc. (issues 6 & 7) Chosen before the position so
-            // its preferred depth band can drive the vertical spawn height.
-            int climateIndex;
-            float depthFraction;
-            ResolveSpeciesContext(spawnPoint.x, spawnPoint.z, out climateIndex, out depthFraction);
-            PassiveFishSpecies species = PassiveFishSpeciesCatalog.PickRandom(climateIndex, depthFraction);
-            if (species == null)
-                return 0;
-
-            Vector3 worldPos;
-            Transform parent;
-            if (!PassiveFishPlacement.TryResolvePosition(spawnPoint.x, spawnPoint.z, species, out worldPos, out parent))
-                return 0;
-
-            if (!DeepWaterWorld.IsOutsideImmediateView(worldPos, playerPos, FishSpawnViewSafetyDistance, SpawnViewportMargin))
-                return 0;
-
-            int schoolSize = Random.Range(species.MinSchoolSize, species.MaxSchoolSize + 1);
-            schoolSize = Mathf.Min(schoolSize, maxFishToSpawn);
-            float schoolRadius = PassiveFishPlacement.GetSchoolRadius(schoolSize);
-            Vector3 schoolCenter = worldPos;
-            PassiveFishSchool school = schoolSize > 1
-                ? new PassiveFishSchool(schoolCenter, schoolRadius, species.CruiseSpeedMultiplier, species.FleeSpeedMultiplier)
-                : null;
-
-            List<Vector3> schoolPositions = schoolSize > 1 ? new List<Vector3>() : null;
-            int spawned = SpawnFish(worldPos, parent, species, school);
-            if (spawned > 0 && schoolPositions != null)
-                schoolPositions.Add(worldPos);
-
-            for (int i = 1; i < schoolSize; i++)
-            {
-                Vector3 schoolmatePos;
-                Transform schoolmateParent;
-                if (!PassiveFishPlacement.TryPickSchoolmatePosition(schoolCenter, schoolRadius, schoolPositions, out schoolmatePos, out schoolmateParent))
-                    continue;
-
-                if (SpawnFish(schoolmatePos, schoolmateParent, species, school) > 0)
-                {
-                    spawned++;
-                    if (schoolPositions != null)
-                        schoolPositions.Add(schoolmatePos);
-                }
-            }
-
-            return spawned;
-        }
-
-        private static int SpawnFish(Vector3 worldPos, Transform parent, PassiveFishSpecies species, PassiveFishSchool school)
-        {
-            GameObject go = PassiveFishFactory.Spawn(worldPos, parent, species, school);
-            if (go == null)
-                return 0;
-
-            liveFish.Add(go);
-            return 1;
-        }
-
-        private static int RollScaledFishCount(int fullSpawnCount)
-        {
-            float scaledCount = fullSpawnCount *
-                                DeepWaters.Instance.PassiveFishFrequency *
-                                UnderwaterEnemySpawner.SpawnRateScale *
-                                GetWaterContextSpawnMultiplier() *
-                                GetFishParadiseMultiplier();
-            return DeepWaterWorld.RollCount(scaledCount);
-        }
-
-        private static float GetWaterContextSpawnMultiplier()
-        {
-            return DeepWaterWorld.IsPlayerInOrAboveDeepWater(PassiveFishPlacement.MinimumColumnDepth)
-                ? 1f
-                : ShoreFishPulseMultiplier;
-        }
-
-        private static int GetMaxLiveFish()
-        {
-            bool fishParadise = DeepWaters.Instance != null && DeepWaters.Instance.FishParadise;
-            bool inLocation = IsPlayerInLoadedLocation();
-            int maxFish = DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveFish : 54;
-            int maxParadiseFish = DeepWaters.Instance != null ? DeepWaters.Instance.FishParadiseMaxLiveFish : 108;
-            if (fishParadise)
-                return inLocation ? Mathf.FloorToInt(maxParadiseFish * 0.5f) : maxParadiseFish;
-
-            return inLocation ? Mathf.FloorToInt(maxFish * 0.67f) : maxFish;
-        }
-
-        private static bool IsPlayerInLoadedLocation()
-        {
-            GameManager gameManager = GameManager.Instance;
-            return gameManager != null &&
-                   gameManager.PlayerGPS != null &&
-                   gameManager.PlayerGPS.IsPlayerInLocationRect;
-        }
-
-        private static float GetFishParadiseMultiplier()
-        {
-            return DeepWaters.Instance != null && DeepWaters.Instance.FishParadise
-                ? FishParadiseSpawnMultiplier
-                : 1f;
-        }
-
-        private static float GetFishPulseInterval()
-        {
-            return DeepWaters.Instance != null && DeepWaters.Instance.FishParadise
-                ? MinFishPulseIntervalSeconds * FishParadisePulseIntervalMultiplier
-                : MinFishPulseIntervalSeconds;
-        }
-
     }
-
 }

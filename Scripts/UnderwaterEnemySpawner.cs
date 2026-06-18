@@ -1,6 +1,7 @@
 // Project:         Iliac Puddle No More
 // License:         MIT
 
+using System.Collections.Generic;
 using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Game.Entity;
@@ -10,17 +11,17 @@ using UnityEngine;
 namespace DeepWaters
 {
     /// <summary>
-    /// Spawns aquatic enemies near the player using the same pulse shape as
-    /// passive fish: when nearby ocean exists, roll a small count and spawn in
-    /// a ring just outside immediate view.
+    /// Spawns aquatic enemies per map pixel, scattered across the pixel's water
+    /// area (same model as the passive fish). A rare boss roll seeds undead/vampire
+    /// "bosses" only in the deep open ocean.
     /// </summary>
     public static class UnderwaterEnemySpawner
     {
         // Depth-banded aquatic pool (issue 7). Each entry prefers a band of the
         // water column (fraction of max depth). Shallow coves read as living
         // water (slaughterfish, lamia sirens); the deep and abyss turn menacing
-        // as dreugh take over and the drowned dead / ice atronachs — which used
-        // to be a flat 5% everywhere — surface only down deep.
+        // as dreugh take over and the drowned dead / ice atronachs surface only
+        // down deep.
         private struct DepthAquatic
         {
             public MobileTypes Type;
@@ -61,26 +62,38 @@ namespace DeepWaters
             MobileTypes.Zombie,
             MobileTypes.IceAtronach,
         };
+		private const MobileTeams TreasureGuardTeam = MobileTeams.Undead;
+
         private const float SpawnViewportMargin = 0.08f;
-        private const float MinEnemyPulseIntervalSeconds = 10f;
-        private const float FailedEnemyRetrySeconds = 4f;
-        private const float DespawnDistance = 120f;
         private const float MinimumColumnDepth = 4f;
         private const float EnemySeafloorClearance = 2.5f;
+		private const float FloorEnemySeafloorClearance = 0.5f;
         private const float EnemySurfaceClearance = 3f;
-        private const float EnemyColumnFractionMin = 0.28f;
-        private const float EnemyColumnFractionMax = 0.78f;
-        private const int CandidateAttemptsPerSpawn = 8;
+		private const float DeepSwimmerFloorBiasStart = 0.55f;
+		private const float DeepSwimmerFloorBandTop = 0.35f;
         private const float TreasureGuardMinDistance = 8f;
         private const float TreasureGuardMaxDistance = 30f;
         private const int MaxTreasureGuardCount = 5;
         private const float EnemyFrequencyForMaxTreasureGuards = 0.6f;
 
-        public const int FullSpawnCount = 4;
-        public const float SpawnRateScale = 0.75f;
+        // Per-map-pixel population (see UnderwaterPassiveFishSpawner for the model).
+        // Total live enemies are capped by the MaxLiveEnemies setting.
+        private const int EnemyAttemptsPerPixel = 96;
+        private const float EnemyFrequencyAtMidpoint = 0.5f;
 
-        private static readonly TransientObjectTracker liveEnemies = new TransientObjectTracker();
-        private static float nextAllowedPulseTime;
+        // Rare "boss" roll: 1 in 100 of each deep-ocean enemy spawn becomes a boss,
+        // drawn 1/3 each from lich / vampire / elder vampire (vampires roll a sex).
+        private const float BossSpawnChance = 1f / 100f;
+        private const float BossMinDepthFraction = 0.6f;
+
+        private sealed class PixelEnemyGroup
+        {
+            public readonly TransientObjectTracker Enemies = new TransientObjectTracker();
+            public int AttemptsRemaining;
+        }
+
+        private static readonly Dictionary<long, PixelEnemyGroup> pixelGroups = new Dictionary<long, PixelEnemyGroup>();
+        private static readonly List<long> despawnScratch = new List<long>();
         private static bool installed;
 
         public static void Install()
@@ -92,114 +105,109 @@ namespace DeepWaters
             installed = true;
         }
 
-
         private static void OnTransientReset()
         {
-            ResetRuntimeState(true);
+            ClearAll();
         }
 
-        internal static bool CanRunFromEncounterPulse()
+        internal static int LiveCount
         {
-            return CanKeepEnemiesAlive();
-        }
-
-        internal static bool RunEncounterPulse(bool allowImmediate)
-        {
-            if (!CanKeepEnemiesAlive())
-                return false;
-
-            if (!allowImmediate && Time.time < nextAllowedPulseTime)
-                return false;
-
-            Vector3 playerPos;
-            if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
-                return false;
-
-            liveEnemies.Prune(playerPos, DespawnDistance, IsEnemyStillInWater);
-            int maxLiveEnemies = GetMaxLiveEnemies();
-            if (liveEnemies.Count >= maxLiveEnemies)
-                return true;
-
-            int targetCount = RollScaledSpawnCount(FullSpawnCount);
-            targetCount = Mathf.Min(targetCount, maxLiveEnemies - liveEnemies.Count);
-            if (targetCount <= 0)
-                return true;
-
-            int spawned = 0;
-            int attempts = 0;
-            while (spawned < targetCount && attempts < 5 * targetCount + 10)
+            get
             {
-                attempts++;
-                if (TrySpawnNearPlayer())
-                    spawned++;
+                int total = 0;
+                foreach (var kv in pixelGroups)
+                    total += kv.Value.Enemies.Count;
+                return total;
+            }
+        }
+
+        internal static bool CanPopulate()
+        {
+            return DeepWaters.Instance != null &&
+                   DeepWaterRuntime.CanRunHeavyRuntimeWork &&
+                   DeepWaters.Instance.SpawnUnderwaterEnemies &&
+                   DeepWaters.Instance.EnemyFrequency > 0f &&
+                   DeepWaterWorld.IsPlayerInExteriorWaterContext();
+        }
+
+        internal static void ClearAll()
+        {
+            foreach (var kv in pixelGroups)
+                kv.Value.Enemies.Clear();
+            pixelGroups.Clear();
+        }
+
+        internal static void TickDespawn(HashSet<long> keepKeys)
+        {
+            despawnScratch.Clear();
+            foreach (var kv in pixelGroups)
+            {
+                if (!keepKeys.Contains(kv.Key))
+                    despawnScratch.Add(kv.Key);
             }
 
-            nextAllowedPulseTime = Time.time + (spawned > 0 ? MinEnemyPulseIntervalSeconds : FailedEnemyRetrySeconds);
-            return true;
-        }
-
-        internal static void PruneFromEncounterPulse(Vector3 playerPos)
-        {
-            liveEnemies.Prune(playerPos, DespawnDistance, IsEnemyStillInWater);
-        }
-
-        internal static void ClearEncounterPulseObjects()
-        {
-            liveEnemies.Clear();
-        }
-
-        private static bool CanKeepEnemiesAlive()
-        {
-            if (DeepWaters.Instance == null)
-                return false;
-
-            if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
-                return false;
-
-            if (!DeepWaters.Instance.SpawnUnderwaterEnemies)
-                return false;
-
-            if (DeepWaters.Instance.EnemyFrequency <= 0f)
-                return false;
-
-            if (!DeepWaterWorld.IsPlayerInExteriorWaterContext())
-                return false;
-
-            return true;
-        }
-
-        private static bool TrySpawnNearPlayer()
-        {
-            Vector3 playerPos;
-            if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
-                return false;
-
-            for (int i = 0; i < CandidateAttemptsPerSpawn; i++)
+            for (int i = 0; i < despawnScratch.Count; i++)
             {
-                Vector3 spawnPoint;
-                if (Random.value >= DeepWaterWorld.FogAheadSpawnChance ||
-                    !DeepWaterWorld.TryPickFogAheadPoint(playerPos, DespawnDistance, out spawnPoint))
+                long key = despawnScratch[i];
+                pixelGroups[key].Enemies.Clear();
+                pixelGroups.Remove(key);
+            }
+        }
+
+        internal static void TickPopulate(DaggerfallTerrain dfTerrain, ref int attemptBudget)
+        {
+            if (attemptBudget <= 0 || dfTerrain == null)
+                return;
+
+            long key = DeepWaterWorld.TileKey(dfTerrain.MapPixelX, dfTerrain.MapPixelY);
+            PixelEnemyGroup group;
+            if (!pixelGroups.TryGetValue(key, out group))
+            {
+                group = new PixelEnemyGroup { AttemptsRemaining = ScaledAttemptsPerPixel() };
+                pixelGroups[key] = group;
+            }
+
+            if (group.AttemptsRemaining <= 0)
+                return;
+
+            int liveCap = EffectiveEnemyCap();
+            Vector3 origin = dfTerrain.transform.position;
+            float tileSize = DeepWaterWorld.TileWorldSize;
+
+            while (attemptBudget > 0 && group.AttemptsRemaining > 0)
+            {
+                if (LiveCount >= liveCap)
                 {
-                    spawnPoint = DeepWaterWorld.PickFrontRingPoint(
-                        playerPos,
-                        DeepWaterWorld.EncounterSpawnMinDistance,
-                        DeepWaterWorld.EncounterSpawnMaxDistance);
+                    group.AttemptsRemaining = 0;
+                    return;
                 }
 
-                Vector3 resolvedPos;
+                attemptBudget--;
+                group.AttemptsRemaining--;
+
+                float worldX = origin.x + Random.value * tileSize;
+                float worldZ = origin.z + Random.value * tileSize;
+
                 Transform parent;
+				float floorY;
+				float surfaceY;
                 float depthFraction;
-                if (!TryResolveSpawnPosition(spawnPoint.x, spawnPoint.z, out resolvedPos, out parent, out depthFraction))
+                if (!TryResolveSpawnColumn(worldX, worldZ, out floorY, out surfaceY, out parent, out depthFraction))
                     continue;
 
-                if (!DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.EncounterSpawnViewSafetyDistance, SpawnViewportMargin))
-                    continue;
+                MobileGender gender;
+                bool boss;
+                MobileTypes type = PickEnemyForDepth(depthFraction, out gender, out boss);
+				Vector3 resolvedPos = PickEnemyPosition(worldX, worldZ, floorY, surfaceY, type, depthFraction);
 
-                if (SpawnEnemy(resolvedPos, parent, PickAquaticForDepth(depthFraction)) != null)
-                    return true;
+                GameObject enemy = SpawnEnemy(resolvedPos, parent, type, gender);
+                if (enemy != null)
+                {
+                    group.Enemies.Add(enemy);
+                    if (boss)
+                        LogBossSpawn(type, gender, depthFraction);
+                }
             }
-
-            return false;
         }
 
         public static int TrySpawnRareEnemiesNearTreasureCluster(Vector3 centre)
@@ -229,37 +237,44 @@ namespace DeepWaters
                 float worldX = centre.x + Mathf.Cos(angle) * dist;
                 float worldZ = centre.z + Mathf.Sin(angle) * dist;
 
-                Vector3 resolvedPos;
                 Transform parent;
+				float floorY;
+				float surfaceY;
                 float depthFraction;
-                if (!TryResolveSpawnPosition(worldX, worldZ, out resolvedPos, out parent, out depthFraction))
+                if (!TryResolveSpawnColumn(worldX, worldZ, out floorY, out surfaceY, out parent, out depthFraction))
                     continue;
+				MobileTypes type = PickRare();
+				Vector3 resolvedPos = PickEnemyPosition(worldX, worldZ, floorY, surfaceY, type, depthFraction);
 
                 if (!DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.UnderwaterVisionDistance, SpawnViewportMargin))
                     continue;
 
-                if (SpawnEnemy(resolvedPos, parent, PickRare()) != null)
+                if (SpawnTreasureGuardEnemy(resolvedPos, parent, type) != null)
                     spawned++;
             }
 
             if (spawned == 0)
             {
-                Vector3 resolvedPos;
                 Transform parent;
+				float floorY;
+				float surfaceY;
                 float depthFraction;
-                if (TryResolveSpawnPosition(centre.x, centre.z, out resolvedPos, out parent, out depthFraction))
+                if (TryResolveSpawnColumn(centre.x, centre.z, out floorY, out surfaceY, out parent, out depthFraction))
                 {
+                    MobileTypes type = PickRare();
+					Vector3 resolvedPos = PickEnemyPosition(centre.x, centre.z, floorY, surfaceY, type, depthFraction);
                     if (DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.UnderwaterVisionDistance, SpawnViewportMargin))
-                        spawned = SpawnEnemy(resolvedPos, parent, PickRare()) != null ? 1 : 0;
+                        spawned = SpawnTreasureGuardEnemy(resolvedPos, parent, type) != null ? 1 : 0;
                 }
             }
 
             return spawned;
         }
 
-        private static bool TryResolveSpawnPosition(float worldX, float worldZ, out Vector3 worldPos, out Transform parent, out float depthFraction)
+        private static bool TryResolveSpawnColumn(float worldX, float worldZ, out float floorY, out float surfaceY, out Transform parent, out float depthFraction)
         {
-            worldPos = Vector3.zero;
+			floorY = 0f;
+			surfaceY = 0f;
             parent = null;
             depthFraction = 0f;
 
@@ -271,23 +286,79 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, worldX, worldZ, out seafloorWorldY))
                 return false;
 
-            float floorClearY = seafloorWorldY + EnemySeafloorClearance;
-            float surfaceClearY = column.OceanWorldY - EnemySurfaceClearance;
-            if (surfaceClearY - floorClearY < MinimumColumnDepth)
+            floorY = seafloorWorldY + EnemySeafloorClearance;
+            surfaceY = column.OceanWorldY - EnemySurfaceClearance;
+            if (surfaceY - floorY < MinimumColumnDepth)
                 return false;
 
             float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
             depthFraction = Mathf.Clamp01(column.Depth / maxDepth);
-
-            float t = Random.Range(EnemyColumnFractionMin, EnemyColumnFractionMax);
-            worldPos = new Vector3(worldX, Mathf.Lerp(floorClearY, surfaceClearY, t), worldZ);
             parent = column.Parent;
             return parent != null;
         }
 
-        // Depth-weighted aquatic pick (issue 7). Each candidate's weight tapers
-        // to zero outside its depth band, so shallow water stays slaughterfish/
-        // lamia and the abyss fills with dreugh and the drowned dead.
+		private static Vector3 PickEnemyPosition(float worldX, float worldZ, float floorY, float surfaceY, MobileTypes type, float depthFraction)
+		{
+			if (MustSpawnOnFloor(type))
+				return new Vector3(worldX, floorY - EnemySeafloorClearance + FloorEnemySeafloorClearance, worldZ);
+
+			float columnT = Random.value;
+			float floorBias = Mathf.Clamp01((depthFraction - DeepSwimmerFloorBiasStart) / (1f - DeepSwimmerFloorBiasStart));
+			if (floorBias > 0f)
+				columnT = Mathf.Lerp(columnT, Random.Range(0f, DeepSwimmerFloorBandTop), floorBias);
+
+			return new Vector3(worldX, Mathf.Lerp(floorY, surfaceY, columnT), worldZ);
+		}
+
+		private static bool MustSpawnOnFloor(MobileTypes type)
+		{
+			return type == MobileTypes.Zombie ||
+				type == MobileTypes.SkeletalWarrior ||
+				type == MobileTypes.IceAtronach ||
+				type == MobileTypes.Lich ||
+				type == MobileTypes.Vampire ||
+				type == MobileTypes.VampireAncient;
+		}
+
+        // Deep-ocean spawns roll 1/500 for a boss; otherwise the depth-weighted
+        // aquatic pick. Bosses are 1/3 each lich / vampire / elder vampire, the
+        // vampires rolling a male/female sprite.
+        private static MobileTypes PickEnemyForDepth(float depthFraction, out MobileGender gender, out bool boss)
+        {
+            gender = MobileGender.Unspecified;
+            boss = false;
+
+            if (depthFraction >= BossMinDepthFraction && Random.value < BossSpawnChance)
+            {
+                boss = true;
+                return PickBoss(out gender);
+            }
+
+            return PickAquaticForDepth(depthFraction);
+        }
+
+        private static void LogBossSpawn(MobileTypes type, MobileGender gender, float depthFraction)
+        {
+            Debug.Log("[DeepWaters] Boss spawned: " + type + " (" + gender + ") at depthFraction " +
+                      depthFraction.ToString("F2"));
+        }
+
+        private static MobileTypes PickBoss(out MobileGender gender)
+        {
+            int roll = Random.Range(0, 3);
+            if (roll == 0)
+            {
+                gender = MobileGender.Unspecified;
+                return MobileTypes.Lich;
+            }
+
+            gender = Random.value < 0.5f ? MobileGender.Female : MobileGender.Male;
+            return roll == 1 ? MobileTypes.Vampire : MobileTypes.VampireAncient;
+        }
+
+        // Depth-weighted aquatic pick (issue 7). Each candidate's weight tapers to
+        // zero outside its depth band, so shallow water stays slaughterfish/lamia
+        // and the abyss fills with dreugh and the drowned dead.
         private static MobileTypes PickAquaticForDepth(float depthFraction)
         {
             depthFraction = Mathf.Clamp01(depthFraction);
@@ -335,7 +406,7 @@ namespace DeepWaters
             return RareTypes[Random.Range(0, RareTypes.Length)];
         }
 
-        private static GameObject SpawnEnemy(Vector3 worldPos, Transform parent, MobileTypes type)
+        private static GameObject SpawnEnemy(Vector3 worldPos, Transform parent, MobileTypes type, MobileGender gender)
         {
             if (parent == null)
                 return null;
@@ -345,19 +416,30 @@ namespace DeepWaters
                 type.ToString(),
                 type,
                 localPos,
-                MobileGender.Unspecified,
+                gender,
                 parent);
 
             if (enemy != null)
-            {
-                ConfigureSpawnedEnemy(enemy, worldPos);
-                liveEnemies.Add(enemy);
-            }
+                ConfigureSpawnedEnemy(enemy, worldPos, type);
 
             return enemy;
         }
 
-        private static void ConfigureSpawnedEnemy(GameObject enemy, Vector3 worldPos)
+		private static GameObject SpawnTreasureGuardEnemy(Vector3 worldPos, Transform parent, MobileTypes type)
+		{
+			GameObject enemy = SpawnEnemy(worldPos, parent, type, MobileGender.Unspecified);
+			SetEnemyTeam(enemy, TreasureGuardTeam);
+			return enemy;
+		}
+
+		private static void SetEnemyTeam(GameObject enemy, MobileTeams team)
+		{
+			DaggerfallEntityBehaviour behaviour = enemy != null ? enemy.GetComponent<DaggerfallEntityBehaviour>() : null;
+			if (behaviour != null && behaviour.Entity != null)
+				behaviour.Entity.Team = team;
+		}
+
+        private static void ConfigureSpawnedEnemy(GameObject enemy, Vector3 worldPos, MobileTypes type)
         {
             if (enemy == null)
                 return;
@@ -365,6 +447,9 @@ namespace DeepWaters
             // GameObjectHelper aligns non-flying enemies with raycast ground,
             // which is correct on land but unreliable over carved ocean holes.
             // Put the enemy back at the resolved underwater position.
+			if (MustSpawnOnFloor(type))
+				worldPos = AlignFloorEnemyController(enemy, worldPos);
+
             enemy.transform.position = worldPos;
 
             EnemyMotor motor = enemy.GetComponent<EnemyMotor>();
@@ -373,40 +458,35 @@ namespace DeepWaters
                 motor.MakeEnemyHostileToAttacker(gameManager.PlayerEntityBehaviour);
         }
 
-        public static int RollScaledSpawnCount(int fullSpawnCount)
+		private static Vector3 AlignFloorEnemyController(GameObject enemy, Vector3 worldPos)
+		{
+			CharacterController controller = enemy != null ? enemy.GetComponent<CharacterController>() : null;
+			if (controller == null)
+				return worldPos;
+
+			float seafloorY = worldPos.y - FloorEnemySeafloorClearance;
+			worldPos.y = seafloorY + controller.height * 0.52f;
+			return worldPos;
+		}
+
+        private static int ScaledAttemptsPerPixel()
         {
-            float scaledCount = fullSpawnCount * DeepWaters.Instance.EnemyFrequency * SpawnRateScale *
-                                DeepWaterWorld.DepthSpawnMultiplier();
-            return DeepWaterWorld.RollCount(scaledCount);
+            float scale = DeepWaters.Instance != null
+                ? DeepWaters.Instance.EnemyFrequency / EnemyFrequencyAtMidpoint
+                : 1f;
+
+            return Mathf.Max(0, Mathf.RoundToInt(EnemyAttemptsPerPixel * scale));
         }
+
+		internal static int EffectiveEnemyCap()
+		{
+			return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveEnemies : 8;
+		}
 
         private static int RollTreasureGuardCount()
         {
             float scaledCount = MaxTreasureGuardCount * Mathf.Clamp01(DeepWaters.Instance.EnemyFrequency / EnemyFrequencyForMaxTreasureGuards);
             return Mathf.Clamp(DeepWaterWorld.RollCount(scaledCount), 0, MaxTreasureGuardCount);
         }
-
-        private static void ResetRuntimeState(bool destroyEnemies)
-        {
-            nextAllowedPulseTime = 0f;
-
-            if (destroyEnemies)
-                liveEnemies.Clear();
-        }
-
-        private static int GetMaxLiveEnemies()
-        {
-            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveEnemies : 8;
-        }
-
-        private static bool IsEnemyStillInWater(GameObject enemy)
-        {
-            DeepWaterColumn column;
-            Vector3 position = enemy.transform.position;
-            return DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column) &&
-                   column.Depth >= MinimumColumnDepth &&
-                   position.y <= column.OceanWorldY + 3f;
-        }
-
     }
 }

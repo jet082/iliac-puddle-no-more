@@ -16,6 +16,8 @@ namespace DeepWaters
         private const float SchoolMemberMaxRadius = 5f;
         private const float SchoolMemberMinSeparation = 2.2f;
         private const int SchoolPositionAttempts = 24;
+		private const float DeepFishFloorBiasStart = 0.55f;
+		private const float DeepFishFloorBandMeters = 35f;
 
         public static float GetSchoolRadius(int schoolSize)
         {
@@ -29,8 +31,15 @@ namespace DeepWaters
         {
             worldPos = Vector3.zero;
 
+            // Reserve at least the billboard's half-height as clearance above the
+            // floor and below the surface, so the fish's graphic can't poke out of
+            // water too shallow to host it.
+            float billboardHalf = 0.5f * species.BillboardHeight * species.MaxHeightMultiplier;
+            float floorClearance = Mathf.Max(SeafloorClearance, billboardHalf);
+            float surfaceClearance = Mathf.Max(SurfaceClearance, billboardHalf);
+
             float minY, maxY, oceanY;
-            if (!TryResolveColumnRange(worldX, worldZ, out minY, out maxY, out oceanY, out parent))
+            if (!TryResolveColumnRange(worldX, worldZ, floorClearance, surfaceClearance, out minY, out maxY, out oceanY, out parent))
                 return false;
 
             float y;
@@ -60,6 +69,11 @@ namespace DeepWaters
 
         private static bool TryResolveColumnRange(float worldX, float worldZ, out float minY, out float maxY, out float oceanY, out Transform parent)
         {
+            return TryResolveColumnRange(worldX, worldZ, SeafloorClearance, SurfaceClearance, out minY, out maxY, out oceanY, out parent);
+        }
+
+        private static bool TryResolveColumnRange(float worldX, float worldZ, float floorClearance, float surfaceClearance, out float minY, out float maxY, out float oceanY, out Transform parent)
+        {
             minY = 0f;
             maxY = 0f;
             oceanY = 0f;
@@ -77,8 +91,8 @@ namespace DeepWaters
                 return false;
 
             oceanY = column.OceanWorldY;
-            minY = seafloorWorldY + SeafloorClearance;
-            maxY = oceanY - SurfaceClearance;
+            minY = seafloorWorldY + floorClearance;
+            maxY = oceanY - surfaceClearance;
             if (maxY <= minY)
                 return false;
 
@@ -176,7 +190,16 @@ namespace DeepWaters
             if (hi <= lo)
                 return false;
 
-            y = oceanY - Random.Range(lo, hi);
+			float depth = Random.Range(lo, hi);
+			float columnDepthFraction = Mathf.Clamp01(availDeep / maxOceanDepth);
+			float floorBias = Mathf.Clamp01((columnDepthFraction - DeepFishFloorBiasStart) / (1f - DeepFishFloorBiasStart));
+			if (floorBias > 0f)
+			{
+				float deepLo = Mathf.Max(lo, hi - DeepFishFloorBandMeters);
+				depth = Mathf.Lerp(depth, Random.Range(deepLo, hi), floorBias);
+			}
+
+			y = oceanY - depth;
             return true;
         }
     }

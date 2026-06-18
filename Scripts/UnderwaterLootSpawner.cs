@@ -231,7 +231,7 @@ namespace DeepWaters
 
             int targetCount = Random.Range(1, 3);
             var rubbleBatches = new Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>>();
-            var usedRecords = new HashSet<int>();
+            var usedRecords = new HashSet<UnderwaterDecorationRecord>();
 
             for (int i = 0; i < targetCount; i++)
                 TryQueueLooseLootDebris(lootPos, rubbleBatches, usedRecords);
@@ -242,7 +242,7 @@ namespace DeepWaters
         private static bool TryQueueLooseLootDebris(
             Vector3 lootPos,
             Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches,
-            HashSet<int> usedRecords)
+            HashSet<UnderwaterDecorationRecord> usedRecords)
         {
             for (int attempt = 0; attempt < LooseLootDebrisSpotAttempts; attempt++)
             {
@@ -257,7 +257,7 @@ namespace DeepWaters
                 if (!UnderwaterLootPlacement.ResolveSeafloorAt(spot.x, spot.z, out spot.y, out debrisParent))
                     continue;
 
-                int record = UnderwaterLootCatalog.PickRubbleRecordExcept(usedRecords);
+                UnderwaterDecorationRecord record = UnderwaterLootCatalog.PickRubbleRecordExcept(usedRecords);
                 usedRecords.Add(record);
                 UnderwaterLootObjectFactory.QueueRubbleSprite(spot, debrisParent, rubbleBatches, record);
                 return true;
@@ -350,12 +350,7 @@ namespace DeepWaters
 
         private static int GetMaxLiveLootObjects()
         {
-            if (DeepWaters.Instance == null)
-                return 32;
-
-            return DeepWaters.Instance.TreasureCove
-                ? DeepWaters.Instance.TreasureCoveMaxLiveLootObjects
-                : DeepWaters.Instance.MaxLiveLootObjects;
+            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveLootObjects : 32;
         }
 
         // Live treasure clusters near the player, tracked by centre position so
@@ -379,12 +374,7 @@ namespace DeepWaters
 
         private static int GetMaxLiveTreasureClusters()
         {
-            if (DeepWaters.Instance == null)
-                return 3;
-
-            return DeepWaters.Instance.TreasureCove
-                ? DeepWaters.Instance.TreasureCoveMaxLiveTreasureClusters
-                : DeepWaters.Instance.MaxLiveTreasureClusters;
+            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveTreasureClusters : 3;
         }
 
     }

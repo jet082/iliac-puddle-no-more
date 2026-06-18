@@ -13,7 +13,6 @@ namespace DeepWaters
         private const float EnemyFrequencyAtMidpoint = 0.5f;
         private const float PassiveFishFrequencyAtMidpoint = 3.0f;
         private const float DecorationFrequencyAtMidpoint = 3.75f;
-        private const float PassiveFishLiveCapMultiplier = 1.5f;
         private const float SeafloorLootRateAtMidpoint = 0.7f;
         private const float TreasureClusterRateAtMidpoint = 0.1f;
         private const float UnderwaterFogDensityMaxAtMidpoint = 0.014f;
@@ -43,19 +42,15 @@ namespace DeepWaters
         public float EnemyFrequency { get; private set; } = EnemyFrequencyAtMidpoint;
         public float PassiveFishFrequency { get; private set; } = PassiveFishFrequencyAtMidpoint;
         public int MaxLiveFish { get; private set; } = 54;
-        public int FishParadiseMaxLiveFish { get; private set; } = 108;
-        public bool FishParadise { get; private set; }
         public bool SpawnUnderwaterDecorations { get; private set; } = true;
         public int DecorationPopulateRadius { get; private set; } = 1;
         public float DecorationFrequency { get; private set; } = DecorationFrequencyAtMidpoint;
         public float SeafloorLootRate { get; private set; } = SeafloorLootRateAtMidpoint;
         public int MaxLiveLootObjects { get; private set; } = 32;
-        public int TreasureCoveMaxLiveLootObjects { get; private set; } = 64;
         public int MaxStrayLootPerPulse { get; private set; } = 12;
         public int TreasureCoveMaxStrayLootPerPulse { get; private set; } = 18;
         public float TreasureClusterRate { get; private set; } = TreasureClusterRateAtMidpoint;
         public int MaxLiveTreasureClusters { get; private set; } = 3;
-        public int TreasureCoveMaxLiveTreasureClusters { get; private set; } = 8;
         public bool TreasureCove { get; private set; }
         public int LootSpawnMinDistance { get; private set; } = 42;
         public int LootSpawnMaxDistance { get; private set; } = 72;
@@ -169,24 +164,14 @@ namespace DeepWaters
             EnemyFrequency = GetScaledSliderSetting(s, "EnemyFrequency", EnemyFrequencyAtMidpoint);
             MaxLiveEnemies = Mathf.Max(0, GetIntSetting(s, "MaxLiveEnemies"));
             PassiveFishFrequency = GetScaledSliderSetting(s, "PassiveFishFrequency", PassiveFishFrequencyAtMidpoint);
-            MaxLiveFish = Mathf.Clamp(
-                Mathf.RoundToInt(GetIntSetting(s, "MaxLiveFish") * PassiveFishLiveCapMultiplier),
-                0,
-                180);
-            FishParadiseMaxLiveFish = Mathf.Clamp(
-                Mathf.RoundToInt(GetIntSetting(s, "FishParadiseMaxLiveFish") * PassiveFishLiveCapMultiplier),
-                0,
-                240);
-            FishParadise = GetBoolSetting(s, "FishParadise");
+            MaxLiveFish = Mathf.Clamp(GetIntSetting(s, "MaxLiveFish"), 0, 360);
             SpawnUnderwaterDecorations = GetBoolSetting(s, "SpawnUnderwaterDecorations");
             DecorationPopulateRadius = Mathf.Clamp(GetIntSetting(s, "DecorationPopulateRadius"), 1, 3);
             DecorationFrequency = GetScaledSliderSetting(s, "DecorationFrequency", DecorationFrequencyAtMidpoint);
             SeafloorLootRate = GetScaledSliderSetting(s, "SeafloorLootRate", SeafloorLootRateAtMidpoint);
             MaxLiveLootObjects = Mathf.Max(0, GetIntSetting(s, "MaxLiveLootObjects"));
-            TreasureCoveMaxLiveLootObjects = Mathf.Max(0, GetIntSetting(s, "TreasureCoveMaxLiveLootObjects"));
             TreasureClusterRate = GetScaledSliderSetting(s, "TreasureClusterRate", TreasureClusterRateAtMidpoint);
             MaxLiveTreasureClusters = Mathf.Max(0, GetIntSetting(s, "MaxLiveTreasureClusters"));
-            TreasureCoveMaxLiveTreasureClusters = Mathf.Max(0, GetIntSetting(s, "TreasureCoveMaxLiveTreasureClusters"));
             TreasureCove = GetBoolSetting(s, "TreasureCove");
             WaterSurfaceTopTransparency = GetFloatSetting(s, "WaterSurfaceTopTransparency");
             WaterSurfaceBottomTransparency = GetFloatSetting(s, "WaterSurfaceBottomTransparency");

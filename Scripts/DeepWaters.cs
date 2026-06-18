@@ -101,6 +101,7 @@ namespace DeepWaters
 
         void Update()
         {
+			DeepWaterConsoleCommands.RegisterCommands();
             DeepWaterRuntime.PumpPostTransitionRefresh();
             DeepWaterLocationUpdateSkipper.PumpDeferredRestore();
         }
