@@ -46,17 +46,31 @@ namespace DeepWaters
             // the same interpolation source. Falls back to the bathymetry
             // function (via TryGetWaterColumn) if the mesh isn't ready.
             DeepWaterFloorMesh floorMesh = dfTerrain.GetComponentInChildren<DeepWaterFloorMesh>();
+			DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+			int climateIndex = tile != null ? tile.ClimateIndex : 0;
+			int totalPasses = DecorationPassesForBiome(passes, climateIndex);
 
-            for (int i = 0; i < passes; i++)
-                GenerateBillboardPositions(dfTerrain, terrainData, floorMesh, positions, spacingGrid);
+            for (int i = 0; i < totalPasses; i++)
+                GenerateBillboardPositions(dfTerrain, terrainData, floorMesh, climateIndex, positions, spacingGrid);
 
             return positions;
         }
+
+		private static int DecorationPassesForBiome(int passes, int climateIndex)
+		{
+			if (passes <= 0)
+				return 0;
+
+			return PassiveFishSpeciesCatalog.ClimateToBiome(climateIndex) == WaterBiome.OpenOcean
+				? Mathf.CeilToInt(passes * 1.35f)
+				: passes;
+		}
 
         private static void GenerateBillboardPositions(
             DaggerfallTerrain dfTerrain,
             TerrainData terrainData,
             DeepWaterFloorMesh floorMesh,
+			int climateIndex,
             List<UnderwaterDecorationPlacementInfo> positions,
             Dictionary<int, List<Vector2>> spacingGrid)
         {
@@ -67,11 +81,6 @@ namespace DeepWaters
             int hDim1 = heights.GetLength(1);
             float oceanThresholdNormalised = sampler.OceanElevation / sampler.MaxTerrainHeight;
             Vector3 origin = dfTerrain.transform.position;
-
-            // One climate per tile drives its decoration biome flavour. (issue 6)
-            DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
-            int climateIndex = tile != null ? tile.ClimateIndex : 0;
-
             for (int gy = 0; gy < hDim0 - 1; gy += SampleStride)
             for (int gx = 0; gx < hDim1 - 1; gx += SampleStride)
             {

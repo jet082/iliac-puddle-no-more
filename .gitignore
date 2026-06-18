@@ -5,3 +5,5 @@ Diagnostics/WodExactWaterMasks.bytes
 .claude
 .claude/settings.local.json
 Scripts/Editor/DeepWatersBatchModBuilder.cs
+Diagnostics/*
+Diagnostics/
