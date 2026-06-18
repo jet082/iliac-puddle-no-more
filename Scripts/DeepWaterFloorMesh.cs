@@ -25,7 +25,7 @@ namespace DeepWaters
         // shallow saves like jjj because it undersampled the detail layer.
         public const int VertexGridSize = 65;
         private const float WallMinimumDrop = 0.25f;
-        private const float ShoreWallSurfaceInset = -0.05f;
+        private const float ShoreWallSurfaceInset = 0.15f;
         private const float ShoreWallBottomOverlap = 0.10f;
         private const float ShoreWallTopTextureStrength = 0.35f;
         // Continuous shore skirt. Keep it short and deterministic so stream
@@ -38,6 +38,7 @@ namespace DeepWaters
         private const float BoundaryMixedShoreWallMaxDistanceMeters = 48f;
         private const float ShoreTerrainFitMeters = 180f;
         private const float ShoreTerrainFitClearance = 0.15f;
+        private const float FloorSurfaceClearanceMeters = 1.0f; // keep near-shore floor under the surface so water tints it
 
         private Mesh mesh;
         private MeshCollider meshCollider;
@@ -169,6 +170,7 @@ namespace DeepWaters
                         shoreDistance,
                         terrainOrigin,
                         tileWorldSize);
+                    localY = Mathf.Min(localY, oceanLocalY - FloorSurfaceClearanceMeters);
                     depth = Mathf.Max(0f, oceanLocalY - localY);
 
                     vertices.Add(new Vector3(localX, localY, localZ));

@@ -420,7 +420,8 @@ namespace DeepWaters
                    string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(saveName, "rrr", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase);
+                   string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(saveName, "ttt", StringComparison.OrdinalIgnoreCase);
         }
 
         private IEnumerator RunTargetedScenario(string saveName)
@@ -434,7 +435,8 @@ namespace DeepWaters
                 string.Equals(saveName, "nnn", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(saveName, "rrr", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase))
+                string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(saveName, "ttt", StringComparison.OrdinalIgnoreCase))
             {
                 string visualPhase = saveName.ToLowerInvariant() + "_shoreline_visual";
                 yield return RunStationaryPhase(saveName, visualPhase, TargetedVisualHoldSeconds);
@@ -702,6 +704,7 @@ namespace DeepWaters
             WriteSnapshot(saveName, "screenshot", safeLabel);
             LogTerrainSurfaceSnapshot(saveName, safeLabel);
             LogShoreProfileSnapshot(saveName, safeLabel);
+            LogClassificationGrid(saveName, safeLabel);
             yield return new WaitForEndOfFrame();
             ScreenCapture.CaptureScreenshot(path);
             Debug.Log("[DeepWaters.Diagnostics] Screenshot: " + path);
@@ -841,6 +844,139 @@ namespace DeepWaters
             File.AppendAllText(
                 Path.Combine(dir, "shore-profiles.log"),
                 DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) + " " + line + Environment.NewLine);
+        }
+
+        // Definitive per-texel classification dump for the camera's tile and its
+        // north neighbour (where the shore spit continues). Two aligned grids per
+        // tile: terrain height above ocean, and a 3-bit classifier code
+        // localWater|baked|carved ('0'=all land .. '7'=all water). North is at the
+        // top, west on the left; 'C' marks the camera cell.
+        private static void LogClassificationGrid(string saveName, string label)
+        {
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null || gameManager.PlayerObject == null)
+                return;
+
+            Vector3 player = gameManager.PlayerObject.transform.position;
+            float tileWorldSize = DeepWaterWorld.TileWorldSize;
+            if (tileWorldSize <= 0f)
+                return;
+
+            float oceanY;
+            if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+                oceanY = player.y;
+
+            var sb = new StringBuilder();
+            sb.Append("[DeepWaters.Diagnostics] ClassGrid save=").Append(saveName)
+              .Append(" label=").Append(label)
+              .Append(" player=").Append(VectorString(player))
+              .Append(" oceanY=").Append(oceanY.ToString("F2", CultureInfo.InvariantCulture))
+              .Append(Environment.NewLine)
+              .Append("height: ' '=submerged '.'<0.25 ':'<0.5 '-'<1 '+'<2 '#'>=2  (above ocean, m)")
+              .Append(Environment.NewLine)
+              .Append("class:  bit0=localWater bit1=baked bit2=carved  ('0'=all land '7'=all water)  C=camera")
+              .Append(Environment.NewLine);
+
+            AppendTileGrid(sb, player.x, player.z, tileWorldSize, oceanY, player);
+            AppendTileGrid(sb, player.x, player.z + tileWorldSize, tileWorldSize, oceanY, player);
+
+            string text = sb.ToString();
+            Debug.Log(text);
+
+            string dir = Path.Combine(Application.persistentDataPath, "DeepWatersDiagnostics");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(
+                Path.Combine(dir, "classification-grids.log"),
+                DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) + " " + text + Environment.NewLine);
+        }
+
+        private static void AppendTileGrid(
+            StringBuilder sb, float sampleX, float sampleZ, float tileWorldSize, float oceanY, Vector3 player)
+        {
+            DaggerfallTerrain dfTerrain;
+            Terrain terrain;
+            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(sampleX, sampleZ, out dfTerrain, out terrain) ||
+                dfTerrain == null || terrain == null)
+            {
+                sb.Append("tile @(").Append(sampleX.ToString("F0", CultureInfo.InvariantCulture)).Append(",")
+                  .Append(sampleZ.ToString("F0", CultureInfo.InvariantCulture)).Append("): not loaded")
+                  .Append(Environment.NewLine);
+                return;
+            }
+
+            const int n = 64;
+            Vector3 origin = dfTerrain.transform.position;
+            DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+
+            // Cap renderer's own data source + decoding, so we see its per-cell verdict.
+            Color32[] tileMap = dfTerrain.TileMap;
+            int tmDim = tileMap != null ? Mathf.RoundToInt(Mathf.Sqrt(tileMap.Length)) : 0;
+            Material mat = terrain.materialTemplate;
+            bool textureArray = mat != null && mat.shader != null && mat.shader.name.Contains("TextureArray");
+
+            int camX = Mathf.FloorToInt((player.x - origin.x) / tileWorldSize * n);
+            int camZ = Mathf.FloorToInt((player.z - origin.z) / tileWorldSize * n);
+
+            sb.Append("=== tile ").Append(dfTerrain.MapPixelX).Append(":").Append(dfTerrain.MapPixelY)
+              .Append(" (n=").Append(n).Append(", ~").Append((tileWorldSize / n).ToString("F0", CultureInfo.InvariantCulture))
+              .Append("m/cell, north=top) ===").Append(Environment.NewLine);
+
+            var heightRows = new StringBuilder();
+            var classRows = new StringBuilder();
+            var capRows = new StringBuilder();
+            for (int cz = n - 1; cz >= 0; cz--)
+            {
+                float fracZ = (cz + 0.5f) / n;
+                for (int cx = 0; cx < n; cx++)
+                {
+                    float fracX = (cx + 0.5f) / n;
+                    float worldX = origin.x + fracX * tileWorldSize;
+                    float worldZ = origin.z + fracZ * tileWorldSize;
+                    bool isCam = cx == camX && cz == camZ;
+
+                    float terrainY = terrain.SampleHeight(new Vector3(worldX, 0f, worldZ)) + origin.y;
+                    float above = terrainY - oceanY;
+                    heightRows.Append(isCam ? 'C' : HeightChar(above));
+
+                    int lw = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) ? 1 : 0;
+                    int bk = tile != null && tile.IsBakedWater(worldX, worldZ) ? 2 : 0;
+                    int cv = tile != null && tile.IsCarvedWater(worldX, worldZ) ? 4 : 0;
+                    classRows.Append(isCam ? 'C' : (char)('0' + (lw | bk | cv)));
+
+                    // Cap renderer per-cell verdict: '.'=not a clip-water texel,
+                    // 'X'=water texel that IS clipped, 'W'=water texel NOT clipped (pokes).
+                    char capChar = '.';
+                    if (tileMap != null && tmDim > 0)
+                    {
+                        int tx = Mathf.Clamp((int)(fracX * tmDim), 0, tmDim - 1);
+                        int tz = Mathf.Clamp((int)(fracZ * tmDim), 0, tmDim - 1);
+                        byte a = tileMap[tz * tmDim + tx].a;
+                        if (DeepWaterTerrainCapRenderer.IsClippedWaterTileData(a, textureArray))
+                        {
+                            capChar = DeepWaterTerrainCapRenderer.ShouldClipPromotedWaterTexel(
+                                dfTerrain, a, textureArray, tx, tz, tmDim) ? 'X' : 'W';
+                        }
+                    }
+                    capRows.Append(isCam ? 'C' : capChar);
+                }
+                heightRows.Append(Environment.NewLine);
+                classRows.Append(Environment.NewLine);
+                capRows.Append(Environment.NewLine);
+            }
+
+            sb.Append("[HEIGHT]").Append(Environment.NewLine).Append(heightRows)
+              .Append("[CLASS]").Append(Environment.NewLine).Append(classRows)
+              .Append("[CAP] .=not-water-texel X=clipped W=water-NOT-clipped(pokes)").Append(Environment.NewLine).Append(capRows);
+        }
+
+        private static char HeightChar(float aboveOcean)
+        {
+            if (aboveOcean <= 0f) return ' ';
+            if (aboveOcean < 0.25f) return '.';
+            if (aboveOcean < 0.5f) return ':';
+            if (aboveOcean < 1f) return '-';
+            if (aboveOcean < 2f) return '+';
+            return '#';
         }
 
         private void WriteSnapshot(string saveName, string phase, string eventName)
