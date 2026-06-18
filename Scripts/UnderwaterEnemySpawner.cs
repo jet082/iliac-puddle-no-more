@@ -44,13 +44,16 @@ namespace DeepWaters
         {
             new DepthAquatic(MobileTypes.Slaughterfish, 60, 0.00f, 0.70f),
             new DepthAquatic(MobileTypes.Lamia,         18, 0.00f, 0.45f),
+			new DepthAquatic(MobileTypes.Nymph,         10, 0.00f, 0.55f),
             new DepthAquatic(MobileTypes.Dreugh,        25, 0.15f, 1.00f),
             new DepthAquatic(MobileTypes.Zombie,         6, 0.40f, 1.00f),
             new DepthAquatic(MobileTypes.SkeletalWarrior,7, 0.45f, 1.00f),
             new DepthAquatic(MobileTypes.Ghost,          7, 0.50f, 1.00f),
-            new DepthAquatic(MobileTypes.Wraith,         5, 0.60f, 1.00f),
-            new DepthAquatic(MobileTypes.IceAtronach,    4, 0.70f, 1.00f),
-        };
+			new DepthAquatic(MobileTypes.Wraith,         5, 0.60f, 1.00f),
+			new DepthAquatic(MobileTypes.IceAtronach,    4, 0.70f, 1.00f),
+			new DepthAquatic(MobileTypes.Vampire,        3, 0.75f, 1.00f),
+			new DepthAquatic(MobileTypes.Lich,           2, 0.85f, 1.00f),
+		};
 
         // Treasure-cluster guards are always the dangerous deep types regardless
         // of where the cluster sits.
@@ -59,9 +62,11 @@ namespace DeepWaters
             MobileTypes.Ghost,
             MobileTypes.SkeletalWarrior,
             MobileTypes.Wraith,
-            MobileTypes.Zombie,
-            MobileTypes.IceAtronach,
-        };
+			MobileTypes.Zombie,
+			MobileTypes.IceAtronach,
+			MobileTypes.Vampire,
+			MobileTypes.Lich,
+		};
 		private const MobileTeams TreasureGuardTeam = MobileTeams.Undead;
 
         private const float SpawnViewportMargin = 0.08f;
@@ -81,10 +86,11 @@ namespace DeepWaters
         private const int EnemyAttemptsPerPixel = 96;
         private const float EnemyFrequencyAtMidpoint = 0.5f;
 
-        // Rare "boss" roll: 1 in 100 of each deep-ocean enemy spawn becomes a boss,
-        // drawn 1/3 each from lich / vampire / elder vampire (vampires roll a sex).
+		// Rare "boss" roll: 1 in 100 of each deep-ocean enemy spawn becomes
+		// an ancient lich or ancient vampire.
         private const float BossSpawnChance = 1f / 100f;
         private const float BossMinDepthFraction = 0.6f;
+		private const float TreasureGuardBossChance = 1f / 50f;
 
         private sealed class PixelEnemyGroup
         {
@@ -222,12 +228,16 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
                 return 0;
 
+			bool includeBoss = Random.value < TreasureGuardBossChance;
             int targetCount = RollTreasureGuardCount();
+			if (includeBoss)
+				targetCount = Mathf.Max(1, targetCount);
             if (targetCount <= 0)
                 return 0;
 
             int spawned = 0;
             int attempts = 0;
+			bool bossSpawned = false;
             while (spawned < targetCount && attempts < 8 * targetCount + 15)
             {
                 attempts++;
@@ -240,17 +250,22 @@ namespace DeepWaters
                 Transform parent;
 				float floorY;
 				float surfaceY;
-                float depthFraction;
+				float depthFraction;
                 if (!TryResolveSpawnColumn(worldX, worldZ, out floorY, out surfaceY, out parent, out depthFraction))
                     continue;
-				MobileTypes type = PickRare();
+				MobileGender gender;
+				MobileTypes type = PickTreasureGuardType(includeBoss, bossSpawned, out gender);
 				Vector3 resolvedPos = PickEnemyPosition(worldX, worldZ, floorY, surfaceY, type, depthFraction);
 
                 if (!DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.UnderwaterVisionDistance, SpawnViewportMargin))
                     continue;
 
-                if (SpawnTreasureGuardEnemy(resolvedPos, parent, type) != null)
-                    spawned++;
+				if (SpawnTreasureGuardEnemy(resolvedPos, parent, type, gender) != null)
+				{
+					if (includeBoss && !bossSpawned)
+						bossSpawned = true;
+					spawned++;
+				}
             }
 
             if (spawned == 0)
@@ -261,10 +276,11 @@ namespace DeepWaters
                 float depthFraction;
                 if (TryResolveSpawnColumn(centre.x, centre.z, out floorY, out surfaceY, out parent, out depthFraction))
                 {
-                    MobileTypes type = PickRare();
+					MobileGender gender;
+                    MobileTypes type = PickTreasureGuardType(includeBoss, bossSpawned, out gender);
 					Vector3 resolvedPos = PickEnemyPosition(centre.x, centre.z, floorY, surfaceY, type, depthFraction);
                     if (DeepWaterWorld.IsOutsideImmediateView(resolvedPos, playerPos, DeepWaterWorld.UnderwaterVisionDistance, SpawnViewportMargin))
-                        spawned = SpawnTreasureGuardEnemy(resolvedPos, parent, type) != null ? 1 : 0;
+                        spawned = SpawnTreasureGuardEnemy(resolvedPos, parent, type, gender) != null ? 1 : 0;
                 }
             }
 
@@ -315,14 +331,15 @@ namespace DeepWaters
 			return type == MobileTypes.Zombie ||
 				type == MobileTypes.SkeletalWarrior ||
 				type == MobileTypes.IceAtronach ||
+				type == MobileTypes.Nymph ||
 				type == MobileTypes.Lich ||
+				type == MobileTypes.AncientLich ||
 				type == MobileTypes.Vampire ||
 				type == MobileTypes.VampireAncient;
 		}
 
-        // Deep-ocean spawns roll 1/500 for a boss; otherwise the depth-weighted
-        // aquatic pick. Bosses are 1/3 each lich / vampire / elder vampire, the
-        // vampires rolling a male/female sprite.
+        // Deep-ocean spawns roll for a boss; otherwise the depth-weighted
+        // aquatic pick.
         private static MobileTypes PickEnemyForDepth(float depthFraction, out MobileGender gender, out bool boss)
         {
             gender = MobileGender.Unspecified;
@@ -343,18 +360,11 @@ namespace DeepWaters
                       depthFraction.ToString("F2"));
         }
 
-        private static MobileTypes PickBoss(out MobileGender gender)
-        {
-            int roll = Random.Range(0, 3);
-            if (roll == 0)
-            {
-                gender = MobileGender.Unspecified;
-                return MobileTypes.Lich;
-            }
-
-            gender = Random.value < 0.5f ? MobileGender.Female : MobileGender.Male;
-            return roll == 1 ? MobileTypes.Vampire : MobileTypes.VampireAncient;
-        }
+		private static MobileTypes PickBoss(out MobileGender gender)
+		{
+			gender = MobileGender.Unspecified;
+			return Random.value < 0.5f ? MobileTypes.AncientLich : MobileTypes.VampireAncient;
+		}
 
         // Depth-weighted aquatic pick (issue 7). Each candidate's weight tapers to
         // zero outside its depth band, so shallow water stays slaughterfish/lamia
@@ -406,6 +416,15 @@ namespace DeepWaters
             return RareTypes[Random.Range(0, RareTypes.Length)];
         }
 
+		private static MobileTypes PickTreasureGuardType(bool includeBoss, bool bossSpawned, out MobileGender gender)
+		{
+			if (includeBoss && !bossSpawned)
+				return PickBoss(out gender);
+
+			gender = MobileGender.Unspecified;
+			return PickRare();
+		}
+
         private static GameObject SpawnEnemy(Vector3 worldPos, Transform parent, MobileTypes type, MobileGender gender)
         {
             if (parent == null)
@@ -425,9 +444,9 @@ namespace DeepWaters
             return enemy;
         }
 
-		private static GameObject SpawnTreasureGuardEnemy(Vector3 worldPos, Transform parent, MobileTypes type)
+		private static GameObject SpawnTreasureGuardEnemy(Vector3 worldPos, Transform parent, MobileTypes type, MobileGender gender)
 		{
-			GameObject enemy = SpawnEnemy(worldPos, parent, type, MobileGender.Unspecified);
+			GameObject enemy = SpawnEnemy(worldPos, parent, type, gender);
 			SetEnemyTeam(enemy, TreasureGuardTeam);
 			return enemy;
 		}

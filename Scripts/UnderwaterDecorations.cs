@@ -210,11 +210,11 @@ namespace DeepWaters
             if (!DeepWaterRuntime.CanRunLightRuntimeWork)
                 return;
 
-            if (!IsWithinPopulateRadius(sender))
-                return;
+			if (!IsWithinPopulateRadius(sender))
+				return;
 
-            Enqueue(sender);
-        }
+			Enqueue(sender);
+		}
 
         private static bool IsWithinPopulateRadius(DaggerfallTerrain dfTerrain)
         {
@@ -229,9 +229,9 @@ namespace DeepWaters
                    System.Math.Abs(dy) <= populateRadius;
         }
 
-        private static int GetPopulateRadius(StreamingWorld streamingWorld)
-        {
-            int radius = DeepWaters.Instance != null ? DeepWaters.Instance.DecorationPopulateRadius : 1;
+		private static int GetPopulateRadius(StreamingWorld streamingWorld)
+		{
+			int radius = DeepWaters.Instance != null ? DeepWaters.Instance.DecorationPopulateRadius : 1;
             return Mathf.Clamp(radius, 1, 3);
         }
         

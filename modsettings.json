@@ -40,7 +40,7 @@
                 },
                 {
                     "Min": 0,
-                    "Max": 128,
+                    "Max": 256,
                     "Value": 8,
                     "Name": "MaxLiveEnemies",
                     "Description": "Maximum live underwater enemies near the player.",

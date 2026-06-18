@@ -24,11 +24,11 @@ namespace DeepWaters
         private const float PopulateRadius = 200f;
         private const float DespawnRadius = 300f;
         // Per-pixel, per-tick attempt caps. Every in-range pixel gets a few
-        // attempts each tick so the live-cap budget fills all of them in parallel
-        // (even spread) rather than the nearest pixel eating the whole cap.
-        private const int FishAttemptsPerPixelPerTick = 6;
-        private const int EnemyAttemptsPerPixelPerTick = 12;
-        private const float DisableClearGraceSeconds = 2f;
+		// attempts each tick so the live-cap budget fills all of them in parallel
+		// (even spread) rather than the nearest pixel eating the whole cap.
+		private const int FishAttemptsPerPixelPerTick = 6;
+		private const int EnemyAttemptsPerPixelPerTick = 12;
+		private const float DisableClearGraceSeconds = 2f;
 
         private static GameObject driverObject;
         private static float nextTickTime;
@@ -49,20 +49,20 @@ namespace DeepWaters
 
         public static void Install()
         {
-            if (installed)
-                return;
+			if (installed)
+				return;
 
-            DeepWaterRuntime.OnTransientReset += ResetState;
+			DeepWaterRuntime.OnTransientReset += ResetState;
 
-            if (driverObject == null)
-            {
+			if (driverObject == null)
+			{
                 driverObject = new GameObject("DeepWaters_EncounterPulseDriver");
                 driverObject.AddComponent<EncounterPulseDriver>();
                 Object.DontDestroyOnLoad(driverObject);
             }
 
-            installed = true;
-        }
+			installed = true;
+		}
 
         private class EncounterPulseDriver : MonoBehaviour
         {
@@ -158,13 +158,13 @@ namespace DeepWaters
             return a.EdgeDistance.CompareTo(b.EdgeDistance);
         }
 
-        private static bool IsWaterPixel(DaggerfallTerrain dfTerrain)
-        {
-            DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
-            return tile != null && tile.IsOceanConnected && tile.HasDistanceField;
-        }
+		private static bool IsWaterPixel(DaggerfallTerrain dfTerrain)
+		{
+			DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+			return tile != null && tile.IsOceanConnected && tile.HasDistanceField;
+		}
 
-        private static float NearestEdgeDistance(Vector3 playerPos, float originX, float originZ, float size)
+		private static float NearestEdgeDistance(Vector3 playerPos, float originX, float originZ, float size)
         {
             float dx = Mathf.Max(originX - playerPos.x, 0f, playerPos.x - (originX + size));
             float dz = Mathf.Max(originZ - playerPos.z, 0f, playerPos.z - (originZ + size));
