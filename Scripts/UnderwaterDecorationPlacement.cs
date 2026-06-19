@@ -47,7 +47,7 @@ namespace DeepWaters
             // function (via TryGetWaterColumn) if the mesh isn't ready.
             DeepWaterFloorMesh floorMesh = dfTerrain.GetComponentInChildren<DeepWaterFloorMesh>();
 			DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
-			int climateIndex = tile != null ? tile.ClimateIndex : 0;
+			int climateIndex = tile != null ? tile.BiomeClimateIndex : 0;
 			int totalPasses = DecorationPassesForBiome(passes, climateIndex);
 
             for (int i = 0; i < totalPasses; i++)

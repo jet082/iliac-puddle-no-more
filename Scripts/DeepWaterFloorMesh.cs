@@ -39,6 +39,7 @@ namespace DeepWaters
         private const float ShoreTerrainFitMeters = 180f;
         private const float ShoreTerrainFitClearance = 0.15f;
         private const float FloorSurfaceClearanceMeters = 1.0f; // keep near-shore floor under the surface so water tints it
+		private const float TextureUvCycleMeters = 4096f;
 
         private Mesh mesh;
         private MeshCollider meshCollider;
@@ -178,11 +179,9 @@ namespace DeepWaters
 
                     colors.Add(CreateVertexColor(depth, vertexClimateBand, shoreDistance));
 
-                    // UV in world-meter local coordinates. The shader
-                    // multiplies by _TextureWorldScale (= 1 / meters-per-tile)
-                    // so the regional texture tiles consistently with the
-                    // surrounding land terrain.
-                    uvs.Add(new Vector2(localX, localZ));
+                    // UVs share the bathymetry's map-pixel-anchored space, so
+                    // texture phase does not restart on every streamed tile.
+                    uvs.Add(TextureUv(noiseX, noiseZ));
                 }
             }
 
@@ -481,6 +480,9 @@ namespace DeepWaters
             float sampleX = terrainOrigin.x + (x + 0.5f + dx) * cellWidth;
             float sampleZ = terrainOrigin.z + (z + 0.5f + dz) * cellHeight;
 
+			if (tileData.UsesLocalWaterFallback)
+				return true;
+
             // Phase B path (v4 bake with fine mask): the neighbor carves
             // when the global bake says the cross-boundary sample is carved
             // water. Do not depend on the neighboring DaggerfallTerrain being
@@ -739,13 +741,24 @@ namespace DeepWaters
             topIndex[key] = vertices.Count;
             vertices.Add(new Vector3(localX, topY, localZ));
             colors.Add(CreateVertexColor(topDepth, topClimateBand, topDistance, ShoreWallTopTextureStrength));
-            uvs.Add(new Vector2(localX, localZ));
+            float topUvX, topUvZ;
+            tileData.GetNoiseWorldCoords(worldX, worldZ, out topUvX, out topUvZ);
+            uvs.Add(TextureUv(topUvX, topUvZ));
 
             bottomIndex[key] = vertices.Count;
             vertices.Add(new Vector3(bottomLocalX, bottomY, bottomLocalZ));
             colors.Add(CreateVertexColor(wallColorDepth, wallColorClimate, wallColorDistance));
-            uvs.Add(new Vector2(bottomLocalX, bottomLocalZ));
+            float bottomUvX, bottomUvZ;
+            tileData.GetNoiseWorldCoords(bottomWorldX, bottomWorldZ, out bottomUvX, out bottomUvZ);
+            uvs.Add(TextureUv(bottomUvX, bottomUvZ));
         }
+
+		private static Vector2 TextureUv(float stableX, float stableZ)
+		{
+			return new Vector2(
+				Mathf.Repeat(stableX, TextureUvCycleMeters),
+				Mathf.Repeat(stableZ, TextureUvCycleMeters));
+		}
 
         // Vanilla terrain local-Y at a tile fraction, from the promoted
         // heightmap. The floor mesh shares the terrain's local space, where
@@ -957,7 +970,8 @@ namespace DeepWaters
             var mr = GetComponent<MeshRenderer>();
             if (mr == null) return;
 
-            int worldClimate = dfTerrain != null ? dfTerrain.MapData.worldClimate : MapsFile.DefaultClimate;
+            int worldClimate = tileData != null ? tileData.BiomeClimateIndex :
+				(dfTerrain != null ? dfTerrain.MapData.worldClimate : MapsFile.DefaultClimate);
             mr.sharedMaterial = DeepWaterFloorMaterial.GetMaterial(worldClimate);
             DeepWaterRendering.DisableShadows(mr);
         }

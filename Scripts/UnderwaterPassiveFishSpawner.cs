@@ -260,7 +260,7 @@ namespace DeepWaters
                 ? column.DaggerfallTerrain.GetComponent<DeepWaterTileData>()
                 : null;
             if (tile != null)
-                climateIndex = tile.ClimateIndex;
+                climateIndex = tile.BiomeClimateIndex;
 
             float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
             depthFraction = Mathf.Clamp01(column.Depth / maxDepth);

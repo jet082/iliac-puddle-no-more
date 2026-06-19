@@ -176,7 +176,7 @@ namespace DeepWaters
         private const float UnderwaterOffset = -8f;
         private const float AboveWaterOffset = 8f;
         private const float TargetedScenarioSeconds = 35f;
-        private const float TargetedVisualHoldSeconds = 12f;
+        private const float TargetedVisualHoldSeconds = 5f;
         private const float TargetedScreenshotIntervalSeconds = 5f;
 
         private readonly List<MetricWindow> windows = new List<MetricWindow>();
@@ -502,7 +502,9 @@ namespace DeepWaters
                    string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(saveName, "rrr", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "ttt", StringComparison.OrdinalIgnoreCase);
+                   string.Equals(saveName, "ttt", StringComparison.OrdinalIgnoreCase) ||
+				   string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase) ||
+				   IsBiomeVisualProbeSave(saveName);
         }
 
         private IEnumerator RunTargetedScenario(string saveName)
@@ -517,11 +519,19 @@ namespace DeepWaters
                 string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(saveName, "rrr", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "ttt", StringComparison.OrdinalIgnoreCase))
+                string.Equals(saveName, "ttt", StringComparison.OrdinalIgnoreCase) ||
+				IsBiomeVisualProbeSave(saveName))
             {
                 string visualPhase = saveName.ToLowerInvariant() + "_shoreline_visual";
                 yield return RunStationaryPhase(saveName, visualPhase, TargetedVisualHoldSeconds);
                 yield return CaptureDiagnosticScreenshot(saveName, "shoreline-hold");
+				if (string.Equals(saveName, "desert", StringComparison.OrdinalIgnoreCase))
+				{
+					yield return CaptureOffsetYawScreenshot(saveName, "left-look", -90f);
+					yield return CaptureOffsetYawScreenshot(saveName, "right-look", 90f);
+				}
+				if (string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase))
+					yield return CaptureOffsetYawScreenshot(saveName, "right-look", 90f);
                 yield break;
             }
 
@@ -538,12 +548,25 @@ namespace DeepWaters
                 phase = "mmm_straight_water_entry";
             else if (string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase))
                 phase = "qqq_straight_boat_probe";
+			else if (string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase))
+				phase = "mystery_straight_lake_probe";
             else
                 phase = "fff_straight_seam_probe";
             float seconds = Mathf.Min(TargetedScenarioSeconds, Mathf.Max(10f, durationSeconds));
             yield return RunNaturalForwardPhase(saveName, phase, seconds);
             yield return CaptureDiagnosticScreenshot(saveName, phase + "-end");
         }
+
+		private static bool IsBiomeVisualProbeSave(string saveName)
+		{
+			return string.Equals(saveName, "temperate", StringComparison.OrdinalIgnoreCase) ||
+				   string.Equals(saveName, "swamp", StringComparison.OrdinalIgnoreCase) ||
+				   string.Equals(saveName, "tropical", StringComparison.OrdinalIgnoreCase) ||
+				   string.Equals(saveName, "desert", StringComparison.OrdinalIgnoreCase) ||
+				   string.Equals(saveName, "cold", StringComparison.OrdinalIgnoreCase) ||
+				   string.Equals(saveName, "open ocean", StringComparison.OrdinalIgnoreCase) ||
+				   string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase);
+		}
 
         private IEnumerator RunStationaryPhase(string saveName, string phase, float seconds)
         {
@@ -792,6 +815,36 @@ namespace DeepWaters
             Debug.Log("[DeepWaters.Diagnostics] Screenshot: " + path);
             yield return new WaitForSecondsRealtime(0.5f);
         }
+
+		private IEnumerator CaptureOffsetYawScreenshot(string saveName, string label, float yawOffset)
+		{
+			if (!GameManager.HasInstance || GameManager.Instance.PlayerMouseLook == null)
+				yield break;
+
+			PlayerMouseLook mouseLook = GameManager.Instance.PlayerMouseLook;
+			float yaw = mouseLook.Yaw;
+			float pitch = mouseLook.Pitch;
+			SetDiagnosticFacing(yaw + yawOffset, pitch);
+			yield return null;
+			yield return CaptureDiagnosticScreenshot(saveName, label);
+			SetDiagnosticFacing(yaw, pitch);
+		}
+
+		private static void SetDiagnosticFacing(float yaw, float pitch)
+		{
+			PlayerMouseLook mouseLook = GameManager.Instance.PlayerMouseLook;
+			mouseLook.SetFacing(yaw, pitch);
+			if (mouseLook.characterBody != null)
+			{
+				mouseLook.transform.localEulerAngles = new Vector3(pitch, 0f, 0f);
+				mouseLook.characterBody.transform.localEulerAngles = new Vector3(0f, yaw, 0f);
+			}
+			else
+			{
+				mouseLook.transform.localEulerAngles = new Vector3(pitch, yaw, 0f);
+			}
+			Physics.SyncTransforms();
+		}
 
         private static void LogTerrainSurfaceSnapshot(string saveName, string label)
         {

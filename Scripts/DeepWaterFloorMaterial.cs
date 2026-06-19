@@ -19,22 +19,30 @@ namespace DeepWaters
     internal static class DeepWaterFloorMaterial
     {
         private const string ShaderName = "DeepWaters/Seafloor";
-        private const int SeafloorTextureRecord = 1;
         // World-meters per texture tile. DFU terrain dirt tile reads as one
         // tile every ~6.4m of world space, so 1/6.4 = 0.15625.
         private const float TerrainTextureWorldScale = 0.15625f;
-        private const float TerrainTextureStrength = 0.25f;
+        private const float TerrainTextureStrength = 0.45f;
+		private const float DfuGroundTextureStrength = 0.25f;
+		private const float SwampGroundTextureStrength = 0.90f;
 
         private static readonly int MainTexProperty = Shader.PropertyToID("_MainTex");
+		private static readonly int SandColorProperty = Shader.PropertyToID("_SandColor");
+		private static readonly int MidColorProperty = Shader.PropertyToID("_MidColor");
+		private static readonly int DeepColorProperty = Shader.PropertyToID("_DeepColor");
+		private static readonly int SwampColorProperty = Shader.PropertyToID("_SwampColor");
         private static readonly int TextureWorldScaleProperty = Shader.PropertyToID("_TextureWorldScale");
         private static readonly int TextureStrengthProperty = Shader.PropertyToID("_TextureStrength");
         private static readonly Dictionary<int, Material> materials = new Dictionary<int, Material>();
 
         public static Material GetMaterial(int worldClimate)
         {
-            int groundArchive = ResolveGroundArchive(worldClimate);
+			int textureArchive;
+			int textureRecord;
+			ResolveSeafloorTexture(worldClimate, out textureArchive, out textureRecord);
+			int key = textureArchive * 1024 + textureRecord * 16 + worldClimate;
             Material material;
-            if (materials.TryGetValue(groundArchive, out material) && material != null && material.shader != null)
+            if (materials.TryGetValue(key, out material) && material != null && material.shader != null)
                 return material;
 
             Shader shader = ResolveShaderWithFallbacks();
@@ -46,10 +54,15 @@ namespace DeepWaters
 
             try
             {
-                material = new Material(shader);
-                material.name = "DeepWaters.Seafloor." + groundArchive;
-                ApplyRegionalTexture(material, groundArchive);
-                materials[groundArchive] = material;
+				material = new Material(shader);
+				material.name = "DeepWaters.Seafloor." + textureArchive + "." + textureRecord + "." + worldClimate;
+				bool dfuGroundTexture = UsesDfuGroundTexture(worldClimate);
+				float textureStrength = worldClimate == (int)MapsFile.Climates.Swamp ? SwampGroundTextureStrength :
+					(dfuGroundTexture ? DfuGroundTextureStrength : TerrainTextureStrength);
+				ApplyRegionalTexture(material, textureArchive, textureRecord, textureStrength, TerrainTextureWorldScale);
+				if (!dfuGroundTexture || worldClimate == (int)MapsFile.Climates.Swamp)
+					ApplyBiomePalette(material, worldClimate);
+                materials[key] = material;
             }
             catch (System.Exception ex)
             {
@@ -60,26 +73,122 @@ namespace DeepWaters
             return material;
         }
 
-        private static int ResolveGroundArchive(int worldClimate)
-        {
-            DFLocation.ClimateSettings climate = MapsFile.GetWorldClimateSettings(worldClimate);
-            int groundArchive = climate.GroundArchive;
+		private static void ApplyBiomePalette(Material material, int worldClimate)
+		{
+			switch (worldClimate)
+			{
+				case (int)MapsFile.Climates.Subtropical:
+				case (int)MapsFile.Climates.Rainforest:
+					SetPalette(material,
+						new Color(0.52f, 0.67f, 0.49f, 1f),
+						new Color(0.24f, 0.42f, 0.32f, 1f),
+						new Color(0.08f, 0.20f, 0.20f, 1f),
+						new Color(0.16f, 0.32f, 0.22f, 1f));
+					break;
+				case (int)MapsFile.Climates.Swamp:
+					SetPalette(material,
+						new Color(0.38f, 0.36f, 0.21f, 1f),
+						new Color(0.23f, 0.25f, 0.15f, 1f),
+						new Color(0.08f, 0.12f, 0.09f, 1f),
+						new Color(0.18f, 0.17f, 0.09f, 1f));
+					break;
+				case (int)MapsFile.Climates.Mountain:
+				case (int)MapsFile.Climates.MountainWoods:
+					SetPalette(material,
+						new Color(0.58f, 0.63f, 0.61f, 1f),
+						new Color(0.34f, 0.43f, 0.47f, 1f),
+						new Color(0.12f, 0.18f, 0.24f, 1f),
+						new Color(0.24f, 0.30f, 0.32f, 1f));
+					break;
+				case (int)MapsFile.Climates.Desert:
+				case (int)MapsFile.Climates.Desert2:
+					SetPalette(material,
+						new Color(0.78f, 0.65f, 0.42f, 1f),
+						new Color(0.50f, 0.39f, 0.22f, 1f),
+						new Color(0.23f, 0.18f, 0.13f, 1f),
+						new Color(0.45f, 0.34f, 0.18f, 1f));
+					break;
+				case (int)MapsFile.Climates.Woodlands:
+				case (int)MapsFile.Climates.HauntedWoodlands:
+					SetPalette(material,
+						new Color(0.58f, 0.62f, 0.45f, 1f),
+						new Color(0.33f, 0.39f, 0.28f, 1f),
+						new Color(0.13f, 0.18f, 0.15f, 1f),
+						new Color(0.24f, 0.30f, 0.19f, 1f));
+					break;
+				default:
+					SetPalette(material,
+						new Color(0.30f, 0.42f, 0.43f, 1f),
+						new Color(0.16f, 0.23f, 0.26f, 1f),
+						new Color(0.06f, 0.08f, 0.11f, 1f),
+						new Color(0.12f, 0.18f, 0.16f, 1f));
+					break;
+			}
+		}
 
-            // Winter variant lives at GroundArchive + 1 for every climate
-            // except Desert (no snow). Match DFU's terrain-material rule so
-            // our seafloor stays consistent with the surrounding land.
-            if (climate.ClimateType != DFLocation.ClimateBaseType.Desert &&
-                DaggerfallUnity.Instance != null &&
-                DaggerfallUnity.Instance.WorldTime != null &&
-                DaggerfallUnity.Instance.WorldTime.Now.SeasonValue == DaggerfallDateTime.Seasons.Winter)
-            {
-                groundArchive++;
-            }
+		private static void SetPalette(Material material, Color sand, Color mid, Color deep, Color swamp)
+		{
+			material.SetColor(SandColorProperty, sand);
+			material.SetColor(MidColorProperty, mid);
+			material.SetColor(DeepColorProperty, deep);
+			material.SetColor(SwampColorProperty, swamp);
+		}
 
-            return groundArchive;
-        }
+		private static void ResolveSeafloorTexture(int worldClimate, out int archive, out int record)
+		{
+			if (UsesDfuGroundTexture(worldClimate))
+			{
+				archive = ResolveGroundArchive(worldClimate);
+				record = 1;
+				return;
+			}
 
-        private static void ApplyRegionalTexture(Material material, int groundArchive)
+			switch (worldClimate)
+			{
+				case (int)MapsFile.Climates.Subtropical:
+				case (int)MapsFile.Climates.Rainforest:
+					archive = 402; record = 28; return;
+				case (int)MapsFile.Climates.Mountain:
+				case (int)MapsFile.Climates.MountainWoods:
+					archive = 102; record = 3; return;
+				case (int)MapsFile.Climates.Desert:
+				case (int)MapsFile.Climates.Desert2:
+					archive = 2; record = 10; return;
+				case (int)MapsFile.Climates.HauntedWoodlands:
+					archive = 302; record = 3; return;
+				case (int)MapsFile.Climates.Woodlands:
+					archive = 302; record = 25; return;
+				default:
+					DFLocation.ClimateSettings climate = MapsFile.GetWorldClimateSettings(worldClimate);
+					archive = climate.GroundArchive;
+					record = 1;
+					return;
+			}
+		}
+
+		private static bool UsesDfuGroundTexture(int worldClimate)
+		{
+			return worldClimate == (int)MapsFile.Climates.Ocean ||
+				worldClimate == (int)MapsFile.Climates.Swamp;
+		}
+
+		private static int ResolveGroundArchive(int worldClimate)
+		{
+			DFLocation.ClimateSettings climate = MapsFile.GetWorldClimateSettings(worldClimate);
+			int groundArchive = climate.GroundArchive;
+
+			if (climate.ClimateType != DFLocation.ClimateBaseType.Desert &&
+				DaggerfallUnity.Instance != null &&
+				DaggerfallUnity.Instance.WorldTime != null &&
+				DaggerfallUnity.Instance.WorldTime.Now.SeasonValue == DaggerfallDateTime.Seasons.Winter)
+			{
+				groundArchive++;
+			}
+
+			return groundArchive;
+		}
+
+        private static void ApplyRegionalTexture(Material material, int textureArchive, int textureRecord, float textureStrength, float textureWorldScale)
         {
             if (material == null || DaggerfallUnity.Instance == null || DaggerfallUnity.Instance.MaterialReader == null)
                 return;
@@ -87,8 +196,8 @@ namespace DeepWaters
             try
             {
                 Texture2D texture = DaggerfallUnity.Instance.MaterialReader.TextureReader.GetTexture2D(
-                    groundArchive,
-                    SeafloorTextureRecord,
+                    textureArchive,
+                    textureRecord,
                     0);
 
                 if (texture == null)
@@ -98,12 +207,12 @@ namespace DeepWaters
                 texture.filterMode = FilterMode.Point;
 
                 material.SetTexture(MainTexProperty, texture);
-                material.SetFloat(TextureWorldScaleProperty, TerrainTextureWorldScale);
-                material.SetFloat(TextureStrengthProperty, TerrainTextureStrength);
+                material.SetFloat(TextureWorldScaleProperty, textureWorldScale);
+                material.SetFloat(TextureStrengthProperty, textureStrength);
             }
             catch (System.Exception ex)
             {
-                Debug.LogWarning("[DeepWaters] Failed to load regional seafloor texture from archive " + groundArchive + ": " + ex.Message);
+				Debug.LogWarning("[DeepWaters] Failed to load regional seafloor texture " + textureArchive + ":" + textureRecord + ": " + ex.Message);
             }
         }
 

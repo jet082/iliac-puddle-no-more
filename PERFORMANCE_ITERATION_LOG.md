@@ -1063,3 +1063,223 @@ Remaining:
 
 - `rrr` still needs a deeper visual fix for the dark horizontal shore band/void. The next likely target is not another swim-state patch; it is the geometry/render boundary between the generated seafloor skirt and mixed live terrain.
 - Third-person fog still needs a manual or automated camera-mode validation save.
+
+## Biome Visual Probe + Inland/Lake Water Fallback
+
+Prompt:
+
+- User created `temperate`, `swamp`, `tropical`, `desert`, `cold`, `open ocean`, and `mystery` saves for biome visual checks.
+- Goal: each underwater biome should be visually identifiable by seafloor texture and decoration mix.
+- User clarified `desert` is visibly in water even though diagnostics initially reported no Deep Waters column; `mystery` starts at shore and reaches water by walking forward.
+
+Findings:
+
+- The first visual sweep showed most coastal biome saves using similar pale/green seabed material, because the current map pixel is usually DFU `Ocean`; nearby land climate needs to drive the underwater biome.
+- `desert` and `mystery` proved a separate issue: DFU/live terrain reported water (`localPointWater=1`) but the ocean-connected fine bake reported no water (`bakedWater=0`, `carvedWater=0`, `oceanConnected=0`).
+- That means these are local/inland lake water cases excluded by the ocean bake, not dry land and not a camera/save mistake.
+- Terrain texture candidates were dumped to `Diagnostics/seafloor-texture-candidates`, with labeled sheets for `TEXTURE.002`, `TEXTURE.102`, `TEXTURE.302`, and `TEXTURE.402`.
+
+Changes:
+
+- `DeepWaterTileData` now resolves `BiomeClimateIndex` from adjacent non-ocean land climate for ocean pixels, so coastal underwater decoration/fish/material selection can follow nearby land biome while true open ocean stays ocean.
+- Local visibly-wet tiles absent from the ocean fine bake now use `UsesLocalWaterFallback`, generating a shallow local floor/content path instead of being treated as dry.
+- The seafloor material now chooses actual texture records by biome instead of loading record `1` from the terrain ground archive:
+	- Open ocean: `402:30`.
+	- Tropical/rainforest/subtropical: `402:16`.
+	- Swamp: `402:25`.
+	- Temperate/woodlands: `302:25`.
+	- Haunted woodlands: `302:3`.
+	- Cold/mountain/mountain woods: `102:3`.
+	- Desert/desert2: `002:10`.
+- Seafloor texture strength increased from `0.25` to `0.45`; this is still shader-local grain/tinting, but the visible texture identity now comes from different records.
+- Winter ground-archive swapping was removed for seafloor material selection. Underwater cold reads as rock/silt rather than snow.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Biome probe run: `DeepWatersDiagnostics\deep-waters-diagnostics-20260618-224516.csv`.
+- Visual contact sheet: `DeepWatersDiagnostics\biome-probe-contact-latest.png`.
+- `desert` after fallback:
+	- `columnPresent=1`, `columnDepth=11.33`, `localPointWater=1`, `bakedWater=0`, `carvedWater=1`, `oceanConnected=1`.
+	- Decorations/fish are now eligible, though the current save looks across the lake surface rather than fully underwater.
+- `mystery` after walking into water:
+	- `columnPresent=1`, `columnDepth=10.94`, `localPointWater=1`, `bakedWater=0`, `carvedWater=1`, `oceanConnected=1`.
+- Older shoreline regression probe: `DeepWatersDiagnostics\deep-waters-diagnostics-20260618-224844.csv`.
+- Regression contact sheet: `DeepWatersDiagnostics\shoreline-regression-contact-latest.png`.
+- `mmm` still transitions into a real water column and shows underwater content.
+- `rrr`/`sss` now classify as local fallback water (`bakedWater=0`, `carvedWater=1`) rather than dry; screenshots did not show the previous huge obvious voids in this pass, but these remain part of the shoreline edge family and should be watched.
+
+## Biome Texture Tweak + Desert Swim Gate
+
+Prompt:
+
+- Keep temperate and cold texture choices.
+- Make swamp and tropical more distinct.
+- Restore the previous open-ocean texture.
+- Desert now has depth but the player is stuck at the surface.
+
+Changes:
+
+- Open ocean seafloor texture restored from `402:30` to `402:1`.
+- Tropical/rainforest/subtropical seafloor texture changed from `402:16` to `402:28`.
+- Swamp seafloor texture changed from `402:25` to `402:15`.
+- `OutdoorSwimDriver.IsSolidShoreForColliderGate()` now asks `DeepWaterTileData.IsCarvedWater()` instead of querying `DeepWaterDistanceBake.IsCarvedWater()` directly, so local fallback lake/desert water is not mistaken for solid shore.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Probe run: `DeepWatersDiagnostics\deep-waters-diagnostics-20260618-230601.csv`.
+- Texture contact sheet: `DeepWatersDiagnostics\texture-tweak-contact-latest.png`.
+- `desert`: `columnPresent=1`, `columnDepth=11.33`, `localPointWater=1`, `bakedWater=0`, `carvedWater=1`, `playerSwimming=1`, `controllerGrounded=0`, `waterGateActive=1`.
+- `mystery` after walking forward: `columnPresent=1`, `columnDepth=10.94`, `playerSwimming=1`, `controllerGrounded=0`, `waterGateActive=1`.
+
+## Local Lake Bathymetry + Open Ocean Texture Restore
+
+Prompt:
+
+- Open ocean should use the same texture as the latest GitHub commit.
+- `desert` and `mystery` are inland/local water and should not be flat empty bowls.
+- Lakes should get about 25% max-depth behavior with non-flat bathymetry.
+- Remove the random wall visible to the right on `mystery`.
+
+Changes:
+
+- Open ocean material now follows the latest GitHub path again: DFU seasonal ground archive from `MapsFile.GetWorldClimateSettings(worldClimate).GroundArchive`, record `1`.
+- Local fallback water tiles now build a tiny 33x33 distance-to-shore field from DFU map water classification instead of using one constant shelf distance.
+- Local fallback distance is scaled up and capped at 55% of the shelf ramp, which gives small/medium lakes meaningful slope without pretending they are full open ocean.
+- Local fallback tiles no longer emit boundary skirts. Those skirts were the likely source of the isolated mystery wall because the tile is locally wet but absent from the ocean-connected bake.
+- `mystery` is now treated as a stationary visual probe save, with an extra right-facing diagnostic screenshot to catch side-wall regressions.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Final post-pack three-save probe run: `DeepWatersDiagnostics\deep-waters-diagnostics-20260618-234305.csv`.
+- Final visual contact sheet: `DeepWatersDiagnostics\lake-texture-final-contact-latest.png`.
+- `desert`: `columnPresent=1`, `columnDepth=84.52`, `renderedSeafloorY=15.43`, `localPointWater=1`, `bakedWater=0`, `carvedWater=1`, `decorationsCurrent=1053.75`, `fishCurrent=42.50`.
+- `mystery`: screenshot rows report `columnPresent=1`, `columnDepth=84.52`, `renderedSeafloorY=15.43`, `localPointWater=1`, `bakedWater=0`, `carvedWater=1`, `decorationsCurrent=2304`, `fishCurrent=220`.
+- `open ocean`: `columnDepth=199.94`, visual floor texture is back to the darker latest-style open-ocean look.
+- Mystery side-check run: `DeepWatersDiagnostics\deep-waters-diagnostics-20260618-234049.csv`.
+- Mystery side-check contact sheet: `DeepWatersDiagnostics\mystery-right-check-latest.png`.
+- Mystery right-look screenshot did not show the reported vertical wall after local fallback skirts were disabled.
+
+## Desert Local Lake Seam Fix + Open Ocean Material Match
+
+Prompt:
+
+- `desert` showed giant broken seams after the local lake bathymetry change.
+- Open ocean floor texture still did not look like the latest GitHub build.
+
+Changes:
+
+- Removed the per-tile local-water distance field. It made each disconnected water tile solve its own depth gradient, which could disagree across tile edges and create a cliff.
+- Local fallback water now uses one capped shelf distance (`30%` of the ocean shelf ramp), so it gets modest lake depth and global noise relief without tile-edge cliffs.
+- Local fallback carving now rejects non-water cells before cutting terrain holes. The previous condition only did that on baked-ocean tiles.
+- Open ocean material now skips biome palette overrides and uses the latest-GitHub texture strength (`0.25`) while keeping custom biome textures for non-ocean floors.
+- Added left/right desert diagnostic screenshots to catch off-angle seam regressions.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Three-save probe run: `DeepWatersDiagnostics\deep-waters-diagnostics-20260618-235428.csv`.
+- Contact sheet: `DeepWatersDiagnostics\desert-lake-ocean-fix-contact-latest.png`.
+- `desert`: `columnDepth=25.17`, `decorationsCurrent=1055`, `fishCurrent=75`, local water fallback (`bakedWater=0`, `carvedWater=1`), no giant seam in saved view.
+- `mystery`: `columnDepth=45.70`, local water fallback still working.
+- `open ocean`: `columnDepth=199.94`, old-style darker material path restored.
+- Desert angle sweep: `DeepWatersDiagnostics\desert-angle-sweep-latest.png`.
+- Desert left/forward/right captures did not show the reported giant seam.
+
+## Open Ocean Texture Source Trace
+
+Prompt:
+
+- Desert is acceptable, but open ocean still does not match the floor texture embedded in the `open ocean` save screenshot.
+
+Finding:
+
+- Latest GitHub `DeepWaterFloorMaterial` did not choose an explicit ocean record. It used `MapsFile.GetWorldClimateSettings(worldClimate).GroundArchive`, then applied DFU's winter rule (`GroundArchive + 1` for non-desert climates), and loaded record `1`.
+- DFU's own `TerrainMaterialProvider.GetClimateInfo()` does the same seasonal archive increment before assigning terrain materials.
+- Ocean climate is classified as `Swamp` in DFU, so it is winter-adjusted. In the tested open-ocean save this means the texture source is the seasonal ocean ground archive record `1`, not hard-coded `402:1` or any guessed atlas candidate.
+
+Changes:
+
+- Kept pure-ocean tiles routed to the ocean material instead of borrowing a nearby coastal biome. Borrowing the neighbor biome restored texture density but produced a green/yellow coastal identity in open ocean.
+- True-ocean floor now uses the latest-GitHub/DFU seasonal ground-archive path, record `1`.
+- True-ocean floor skips the biome palette override and uses the latest-GitHub texture strength (`0.25`) and DFU terrain scale (`0.15625`).
+- Non-ocean biome floor textures and palettes are unchanged.
+
+Rejected candidates:
+
+- `402:1`: color was closer but texture was too smooth.
+- `402:25`: texture was too dark/green even after skipping the ocean palette.
+- Neighbor-biome routing: visibly wrong green/yellow coastal floor identity.
+- `302:31`: blue-gray, but produced obvious diagonal/striped UV bands.
+- `402:0` at full strength: readable texture, but too saturated blue.
+- `402:0` at reduced strength/scale: still not the same source; it was a visual guess, not the DFU/latest-GitHub logic.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Final comparison sheet: `DeepWatersDiagnostics\open-ocean-target-vs-current-seasonal-ground-record1.png`.
+
+## Blue Ocean + Green Swamp Material Experiment
+
+Prompt:
+
+- Revert open ocean to the deeper blue visual candidate.
+- Try the green swamp candidate on swamp floors.
+
+Changes:
+
+- True open ocean now uses explicit `402:0` with feature-texture strength `0.75`, half terrain scale, and no biome palette override.
+- Swamp now uses explicit `402:25` with the same feature-texture treatment.
+- Other biome floor material choices are unchanged.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Visual contact sheet: `DeepWatersDiagnostics\open-ocean-swamp-blue-green-check.png`.
+
+## Coastal Swamp Material Correction + Darker Ocean Candidate
+
+Prompt:
+
+- The `swamp` save was not visibly loading the intended swamp floor texture.
+- The open ocean floor should stay dramatic/dark/blue, but use a different texture than the previous bright-blue candidate.
+
+Finding:
+
+- The `swamp` save sits in an all-water coastal ocean map pixel (`557:296`). The biome resolver was treating all-water ocean pixels as true ocean too early, so nearby swamp/coastal biome identity could be skipped.
+- After that was fixed, the swamp still looked sandy because featured ocean/swamp materials skipped `ApplyBiomePalette()`, leaving the shader's default shallow sand color in control.
+
+Changes:
+
+- All-water ocean pixels now only force true-ocean material when sampled across the tile and fully beyond `DeepBathymetry.ShelfBreakDistance`.
+- Featured ocean/swamp materials now also apply the biome palette, so shallow swamp floors are no longer tan by default.
+- Open ocean moved from `402:0` to darker blue candidate `402:36`.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Packed both playable `.dfmod` files.
+- Visual contact sheet: `DeepWatersDiagnostics\open-ocean-swamp-40236-paletted-check.png`.
+
+Follow-up:
+
+- The strong featured texture used local terrain-tile UVs, which made the open ocean read as obvious repeated strips.
+- Seafloor UVs now use the same map-pixel-anchored coordinates as bathymetry, wrapped to a 4096m cycle to avoid GPU precision banding.
+- Featured ocean/swamp texture strength was reduced from `0.75` to `0.45`, and featured textures use the normal terrain scale.
+- Visual contact sheet: `DeepWatersDiagnostics\open-ocean-swamp-continuous-uv-modulo-check.png`.
+
+Correction:
+
+- Latest GitHub and DFU's `TerrainMaterialProvider` do not select hard-coded `402:*` records. They use `MapsFile.GetWorldClimateSettings(worldClimate).GroundArchive`, add `+1` in winter for non-desert climates, then render ground record `1`.
+- Ocean and Swamp both map to DFU swamp ground archive `402`; in the tested winter saves they resolve to `403:1`.
+- Ocean now uses that exact latest-GitHub path at texture strength `0.25`.
+- Swamp now uses the same DFU archive/record path, with stronger texture influence and the swamp palette so shallow shelf color does not wash the texture back to beige.
+- Visual contact sheet: `DeepWatersDiagnostics\open-ocean-swamp-dfu-ground-swamp-strong-check.png`.

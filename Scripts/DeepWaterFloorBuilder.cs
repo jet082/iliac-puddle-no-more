@@ -308,7 +308,7 @@ namespace DeepWaters
             // criterion exactly. Boundary cells where 3 of 4 corners sit
             // on the beach gradient still get carved if 1 corner reaches
             // the clamp.
-            bool useBakeMask = DeepWaterDistanceBake.HasFineWaterMask;
+            bool useBakeMask = DeepWaterDistanceBake.HasFineWaterMask && !tile.UsesLocalWaterFallback;
             int mapPixelX = dfTerrain.MapPixelX;
             int mapPixelY = dfTerrain.MapPixelY;
             float invHoleRes = 1f / holeRes;
@@ -337,7 +337,7 @@ namespace DeepWaters
                         DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&
                         DeepWaterDistanceBake.IsWaterAt(mapPixelX, mapPixelY, fracX, fracZ);
                     bool localWater = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ);
-                    if (useBakeMask && !localWater)
+                    if ((useBakeMask || tile.UsesLocalWaterFallback) && !localWater)
                         continue;
 
                     // Reject cells with any shore relief (see crash-fix note):

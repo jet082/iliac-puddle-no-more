@@ -1160,9 +1160,11 @@ namespace DeepWaters
 			bool waterLike;
 			if (DeepWaterDistanceBake.HasFineWaterMask)
 			{
+				DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
 				waterLike =
+					tile != null &&
 					DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) &&
-					DeepWaterDistanceBake.IsCarvedWater(dfTerrain.MapPixelX, dfTerrain.MapPixelY, fracX, fracZ);
+					tile.IsCarvedWater(worldX, worldZ);
 			}
 			else
             {
