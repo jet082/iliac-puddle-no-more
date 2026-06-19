@@ -61,9 +61,13 @@ namespace DeepWaters
 			if (passes <= 0)
 				return 0;
 
-			return PassiveFishSpeciesCatalog.ClimateToBiome(climateIndex) == WaterBiome.OpenOcean
-				? Mathf.CeilToInt(passes * 1.35f)
-				: passes;
+			WaterBiome biome = PassiveFishSpeciesCatalog.ClimateToBiome(climateIndex);
+			if (biome == WaterBiome.OpenOcean)
+				return Mathf.CeilToInt(passes * 1.35f);
+			if (biome == WaterBiome.Desert)
+				return Mathf.CeilToInt(passes * 0.55f);
+
+			return passes;
 		}
 
         private static void GenerateBillboardPositions(

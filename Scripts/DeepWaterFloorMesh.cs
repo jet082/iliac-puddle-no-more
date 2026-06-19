@@ -39,7 +39,6 @@ namespace DeepWaters
         private const float ShoreTerrainFitMeters = 180f;
         private const float ShoreTerrainFitClearance = 0.15f;
         private const float FloorSurfaceClearanceMeters = 1.0f; // keep near-shore floor under the surface so water tints it
-		private const float TextureUvCycleMeters = 4096f;
 
         private Mesh mesh;
         private MeshCollider meshCollider;
@@ -179,9 +178,11 @@ namespace DeepWaters
 
                     colors.Add(CreateVertexColor(depth, vertexClimateBand, shoreDistance));
 
-                    // UVs share the bathymetry's map-pixel-anchored space, so
-                    // texture phase does not restart on every streamed tile.
-                    uvs.Add(TextureUv(noiseX, noiseZ));
+                    // UV in world-meter local coordinates. The shader
+                    // multiplies by _TextureWorldScale (= 1 / meters-per-tile)
+                    // so the regional texture tiles consistently with the
+                    // surrounding land terrain.
+                    uvs.Add(new Vector2(localX, localZ));
                 }
             }
 
@@ -741,23 +742,12 @@ namespace DeepWaters
             topIndex[key] = vertices.Count;
             vertices.Add(new Vector3(localX, topY, localZ));
             colors.Add(CreateVertexColor(topDepth, topClimateBand, topDistance, ShoreWallTopTextureStrength));
-            float topUvX, topUvZ;
-            tileData.GetNoiseWorldCoords(worldX, worldZ, out topUvX, out topUvZ);
-            uvs.Add(TextureUv(topUvX, topUvZ));
+            uvs.Add(new Vector2(localX, localZ));
 
             bottomIndex[key] = vertices.Count;
             vertices.Add(new Vector3(bottomLocalX, bottomY, bottomLocalZ));
             colors.Add(CreateVertexColor(wallColorDepth, wallColorClimate, wallColorDistance));
-            float bottomUvX, bottomUvZ;
-            tileData.GetNoiseWorldCoords(bottomWorldX, bottomWorldZ, out bottomUvX, out bottomUvZ);
-            uvs.Add(TextureUv(bottomUvX, bottomUvZ));
-        }
-
-		private static Vector2 TextureUv(float stableX, float stableZ)
-		{
-			return new Vector2(
-				Mathf.Repeat(stableX, TextureUvCycleMeters),
-				Mathf.Repeat(stableZ, TextureUvCycleMeters));
+            uvs.Add(new Vector2(bottomLocalX, bottomLocalZ));
 		}
 
         // Vanilla terrain local-Y at a tile fraction, from the promoted

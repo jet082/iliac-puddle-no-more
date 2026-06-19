@@ -565,6 +565,7 @@ namespace DeepWaters
 				   string.Equals(saveName, "desert", StringComparison.OrdinalIgnoreCase) ||
 				   string.Equals(saveName, "cold", StringComparison.OrdinalIgnoreCase) ||
 				   string.Equals(saveName, "open ocean", StringComparison.OrdinalIgnoreCase) ||
+				   string.Equals(saveName, "open ocean 2", StringComparison.OrdinalIgnoreCase) ||
 				   string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase);
 		}
 

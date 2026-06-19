@@ -209,10 +209,9 @@ namespace DeepWaters
 			var records = new List<UnderwaterDecorationRecord>();
 			AddCommonWater(records);
 			Add(records, 211, 10, 6);
-			AddMany(records, 8, R(105, 0), R(105, 3), R(105, 4), R(105, 5), R(105, 6), R(105, 7), R(105, 8), R(105, 9), R(105, 10));
-			AddMany(records, 5, R(206, 0), R(206, 1), R(253, 78), R(253, 79));
+			AddMany(records, 8, R(105, 3), R(105, 4), R(105, 9));
 			AddMany(records, 4, R(502, 4), R(502, 5), R(502, 6), R(502, 11));
-			AddDeadSeaLife(records, 4);
+			Add(records, 305, 1, 4);
 			return records.ToArray();
 		}
 
