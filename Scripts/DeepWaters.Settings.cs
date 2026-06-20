@@ -164,7 +164,7 @@ namespace DeepWaters
             EnemyFrequency = GetScaledSliderSetting(s, "EnemyFrequency", EnemyFrequencyAtMidpoint);
             MaxLiveEnemies = Mathf.Max(0, GetIntSetting(s, "MaxLiveEnemies"));
             PassiveFishFrequency = GetScaledSliderSetting(s, "PassiveFishFrequency", PassiveFishFrequencyAtMidpoint);
-            MaxLiveFish = Mathf.Clamp(GetIntSetting(s, "MaxLiveFish"), 0, 360);
+            MaxLiveFish = Mathf.Clamp(GetIntSetting(s, "MaxLiveFish"), 0, 1080);
             SpawnUnderwaterDecorations = GetBoolSetting(s, "SpawnUnderwaterDecorations");
             DecorationPopulateRadius = Mathf.Clamp(GetIntSetting(s, "DecorationPopulateRadius"), 1, 3);
             DecorationFrequency = GetScaledSliderSetting(s, "DecorationFrequency", DecorationFrequencyAtMidpoint);

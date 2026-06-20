@@ -58,7 +58,7 @@
                 },
                 {
                     "Min": 0,
-                    "Max": 360,
+                    "Max": 1080,
                     "Value": 140,
                     "Name": "MaxLiveFish",
                     "Description": "Maximum live passive fish near the player.",
