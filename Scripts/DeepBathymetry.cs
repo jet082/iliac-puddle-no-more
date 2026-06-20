@@ -7,41 +7,6 @@ using UnityEngine;
 namespace DeepWaters
 {
     /// <summary>
-    /// Coarse seafloor geography classification. Public so external mod
-    /// builders can ask: "is this a flat plain I can drop a sunken ship on,
-    /// or is it a seamount peak / ravine wall / continental slope where my
-    /// set piece would tilt unpleasantly?"
-    /// </summary>
-    public enum SeafloorGeographyKind
-    {
-        /// <summary>Within the inner shelf, gradual sand drop near shore.</summary>
-        Shore,
-        /// <summary>Flat-ish abyssal/shelf plain. Best for sunken ships,
-        /// crashed wagons, and other large set pieces.</summary>
-        Plain,
-        /// <summary>Generic rolling mid-amplitude hills.</summary>
-        Hill,
-        /// <summary>Pronounced rise from the seafloor; underwater peak.</summary>
-        Seamount,
-        /// <summary>Trench/ravine depression with steep walls.</summary>
-        Ravine,
-        /// <summary>Continental slope drop. Strong vertical change.</summary>
-        Slope,
-    }
-
-    /// <summary>
-    /// Result of <see cref="DeepBathymetry.Classify"/>. Magnitude is the
-    /// strength of the dominant feature on a 0..1 scale (0 = barely
-    /// qualifies, 1 = textbook example).
-    /// </summary>
-    public struct SeafloorGeographyInfo
-    {
-        public SeafloorGeographyKind Kind;
-        public float DepthMeters;
-        public float Magnitude;
-    }
-
-    /// <summary>
     /// Deterministic seabed depth function. f(worldX, worldZ, climate, distanceToCoast)
     /// returns depth in meters below ocean surface.
     ///
@@ -103,15 +68,15 @@ namespace DeepWaters
         // surface shader's depth occlusion goes opaque instead of showing a
         // pale seabed strip at the horizon.
         // (Was 0.25 — "no visible step" — which produced unswimmable bowls.)
-        public const float ShelfMinDepth      = 2.7f;
-        public const float ShelfBreakDistance = 360f;  // shelf/slope split (geography classify only)
-        public const float ShelfRampMeters    = 2700f; // distance at which full climate-base depth is reached
+        internal const float ShelfMinDepth      = 2.7f;
+        internal const float ShelfBreakDistance = 360f;  // shelf/slope split
+        internal const float ShelfRampMeters    = 2700f; // distance at which full climate-base depth is reached
         // Fraction of straight-line descent blended into the smoothstep shelf
         // curve. Smoothstep alone has ~zero slope right at the shore (reads as
         // too flat off the beach); a linear term has real slope there. 0 = pure
         // smoothstep, higher = faster drop near shore. Both still reach full
         // depth at ShelfRampMeters, so the deep-water distance is unchanged.
-        public const float ShelfNearShoreSteepen = 0.30f;
+        internal const float ShelfNearShoreSteepen = 0.30f;
 
         // Macro layer: bay-scale "deep zones" vs "shallow zones".
         private const float MacroPeriodMeters       = 4200f;
@@ -171,11 +136,7 @@ namespace DeepWaters
         // Classification thresholds: a feature must contribute at least this
         // fraction of its max value before we call the location after that
         // feature (e.g. "this is a seamount, not just a hilly area").
-        private const float SeamountClassifyFraction = 0.30f;
-        private const float RavineClassifyFraction   = 0.30f;
-        private const float HillSignedNoiseThreshold = 0.55f;
-
-        public const float MaxAbsoluteDepth = 250f;
+        internal const float MaxAbsoluteDepth = 250f;
 
         private const float MacroSeedX    =  1000f;
         private const float MacroSeedZ    = -7000f;
@@ -188,7 +149,7 @@ namespace DeepWaters
         private const float SeamountSeedX = -8400f;
         private const float SeamountSeedZ =  6700f;
 
-        public static float SampleDepthMeters(
+        internal static float SampleDepthMeters(
             float worldX,
             float worldZ,
             float climateBaseDepth,
@@ -242,12 +203,12 @@ namespace DeepWaters
             return Mathf.Clamp(Mathf.Max(scaledDepth, minimumDepth + safetyFloorRelief), minimumDepth, userMax);
         }
 
-        public static float DepthBand01(float depthMeters)
+        internal static float DepthBand01(float depthMeters)
         {
             return Mathf.Clamp01(depthMeters / MaxAbsoluteDepth);
         }
 
-        public static float ClimateBaseDepth(int climateIndex)
+        internal static float ClimateBaseDepth(int climateIndex)
         {
             switch (climateIndex)
             {
@@ -268,7 +229,7 @@ namespace DeepWaters
         // Per-climate seafloor texture-band signal (vertex colour G). Public so
         // DeepWaterTileData can blend it across map-pixel boundaries the same way
         // it blends the base depth, keeping the texture continuous too.
-        public static float ClimateBandSignal(int climateIndex)
+        internal static float ClimateBandSignal(int climateIndex)
         {
             switch (climateIndex)
             {
@@ -284,75 +245,6 @@ namespace DeepWaters
                 case (int)MapsFile.Climates.Desert2:          return 0.30f;
                 default:                                      return 0.80f;
             }
-        }
-
-        /// <summary>
-        /// Classify the seafloor at a position. External mod builders use this
-        /// to decide where to place set pieces (e.g. sunken ships on plains).
-        /// </summary>
-        public static SeafloorGeographyInfo Classify(
-            float worldX,
-            float worldZ,
-            float climateBaseDepth,
-            float distanceToCoastMeters)
-        {
-            SeafloorGeographyInfo info;
-            info.DepthMeters = SampleDepthMeters(worldX, worldZ, climateBaseDepth, distanceToCoastMeters);
-            info.Kind = SeafloorGeographyKind.Plain;
-            info.Magnitude = 0f;
-
-            // Shore: across the gentle near-shore shelf. Sandy gradual drop.
-            if (distanceToCoastMeters < ShelfBreakDistance)
-            {
-                info.Kind = SeafloorGeographyKind.Shore;
-                info.Magnitude = 1f - Mathf.Clamp01(distanceToCoastMeters / ShelfBreakDistance);
-                return info;
-            }
-
-            // Seamount has priority — these are dramatic landmark features.
-            float totalPeakProfile = Mathf.Max(
-                ComputeSeamountProfile(worldX, worldZ, distanceToCoastMeters),
-                ComputeVolcanicConeProfile(worldX, worldZ, distanceToCoastMeters));
-            if (totalPeakProfile > SeamountClassifyFraction)
-            {
-                info.Kind = SeafloorGeographyKind.Seamount;
-                info.Magnitude = Mathf.Clamp01(totalPeakProfile);
-                return info;
-            }
-
-            // Ravine: trench/canyon deepening.
-            float ravineAdd = ComputeRavineAddition(worldX, worldZ, distanceToCoastMeters);
-            if (ravineAdd > RavineMaxAdditionalMeters * RavineClassifyFraction)
-            {
-                info.Kind = SeafloorGeographyKind.Ravine;
-                info.Magnitude = Mathf.Clamp01(ravineAdd / RavineMaxAdditionalMeters);
-                return info;
-            }
-
-            // Continental slope: the steep mid-margin descent to the abyss.
-            if (distanceToCoastMeters > ShelfBreakDistance && distanceToCoastMeters < ShelfRampMeters)
-            {
-                float dropFrac = (distanceToCoastMeters - ShelfBreakDistance) /
-                                 Mathf.Max(1f, ShelfRampMeters - ShelfBreakDistance);
-                info.Kind = SeafloorGeographyKind.Slope;
-                info.Magnitude = 1f - Mathf.Abs(dropFrac - 0.5f) * 2f;
-                return info;
-            }
-
-            // Hill vs plain based on mid-frequency layer magnitude.
-            float midSigned = SampleSignedPerlin(worldX, worldZ, MidPeriodMeters, MidSeedX, MidSeedZ);
-            float midAbs = Mathf.Abs(midSigned);
-            if (midAbs > HillSignedNoiseThreshold)
-            {
-                info.Kind = SeafloorGeographyKind.Hill;
-                info.Magnitude = Mathf.Clamp01((midAbs - HillSignedNoiseThreshold) /
-                                               Mathf.Max(0.01f, 1f - HillSignedNoiseThreshold));
-                return info;
-            }
-
-            info.Kind = SeafloorGeographyKind.Plain;
-            info.Magnitude = 1f - midAbs;
-            return info;
         }
 
         private static float ResolveUserMaxDepth()

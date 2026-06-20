@@ -70,8 +70,6 @@ namespace DeepWaters
         private const int FineEdgeSearchRadiusCells = 8;
 
         public static bool IsLoaded { get { return loaded; } }
-        public static int SubCellsPerPixel { get { return subCellsPerPixelX; } }
-        public static int SubCellsPerPixelFine { get { return subCellsPerPixelFine; } }
         public static bool HasFineWaterMask { get { return hasFineWaterMask; } }
 
         /// <summary>
@@ -237,13 +235,6 @@ namespace DeepWaters
             int waterCells = totalCells - landCells;
             float waterPct = 100f * waterCells / totalCells;
 
-            Debug.Log("[DeepWaters.Bake] Loaded distance bake v" + loadedVersion + ": " + widthCells + "x" + heightCells +
-                      " cells (" + subCellsPerPixelX + "x" + subCellsPerPixelY + " per map pixel, " +
-                      distanceScaleMeters + "m/unit, coarseMask=" + hasWaterMask +
-                      ", fineMask=" + hasFineWaterMask +
-                      (hasFineWaterMask ? " (" + subCellsPerPixelFine + "x" + subCellsPerPixelFine + " per pixel)" : "") +
-                      ", " + waterCells + "/" + totalCells +
-                      " water = " + waterPct.ToString("F1") + "%).");
             if (waterPct < 5f)
                 Debug.LogWarning("[DeepWaters.Bake] Loaded bake contains very little ocean. " +
                                  "If WOD/Interesting Terrain is active, re-run Tools > Deep Waters > " +
@@ -255,7 +246,6 @@ namespace DeepWaters
                 Debug.LogWarning("[DeepWaters.Bake] Loaded legacy distance bake with old north/south sampling. Re-run Tools > Deep Waters > Bake Distance Field to fix map-pixel Y seams.");
             if (loadedVersion < 4)
                 Debug.LogWarning("[DeepWaters.Bake] Loaded pre-v4 distance bake — bake-driven cell carving is NOT available. Re-run Tools > Deep Waters > Bake Distance Field to enable seamless cross-pixel carving (the Phase B fix).");
-            LogSeamContinuityDiagnostics();
             return true;
         }
 
@@ -402,9 +392,7 @@ namespace DeepWaters
         {
             if (!loaded || !hasFineWaterMask || fineWaterMaskBits == null || subCellsPerPixelFine <= 0)
                 return false;
-            if (mapPixelX < 0 || mapPixelY < 0 ||
-                mapPixelX >= MapsFile.MaxMapPixelX ||
-                mapPixelY >= MapsFile.MaxMapPixelY)
+            if (!IsValidMapPixel(mapPixelX, mapPixelY))
                 return false;
 
             int baseX = mapPixelX * subCellsPerPixelFine;
@@ -432,38 +420,17 @@ namespace DeepWaters
         /// </summary>
         public static bool MapPixelHasWaterCells(int mapPixelX, int mapPixelY)
         {
-            if (!loaded || data == null) return false;
-            if (mapPixelX < 0 || mapPixelY < 0 ||
-                mapPixelX >= MapsFile.MaxMapPixelX ||
-                mapPixelY >= MapsFile.MaxMapPixelY)
-                return false;
-
-            int baseX = mapPixelX * subCellsPerPixelX;
-            int baseY = mapPixelY * subCellsPerPixelY;
-            for (int sy = 0; sy < subCellsPerPixelY; sy++)
-            {
-                for (int sx = 0; sx < subCellsPerPixelX; sx++)
-                {
-                    if (CellHasWater(baseX + sx, baseY + sy)) return true;
-                }
-            }
-            return false;
+			return MapPixelHasCoarseCell(mapPixelX, mapPixelY, true);
         }
 
-        public static bool MapPixelHasWaterCellsNear(int mapPixelX, int mapPixelY, int radius)
-        {
-            int r = Mathf.Max(0, radius);
-            for (int y = mapPixelY - r; y <= mapPixelY + r; y++)
-            {
-                for (int x = mapPixelX - r; x <= mapPixelX + r; x++)
-                {
-                    if (MapPixelHasWaterCells(x, y))
-                        return true;
-                }
-            }
-
-            return false;
-        }
+		public static bool MapPixelOrCardinalNeighborHasWaterCells(int mapPixelX, int mapPixelY)
+		{
+			return MapPixelHasWaterCells(mapPixelX, mapPixelY) ||
+				MapPixelHasWaterCells(mapPixelX - 1, mapPixelY) ||
+				MapPixelHasWaterCells(mapPixelX + 1, mapPixelY) ||
+				MapPixelHasWaterCells(mapPixelX, mapPixelY - 1) ||
+				MapPixelHasWaterCells(mapPixelX, mapPixelY + 1);
+		}
 
         /// <summary>
         /// True if the supplied map pixel has *any* land cell (distance == 0)
@@ -471,23 +438,36 @@ namespace DeepWaters
         /// </summary>
         public static bool MapPixelHasLandCells(int mapPixelX, int mapPixelY)
         {
-            if (!loaded || data == null) return false;
-            if (mapPixelX < 0 || mapPixelY < 0 ||
-                mapPixelX >= MapsFile.MaxMapPixelX ||
-                mapPixelY >= MapsFile.MaxMapPixelY)
-                return false;
-
-            int baseX = mapPixelX * subCellsPerPixelX;
-            int baseY = mapPixelY * subCellsPerPixelY;
-            for (int sy = 0; sy < subCellsPerPixelY; sy++)
-            {
-                for (int sx = 0; sx < subCellsPerPixelX; sx++)
-                {
-                    if (!CellHasWater(baseX + sx, baseY + sy)) return true;
-                }
-            }
-            return false;
+			return MapPixelHasCoarseCell(mapPixelX, mapPixelY, false);
         }
+
+		private static bool MapPixelHasCoarseCell(int mapPixelX, int mapPixelY, bool water)
+		{
+			if (!loaded || data == null) return false;
+			if (!IsValidMapPixel(mapPixelX, mapPixelY))
+				return false;
+
+			int baseX = mapPixelX * subCellsPerPixelX;
+			int baseY = mapPixelY * subCellsPerPixelY;
+			for (int sy = 0; sy < subCellsPerPixelY; sy++)
+			{
+				for (int sx = 0; sx < subCellsPerPixelX; sx++)
+				{
+					if (CellHasWater(baseX + sx, baseY + sy) == water)
+						return true;
+				}
+			}
+
+			return false;
+		}
+
+		private static bool IsValidMapPixel(int mapPixelX, int mapPixelY)
+		{
+			return mapPixelX >= 0 &&
+				mapPixelY >= 0 &&
+				mapPixelX < MapsFile.MaxMapPixelX &&
+				mapPixelY < MapsFile.MaxMapPixelY;
+		}
 
         private static void GetNearestCell(
             int mapPixelX,
@@ -537,40 +517,6 @@ namespace DeepWaters
             return Mathf.Max(0f, radiusCells) * tileMeters / Mathf.Max(1, subCellsPerPixelFine);
         }
 
-        private static void LogSeamContinuityDiagnostics()
-        {
-            if (!loaded || data == null || subCellsPerPixelX <= 0 || subCellsPerPixelY <= 0)
-                return;
-
-            int mapPixelsX = widthCells / subCellsPerPixelX;
-            int mapPixelsY = heightCells / subCellsPerPixelY;
-            int stepX = Mathf.Max(1, mapPixelsX / 8);
-            int stepY = Mathf.Max(1, mapPixelsY / 8);
-            float maxEastWestDiff = 0f;
-            float maxNorthSouthDiff = 0f;
-
-            for (int y = stepY; y < mapPixelsY - 1; y += stepY)
-            {
-                for (int x = stepX; x < mapPixelsX - 1; x += stepX)
-                {
-                    float east = SampleDistanceMeters(x, y, 1f, 0.5f);
-                    float west = SampleDistanceMeters(x + 1, y, 0f, 0.5f);
-                    maxEastWestDiff = Mathf.Max(maxEastWestDiff, Mathf.Abs(east - west));
-
-                    float south = SampleDistanceMeters(x, y, 0.5f, 0f);
-                    float north = SampleDistanceMeters(x, y + 1, 0.5f, 1f);
-                    maxNorthSouthDiff = Mathf.Max(maxNorthSouthDiff, Mathf.Abs(south - north));
-                }
-            }
-
-            Debug.Log("[DeepWaters.Bake] Seam continuity check: east/west max diff=" +
-                      maxEastWestDiff.ToString("F3") + "m, north/south max diff=" +
-                      maxNorthSouthDiff.ToString("F3") + "m.");
-
-            if (maxEastWestDiff > 0.01f || maxNorthSouthDiff > 0.01f)
-                Debug.LogWarning("[DeepWaters.Bake] Distance bake seam check found discontinuities. Rebuild the bake asset before judging terrain seams.");
-        }
-
         // --- helpers shared with the editor tool ------------------------------
 
         /// <summary>
@@ -581,6 +527,7 @@ namespace DeepWaters
         /// </summary>
         public const int HeaderByteSize = 18;
 
+#if UNITY_EDITOR
         public static void WriteHeaderV4(BinaryWriter bw,
             int subCellsX, int subCellsY,
             int mapPixelsX, int mapPixelsY,
@@ -600,5 +547,6 @@ namespace DeepWaters
             bw.Write(distanceScaleMetersToWrite);
             bw.Write(fineSubCellsPerPixel);
         }
+#endif
     }
 }

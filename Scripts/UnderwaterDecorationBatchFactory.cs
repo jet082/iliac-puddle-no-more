@@ -3,17 +3,127 @@
 
 using System.Collections.Generic;
 using DaggerfallConnect.Arena2;
+using DaggerfallConnect.Utility;
 using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Utility;
+using DaggerfallWorkshop.Utility.AssetInjection;
 using UnityEngine;
 using UnityEngine.Rendering;
 
 namespace DeepWaters
 {
+	internal sealed class UnderwaterDecorationReplacementInfo
+	{
+		internal bool HasMaterial;
+		internal bool HasReplacement;
+		internal bool HasImportedAnimation;
+		internal Material Material;
+		internal Rect Rect;
+		internal Vector2 BatchSize;
+	}
+
+	internal static class UnderwaterDecorationReplacementCache
+	{
+		private static readonly Dictionary<UnderwaterDecorationRecord, UnderwaterDecorationReplacementInfo> cache =
+			new Dictionary<UnderwaterDecorationRecord, UnderwaterDecorationReplacementInfo>();
+
+		internal static bool TryGet(UnderwaterDecorationRecord record, out UnderwaterDecorationReplacementInfo info)
+		{
+			if (cache.TryGetValue(record, out info))
+				return info.HasReplacement;
+
+			info = Probe(record);
+			cache.Add(record, info);
+			return info.HasReplacement;
+		}
+
+		internal static bool TryGetMaterial(UnderwaterDecorationRecord record, out UnderwaterDecorationReplacementInfo info)
+		{
+			if (!cache.TryGetValue(record, out info))
+			{
+				info = Probe(record);
+				cache.Add(record, info);
+			}
+
+			return info.HasMaterial;
+		}
+
+		private static UnderwaterDecorationReplacementInfo Probe(UnderwaterDecorationRecord record)
+		{
+			var info = new UnderwaterDecorationReplacementInfo();
+			GameObject probe = new GameObject("DeepWaters_DecorationReplacementProbe");
+			probe.hideFlags = HideFlags.HideAndDontSave;
+
+			BillboardSummary summary = new BillboardSummary();
+			Vector2 replacementScale;
+			Material material = TextureReplacement.GetStaticBillboardMaterial(
+				probe,
+				record.Archive,
+				record.Record,
+				ref summary,
+				out replacementScale);
+
+			if (material != null && material.mainTexture != null)
+			{
+				FillMaterialInfo(record, material, summary.Rect, replacementScale, info);
+				info.HasReplacement = info.HasMaterial;
+				info.HasImportedAnimation = info.HasMaterial &&
+					summary.ImportedTextures.HasImportedTextures &&
+					summary.ImportedTextures.FrameCount > 1;
+			}
+			else if (DaggerfallUnity.Instance != null && DaggerfallUnity.Instance.MaterialReader != null)
+			{
+				Rect rect;
+				Material vanillaMaterial = DaggerfallUnity.Instance.MaterialReader.GetMaterial(
+					record.Archive,
+					record.Record,
+					0,
+					0,
+					out rect,
+					4,
+					true,
+					true);
+
+				FillMaterialInfo(record, vanillaMaterial, rect, Vector2.one, info);
+			}
+
+			Object.Destroy(probe);
+			return info;
+		}
+
+		private static void FillMaterialInfo(
+			UnderwaterDecorationRecord record,
+			Material material,
+			Rect rect,
+			Vector2 scale,
+			UnderwaterDecorationReplacementInfo info)
+		{
+			Vector2 baseSize;
+			Mesh mesh = DaggerfallUnity.Instance.MeshReader.GetBillboardMesh(
+				rect,
+				record.Archive,
+				record.Record,
+				out baseSize);
+
+			if (mesh != null)
+				Object.Destroy(mesh);
+
+			info.HasMaterial = material != null &&
+							   material.mainTexture != null &&
+							   baseSize.x > 0f &&
+							   baseSize.y > 0f;
+			info.Material = material;
+			info.Rect = rect;
+			info.BatchSize = new Vector2(
+				baseSize.x * scale.x / MeshReader.GlobalScale,
+				baseSize.y * scale.y / MeshReader.GlobalScale);
+		}
+	}
+
     internal static class UnderwaterDecorationBatchFactory
     {
-        public const string GroupName = "DeepWaters_DecorationBatch";
+        internal const string GroupName = "DeepWaters_DecorationBatch";
 
         // Per-decoration size variation. DaggerfallBillboardBatch's
         // customScale field is in Daggerfall "twips" where divisor = 256,
@@ -34,10 +144,9 @@ namespace DeepWaters
         private static readonly int ColorProperty = Shader.PropertyToID("_Color");
         private static readonly int CutoffProperty = Shader.PropertyToID("_Cutoff");
         private static readonly Dictionary<Material, Material> underwaterMaterialCache = new Dictionary<Material, Material>();
-        private static readonly HashSet<Material> cachedUnderwaterMaterials = new HashSet<Material>();
         private static readonly Dictionary<Texture, Texture> cleanedTextureCache = new Dictionary<Texture, Texture>();
 
-        public static GameObject Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
+        internal static GameObject Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {
             if (terrainParent == null || positions == null || positions.Count == 0)
                 return null;
@@ -382,7 +491,7 @@ namespace DeepWaters
             if (sourceMaterial == null)
                 return null;
 
-            if (cachedUnderwaterMaterials.Contains(sourceMaterial))
+            if (sourceMaterial.shader != null && sourceMaterial.shader.name == UnderwaterDecorationShaderName)
                 return sourceMaterial;
 
             Material cached;
@@ -401,7 +510,6 @@ namespace DeepWaters
             CopyTextureAndTransform(sourceMaterial, material, Uniforms.MainTex);
             ConfigureUnderwaterDecorationMaterial(material, sourceMaterial);
             underwaterMaterialCache[sourceMaterial] = material;
-            cachedUnderwaterMaterials.Add(material);
             return material;
         }
 
@@ -601,7 +709,7 @@ namespace DeepWaters
         {
             private Mesh mesh;
 
-            public void Set(Mesh value)
+            internal void Set(Mesh value)
             {
                 if (mesh != null && mesh != value)
                     Destroy(mesh);

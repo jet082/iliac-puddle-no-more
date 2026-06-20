@@ -23,6 +23,8 @@ namespace DeepWaters
         private const float TickInterval = 0.3f;
         private const float PopulateRadius = 200f;
         private const float DespawnRadius = 300f;
+		private const float PopulateRadiusSq = PopulateRadius * PopulateRadius;
+		private const float DespawnRadiusSq = DespawnRadius * DespawnRadius;
         // Per-pixel, per-tick attempt caps. Every in-range pixel gets a few
 		// attempts each tick so the live-cap budget fills all of them in parallel
 		// (even spread) rather than the nearest pixel eating the whole cap.
@@ -30,92 +32,81 @@ namespace DeepWaters
 		private const int EnemyAttemptsPerPixelPerTick = 12;
 		private const float DisableClearGraceSeconds = 2f;
 
-        private static GameObject driverObject;
         private static float nextTickTime;
         private static float fishDisabledSince = -1f;
         private static float enemyDisabledSince = -1f;
         private static bool installed;
 
         private static readonly List<DaggerfallTerrain> loadedDfTerrains = new List<DaggerfallTerrain>();
-        private static readonly List<Terrain> loadedTerrains = new List<Terrain>();
         private static readonly HashSet<long> keepKeys = new HashSet<long>();
         private static readonly List<PopulateCandidate> populateCandidates = new List<PopulateCandidate>();
 
         private struct PopulateCandidate
         {
-            public DaggerfallTerrain Terrain;
-            public float EdgeDistance;
+            internal DaggerfallTerrain Terrain;
+            internal float EdgeDistanceSq;
         }
 
-        public static void Install()
+        internal static void Install()
         {
 			if (installed)
 				return;
 
 			DeepWaterRuntime.OnTransientReset += ResetState;
 
-			if (driverObject == null)
-			{
-                driverObject = new GameObject("DeepWaters_EncounterPulseDriver");
-                driverObject.AddComponent<EncounterPulseDriver>();
-                Object.DontDestroyOnLoad(driverObject);
-            }
-
 			installed = true;
 		}
 
-        private class EncounterPulseDriver : MonoBehaviour
-        {
-            void Update()
-            {
-                if (Time.time < nextTickTime)
-                    return;
-                nextTickTime = Time.time + TickInterval;
+		internal static void Pump()
+		{
+			if (Time.time < nextTickTime)
+				return;
+			nextTickTime = Time.time + TickInterval;
 
-                if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
-                {
-                    ClearEverything();
-                    return;
-                }
+			if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+			{
+				ClearEverything();
+				return;
+			}
 
-                UnderwaterPassiveFishSpawner.UpdateInventoryState();
+			PassiveFishResources.UpdateInventoryState();
 
-                bool fishEnabled = UnderwaterPassiveFishSpawner.CanPopulate();
-                bool enemiesEnabled = UnderwaterEnemySpawner.CanPopulate();
+			bool exteriorWater = DeepWaterWorld.IsPlayerInExteriorWaterContext();
+			bool fishEnabled = exteriorWater && UnderwaterPassiveFishSpawner.CanPopulate();
+			bool enemiesEnabled = exteriorWater && UnderwaterEnemySpawner.CanPopulate();
 
-                HandleDisable(fishEnabled, ref fishDisabledSince, UnderwaterPassiveFishSpawner.ClearAll);
-                HandleDisable(enemiesEnabled, ref enemyDisabledSince, UnderwaterEnemySpawner.ClearAll);
+			HandleDisable(fishEnabled, ref fishDisabledSince, UnderwaterPassiveFishSpawner.ClearAll);
+			HandleDisable(enemiesEnabled, ref enemyDisabledSince, UnderwaterEnemySpawner.ClearAll);
 
-                if (!fishEnabled && !enemiesEnabled)
-                    return;
+			if (!fishEnabled && !enemiesEnabled)
+				return;
 
-                Vector3 playerPos;
-                if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
-                    return;
+			Vector3 playerPos;
+			if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
+				return;
 
-                CollectPixels(playerPos);
+			CollectPixels(playerPos);
 
-                if (fishEnabled)
-                    UnderwaterPassiveFishSpawner.TickDespawn(keepKeys);
-                if (enemiesEnabled)
-                    UnderwaterEnemySpawner.TickDespawn(keepKeys);
+			if (fishEnabled)
+				UnderwaterPassiveFishSpawner.TickDespawn(keepKeys);
+			if (enemiesEnabled)
+				UnderwaterEnemySpawner.TickDespawn(keepKeys);
 
-                for (int i = 0; i < populateCandidates.Count; i++)
-                {
-                    DaggerfallTerrain terrain = populateCandidates[i].Terrain;
-                    if (fishEnabled)
-                    {
-                        int fishBudget = FishAttemptsPerPixelPerTick;
-                        UnderwaterPassiveFishSpawner.TickPopulate(terrain, ref fishBudget);
-                    }
-                    if (enemiesEnabled)
-                    {
-                        int enemyBudget = EnemyAttemptsPerPixelPerTick;
-                        UnderwaterEnemySpawner.TickPopulate(terrain, ref enemyBudget);
-                    }
-                }
-            }
-        }
+			for (int i = 0; i < populateCandidates.Count; i++)
+			{
+				DaggerfallTerrain terrain = populateCandidates[i].Terrain;
+				if (fishEnabled)
+				{
+					int fishBudget = FishAttemptsPerPixelPerTick;
+					UnderwaterPassiveFishSpawner.TickPopulate(terrain, ref fishBudget);
+				}
+				if (enemiesEnabled)
+				{
+					int enemyBudget = EnemyAttemptsPerPixelPerTick;
+					UnderwaterEnemySpawner.TickPopulate(terrain, ref enemyBudget);
+				}
+			}
+		}
 
         // Build this tick's keep set (loaded pixels within DespawnRadius) and the
         // populate candidates (loaded water pixels within PopulateRadius), sorted
@@ -125,7 +116,7 @@ namespace DeepWaters
             keepKeys.Clear();
             populateCandidates.Clear();
 
-            DeepWaterTerrainLookup.GetLoadedTerrains(loadedDfTerrains, loadedTerrains);
+            DeepWaterTerrainLookup.GetLoadedTerrains(loadedDfTerrains, null);
             float tileSize = DeepWaterWorld.TileWorldSize;
 
             for (int i = 0; i < loadedDfTerrains.Count; i++)
@@ -135,27 +126,22 @@ namespace DeepWaters
                     continue;
 
                 Vector3 origin = dfTerrain.transform.position;
-                float edgeDistance = NearestEdgeDistance(playerPos, origin.x, origin.z, tileSize);
-                if (edgeDistance > DespawnRadius)
+                float edgeDistanceSq = NearestEdgeDistanceSq(playerPos, origin.x, origin.z, tileSize);
+                if (edgeDistanceSq > DespawnRadiusSq)
                     continue;
 
                 keepKeys.Add(DeepWaterWorld.TileKey(dfTerrain.MapPixelX, dfTerrain.MapPixelY));
 
-                if (edgeDistance <= PopulateRadius && IsWaterPixel(dfTerrain))
+                if (edgeDistanceSq <= PopulateRadiusSq && IsWaterPixel(dfTerrain))
                 {
                     PopulateCandidate candidate;
                     candidate.Terrain = dfTerrain;
-                    candidate.EdgeDistance = edgeDistance;
+                    candidate.EdgeDistanceSq = edgeDistanceSq;
                     populateCandidates.Add(candidate);
                 }
             }
 
-            populateCandidates.Sort(CompareCandidateDistance);
-        }
-
-        private static int CompareCandidateDistance(PopulateCandidate a, PopulateCandidate b)
-        {
-            return a.EdgeDistance.CompareTo(b.EdgeDistance);
+            populateCandidates.Sort((a, b) => a.EdgeDistanceSq.CompareTo(b.EdgeDistanceSq));
         }
 
 		private static bool IsWaterPixel(DaggerfallTerrain dfTerrain)
@@ -164,11 +150,11 @@ namespace DeepWaters
 			return tile != null && tile.IsOceanConnected && tile.HasDistanceField;
 		}
 
-		private static float NearestEdgeDistance(Vector3 playerPos, float originX, float originZ, float size)
+		private static float NearestEdgeDistanceSq(Vector3 playerPos, float originX, float originZ, float size)
         {
             float dx = Mathf.Max(originX - playerPos.x, 0f, playerPos.x - (originX + size));
             float dz = Mathf.Max(originZ - playerPos.z, 0f, playerPos.z - (originZ + size));
-            return Mathf.Sqrt(dx * dx + dz * dz);
+            return dx * dx + dz * dz;
         }
 
         private static void HandleDisable(bool enabled, ref float disabledSince, System.Action clearAll)
@@ -201,4 +187,89 @@ namespace DeepWaters
             ClearEverything();
         }
     }
+
+	internal sealed class TransientObjectTracker
+	{
+		private readonly List<GameObject> objects = new List<GameObject>();
+
+		internal int Count
+		{
+			get { return objects.Count; }
+		}
+
+		internal void Add(GameObject go)
+		{
+			if (go != null)
+				objects.Add(go);
+		}
+
+		internal void Clear()
+		{
+			for (int i = objects.Count - 1; i >= 0; i--)
+			{
+				if (objects[i] != null)
+					UnityEngine.Object.Destroy(objects[i]);
+			}
+
+			objects.Clear();
+		}
+
+		internal void Prune(Vector3 playerPos, float maxFlatDistance, int maxCount)
+		{
+			maxCount = Mathf.Max(0, maxCount);
+			float maxFlatDistanceSq = maxFlatDistance * maxFlatDistance;
+
+			for (int i = objects.Count - 1; i >= 0; i--)
+			{
+				GameObject go = objects[i];
+				if (go == null)
+				{
+					objects.RemoveAt(i);
+					continue;
+				}
+
+				Vector3 delta = go.transform.position - playerPos;
+				delta.y = 0f;
+				if (delta.sqrMagnitude > maxFlatDistanceSq)
+				{
+					UnityEngine.Object.Destroy(go);
+					objects.RemoveAt(i);
+				}
+			}
+
+			while (objects.Count > maxCount)
+			{
+				int farthestIndex = -1;
+				float farthestDistanceSq = -1f;
+
+				for (int i = 0; i < objects.Count; i++)
+				{
+					GameObject go = objects[i];
+					if (go == null)
+					{
+						farthestIndex = i;
+						break;
+					}
+
+					Vector3 delta = go.transform.position - playerPos;
+					delta.y = 0f;
+					float distanceSq = delta.sqrMagnitude;
+					if (distanceSq > farthestDistanceSq)
+					{
+						farthestDistanceSq = distanceSq;
+						farthestIndex = i;
+					}
+				}
+
+				if (farthestIndex < 0)
+					return;
+
+				GameObject remove = objects[farthestIndex];
+				if (remove != null)
+					UnityEngine.Object.Destroy(remove);
+
+				objects.RemoveAt(farthestIndex);
+			}
+		}
+	}
 }

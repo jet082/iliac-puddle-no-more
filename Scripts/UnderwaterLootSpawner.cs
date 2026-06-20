@@ -3,6 +3,9 @@
 
 using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
+using DaggerfallWorkshop.Game.Entity;
+using DaggerfallWorkshop.Game.Items;
+using DaggerfallWorkshop.Utility;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -21,7 +24,7 @@ namespace DeepWaters
     /// terrain area, avoids visible pop-in by spawning beyond underwater fog
     /// distance, and clears transient objects when DFU rebuilds the world.
     /// </summary>
-    public static class UnderwaterLootSpawner
+    internal static class UnderwaterLootSpawner
     {
         // Distance-based top-up: re-roll loot after this much horizontal travel,
         // so finds track exploration rather than time spent idling.
@@ -40,6 +43,8 @@ namespace DeepWaters
         // per-pulse chance rather than a count.
         private const float TreasureCoveClusterChanceMultiplier = 3f;
         private const float MaxClusterChance = 0.85f;
+		private const float ClusterDebrisRadius = 22f;
+		private const int ClusterDebrisCount = 24;
         private const float ShoreLootPulseMultiplier = 0.125f;
         private const float LooseLootDebrisChance = 0.75f;
         private const float TreasureCoveLooseLootDebrisChance = 0.95f;
@@ -50,10 +55,36 @@ namespace DeepWaters
         private const float SurfaceLootOriginClearance = 8f;
         private const int NearbyWaterProbeDirections = 12;
         private const float NearbyWaterGateCheckInterval = 2f;
+		private const float DefaultLootMinSpawnDistance = 42f;
+		private const float DefaultLootMaxSpawnDistance = 72f;
+		private const int MaxStrayLootPerPulse = 12;
+		private const int TreasureCoveMaxStrayLootPerPulse = 18;
+		private const float ForwardSpawnArcDegrees = 110f;
+		private const float ForwardBiasChance = 0.7f;
+		private const float FogAheadMaxDistance = 130f;
+		private const float SeafloorYClearance = 2f;
+		private const float LootFloorLift = 0.08f;
+		private const int SpawnSpotAttempts = 18;
+		private const float SpawnCellSize = 48f;
+		private const int MaxRememberedSpawnCells = 128;
+		private const float ClusterLootRadius = 11f;
+		private const float ClusterLootMinSpacing = 3.0f;
+		private const int ClusterLootSpotAttempts = 8;
 
         private static readonly TransientObjectTracker trackedObjects = new TransientObjectTracker();
+		private static readonly HashSet<long> recentSpawnCells = new HashSet<long>();
+		private static readonly Queue<long> recentSpawnCellOrder = new Queue<long>();
+		private static readonly HashSet<UnderwaterDecorationRecord> usedRubbleRecordsScratch = new HashSet<UnderwaterDecorationRecord>();
+		private static readonly List<Vector3> clusterLootSpotsScratch = new List<Vector3>(12);
+		private static readonly int[] TreasurePileRecords = { 0, 1, 3, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39, 40 };
+		private static readonly UnderwaterDecorationRecord[] RubbleRecords =
+		{
+			R(105, 0), R(105, 5), R(105, 6), R(105, 7), R(105, 8), R(105, 9), R(105, 10),
+			R(400, 0), R(400, 1), R(400, 4), R(400, 6),
+			R(380, 1),
+			R(96, 0), R(96, 2), R(96, 3), R(96, 4), R(96, 5),
+		};
 
-        private static GameObject pulseDriverObject;
         private static Vector3 lastPulseAnchor;
         private static bool hasPulseAnchor;
         private static float nextAllowedPulseTime;
@@ -62,128 +93,107 @@ namespace DeepWaters
         private static bool lastNearbyWaterGateResult;
         private static bool installed;
 
-        public static void Install()
+        internal static void Install()
         {
             if (installed)
                 return;
 
-            DeepWaterRuntime.OnTransientReset += OnTransientReset;
-
-            if (pulseDriverObject == null)
-            {
-                pulseDriverObject = new GameObject("DeepWaters_LootPulseDriver");
-                pulseDriverObject.AddComponent<LootPulseDriver>();
-                Object.DontDestroyOnLoad(pulseDriverObject);
-            }
+            DeepWaterRuntime.OnTransientReset += ResetRuntimeState;
 
             installed = true;
         }
 
-
-        private static void OnTransientReset()
-        {
-            ResetRuntimeState();
-        }
-
         private static void ResetRuntimeState()
         {
-            UnderwaterLootPlacement.Reset();
+			recentSpawnCells.Clear();
+			recentSpawnCellOrder.Clear();
             hasPulseAnchor = false;
             nextAllowedPulseTime = 0f;
             hasNearbyWaterGateCache = false;
             lastNearbyWaterGateResult = false;
             trackedObjects.Clear();
             liveClusterCentres.Clear();
+			usedRubbleRecordsScratch.Clear();
+			clusterLootSpotsScratch.Clear();
         }
 
-        private class LootPulseDriver : MonoBehaviour
+		internal static void Pump()
+		{
+			Vector3 playerPos;
+			if (!CanRunLootPulse(out playerPos))
+			{
+				hasPulseAnchor = false;
+				return;
+			}
+
+			if (!hasPulseAnchor)
+			{
+				lastPulseAnchor = playerPos;
+				hasPulseAnchor = true;
+				TryRunLootPulse(true, playerPos);
+				return;
+			}
+
+			float dx = playerPos.x - lastPulseAnchor.x;
+			float dz = playerPos.z - lastPulseAnchor.z;
+			if (dx * dx + dz * dz < LootPulseDistance * LootPulseDistance)
+				return;
+
+			lastPulseAnchor = playerPos;
+			TryRunLootPulse(false, playerPos);
+		}
+
+        private static void TryRunLootPulse(bool allowImmediate, Vector3 playerPos)
         {
-            void Update()
-            {
-                if (!CanRunLootPulse())
-                {
-                    hasPulseAnchor = false;
-                    return;
-                }
-
-                Vector3 playerPos;
-                if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos)) return;
-
-                if (!hasPulseAnchor)
-                {
-                    lastPulseAnchor = playerPos;
-                    hasPulseAnchor = true;
-                    TryRunLootPulse(true);
-                    return;
-                }
-
-                float dx = playerPos.x - lastPulseAnchor.x;
-                float dz = playerPos.z - lastPulseAnchor.z;
-                if (dx * dx + dz * dz < LootPulseDistance * LootPulseDistance)
-                    return;
-
-                lastPulseAnchor = playerPos;
-                TryRunLootPulse(false);
-            }
-        }
-
-        private static void TryRunLootPulse(bool allowImmediate)
-        {
-            if (DeepWaters.Instance.SeafloorLootRate <= 0f && DeepWaters.Instance.TreasureClusterRate <= 0f)
-                return;
-
             if (!allowImmediate && Time.time < nextAllowedPulseTime)
                 return;
 
-            Vector3 playerPos;
-            if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
-                return;
+			float spawnMinDistance = DefaultLootMinSpawnDistance;
+			float spawnMaxDistance = DefaultLootMaxSpawnDistance;
 
-            float spawnMinDistance;
-            float spawnMaxDistance;
-            GetLootSpawnDistanceRange(out spawnMinDistance, out spawnMaxDistance);
-
-            trackedObjects.PruneByDistance(playerPos, GetLootDespawnDistance());
+            int maxLiveLoot = DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveLootObjects : 32;
+            trackedObjects.Prune(playerPos, DespawnDistance, maxLiveLoot);
             PruneLiveClusters(playerPos);
-            int maxLiveLoot = GetMaxLiveLootObjects();
-            trackedObjects.PruneToCount(playerPos, maxLiveLoot);
             if (trackedObjects.Count >= maxLiveLoot)
                 return;
 
             bool spawnedCluster = false;
-            int spawnedStrays = 0;
+            bool spawnedStray = false;
+			float waterContextMultiplier = DeepWaterWorld.IsPlayerInOrAboveDeepWater(SurfaceLootOriginClearance)
+				? 1f
+				: ShoreLootPulseMultiplier;
 
-            if (ShouldSpawnTreasureCluster())
-                spawnedCluster = TrySpawnTreasureCluster(spawnMinDistance, spawnMaxDistance);
+            if (ShouldSpawnTreasureCluster(waterContextMultiplier))
+                spawnedCluster = TrySpawnTreasureCluster(playerPos, spawnMinDistance, spawnMaxDistance);
 
-            int strayTarget = RollStrayLootCount(spawnedCluster);
+            int strayTarget = RollStrayLootCount(spawnedCluster, waterContextMultiplier);
             for (int i = 0; i < strayTarget; i++)
             {
-                if (TrySpawnStrayLoot(spawnMinDistance, spawnMaxDistance))
-                    spawnedStrays++;
+                if (TrySpawnStrayLoot(playerPos, spawnMinDistance, spawnMaxDistance))
+                    spawnedStray = true;
             }
 
-            bool spawnedAny = spawnedCluster || spawnedStrays > 0;
+            bool spawnedAny = spawnedCluster || spawnedStray;
             nextAllowedPulseTime = Time.time + (spawnedAny ? MinPulseIntervalSeconds : FailedPulseRetrySeconds);
         }
 
-        private static bool ShouldSpawnTreasureCluster()
+        private static bool ShouldSpawnTreasureCluster(float waterContextMultiplier)
         {
             float rate = Mathf.Max(0f, DeepWaters.Instance.TreasureClusterRate);
             if (rate <= 0f)
                 return false;
 
-            if (liveClusterCentres.Count >= GetMaxLiveTreasureClusters())
+            if (liveClusterCentres.Count >= (DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveTreasureClusters : 3))
                 return false;
 
             float multiplier = DeepWaters.Instance.TreasureCove ? TreasureCoveClusterChanceMultiplier : NormalLootMultiplier;
             float chance = Mathf.Min(
-                rate * multiplier * GetWaterContextSpawnMultiplier() * DeepWaterWorld.DepthSpawnMultiplier(),
+                rate * multiplier * waterContextMultiplier * DeepWaterWorld.DepthSpawnMultiplier(),
                 MaxClusterChance);
             return Random.value < chance;
         }
 
-        private static int RollStrayLootCount(bool spawnedCluster)
+        private static int RollStrayLootCount(bool spawnedCluster, float waterContextMultiplier)
         {
             // A normal treasure pulse is already a find; keep it readable and
             // cheap by not adding unrelated stray piles in the same pulse.
@@ -195,28 +205,28 @@ namespace DeepWaters
 
             float multiplier = DeepWaters.Instance.TreasureCove ? TreasureCoveStrayMultiplier : NormalLootMultiplier;
             float scaledCount = FullStrayLootPerPulse * rate * multiplier *
-                                GetWaterContextSpawnMultiplier() * DeepWaterWorld.DepthSpawnMultiplier();
+                                waterContextMultiplier * DeepWaterWorld.DepthSpawnMultiplier();
             int count = DeepWaterWorld.RollCount(scaledCount);
 
             int max = DeepWaters.Instance.TreasureCove
-                ? DeepWaters.Instance.TreasureCoveMaxStrayLootPerPulse
-                : DeepWaters.Instance.MaxStrayLootPerPulse;
+                ? TreasureCoveMaxStrayLootPerPulse
+                : MaxStrayLootPerPulse;
             return Mathf.Clamp(count, 0, max);
         }
 
-        private static bool TrySpawnStrayLoot(float minSpawnDistance, float maxSpawnDistance)
+        private static bool TrySpawnStrayLoot(Vector3 playerPos, float minSpawnDistance, float maxSpawnDistance)
         {
             Vector3 worldPos;
             Transform parent;
             long spawnCellKey;
-            if (!UnderwaterLootPlacement.PickSpawnSpot(minSpawnDistance, maxSpawnDistance, out worldPos, out parent, out spawnCellKey))
+			if (!PickSpawnSpot(playerPos, minSpawnDistance, maxSpawnDistance, out worldPos, out parent, out spawnCellKey))
                 return false;
 
-            DaggerfallLoot loot = UnderwaterLootObjectFactory.SpawnLootContainer(worldPos, parent, trackedObjects);
+            DaggerfallLoot loot = SpawnLootContainer(worldPos, parent, trackedObjects);
             if (loot == null) return false;
 
-            UnderwaterLootPlacement.RememberSpawnCell(spawnCellKey);
-            UnderwaterLootCatalog.FillRandomItem(loot);
+			RememberSpawnCell(spawnCellKey);
+            FillRandomItem(loot);
             SpawnLooseLootDebris(worldPos, trackedObjects);
             return true;
         }
@@ -231,15 +241,15 @@ namespace DeepWaters
 
             int targetCount = Random.Range(1, 3);
             var rubbleBatches = new Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>>();
-            var usedRecords = new HashSet<UnderwaterDecorationRecord>();
+            usedRubbleRecordsScratch.Clear();
 
             for (int i = 0; i < targetCount; i++)
-                TryQueueLooseLootDebris(lootPos, rubbleBatches, usedRecords);
+				QueueLooseLootDebris(lootPos, rubbleBatches, usedRubbleRecordsScratch);
 
-            return UnderwaterLootObjectFactory.SpawnRubbleBatches(rubbleBatches, tracker);
+            return SpawnRubbleBatches(rubbleBatches, tracker);
         }
 
-        private static bool TryQueueLooseLootDebris(
+        private static void QueueLooseLootDebris(
             Vector3 lootPos,
             Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches,
             HashSet<UnderwaterDecorationRecord> usedRecords)
@@ -254,30 +264,252 @@ namespace DeepWaters
                     lootPos.z + Mathf.Sin(angle) * dist);
 
                 Transform debrisParent;
-                if (!UnderwaterLootPlacement.ResolveSeafloorAt(spot.x, spot.z, out spot.y, out debrisParent))
+				if (!ResolveSeafloorAt(spot.x, spot.z, out spot.y, out debrisParent))
                     continue;
 
-                UnderwaterDecorationRecord record = UnderwaterLootCatalog.PickRubbleRecordExcept(usedRecords);
+                UnderwaterDecorationRecord record = PickRubbleRecordExcept(usedRecords);
                 usedRecords.Add(record);
-                UnderwaterLootObjectFactory.QueueRubbleSprite(spot, debrisParent, rubbleBatches, record);
-                return true;
+                QueueRubbleSprite(spot, debrisParent, rubbleBatches, record);
+                return;
             }
-
-            return false;
         }
 
-        private static bool TrySpawnTreasureCluster(float minSpawnDistance, float maxSpawnDistance)
+        private static bool TrySpawnTreasureCluster(Vector3 playerPos, float minSpawnDistance, float maxSpawnDistance)
         {
-            Vector3 centre;
-            if (!UnderwaterTreasureClusterSpawner.TrySpawn(trackedObjects, minSpawnDistance, maxSpawnDistance, out centre))
-                return false;
+			Vector3 centre;
+			Transform parent;
+			long spawnCellKey;
+			if (!PickSpawnSpot(playerPos, minSpawnDistance, maxSpawnDistance, out centre, out parent, out spawnCellKey))
+				return false;
 
+			int debrisPlaced = SpawnClusterDebris(centre);
+			int lootPlaced = SpawnClusterTreasure(centre);
+			if (debrisPlaced == 0 && lootPlaced == 0)
+				return false;
+
+			RememberSpawnCell(spawnCellKey);
+			UnderwaterEnemySpawner.TrySpawnRareEnemiesNearTreasureCluster(centre);
             liveClusterCentres.Add(centre);
             return true;
         }
 
-        private static bool CanRunLootPulse()
+		private static int SpawnClusterDebris(Vector3 centre)
+		{
+			int debrisCount = DeepWaters.Instance.TreasureCove ? ClusterDebrisCount * 2 : ClusterDebrisCount;
+			var rubbleBatches = new Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>>();
+
+			for (int i = 0; i < debrisCount; i++)
+			{
+				float r = Mathf.Sqrt(Random.value) * ClusterDebrisRadius;
+				float angle = Random.Range(0f, Mathf.PI * 2f);
+				Vector3 spot = new Vector3(
+					centre.x + Mathf.Cos(angle) * r,
+					0f,
+					centre.z + Mathf.Sin(angle) * r);
+
+				Transform debrisParent;
+				if (ResolveSeafloorAt(spot.x, spot.z, out spot.y, out debrisParent))
+				{
+					QueueRubbleSprite(
+						spot,
+						debrisParent,
+						rubbleBatches,
+						RubbleRecords[Random.Range(0, RubbleRecords.Length)]);
+				}
+			}
+
+			return SpawnRubbleBatches(rubbleBatches, trackedObjects);
+		}
+
+		private static int SpawnClusterTreasure(Vector3 centre)
+		{
+			int lootMin = DeepWaters.Instance.TreasureCove ? 6 : 3;
+			int lootMax = DeepWaters.Instance.TreasureCove ? 11 : 6;
+			int lootCount = Random.Range(lootMin, lootMax);
+			int lootPlaced = 0;
+			clusterLootSpotsScratch.Clear();
+
+			for (int i = 0; i < lootCount; i++)
+			{
+				Vector3 spot;
+				if (!TryPickClusterLootSpot(centre, clusterLootSpotsScratch, out spot))
+					continue;
+
+				Transform spotParent;
+				if (!ResolveSeafloorAt(spot.x, spot.z, out spot.y, out spotParent))
+					continue;
+
+				DaggerfallLoot loot = SpawnLootContainer(spot, spotParent, trackedObjects);
+				if (loot == null)
+					continue;
+
+				FillClusterContainer(loot);
+				clusterLootSpotsScratch.Add(spot);
+				lootPlaced++;
+			}
+
+			return lootPlaced;
+		}
+
+		private static void FillClusterContainer(DaggerfallLoot loot)
+		{
+			int minItems = DeepWaters.Instance.TreasureCove ? 4 : 2;
+			int maxItems = DeepWaters.Instance.TreasureCove ? 9 : 5;
+			int items = Random.Range(minItems, maxItems);
+			for (int i = 0; i < items; i++)
+				FillRandomItem(loot);
+		}
+
+		private static DaggerfallLoot SpawnLootContainer(
+			Vector3 worldPos,
+			Transform parent,
+			TransientObjectTracker tracker)
+		{
+			int record = TreasurePileRecords[Random.Range(0, TreasurePileRecords.Length)];
+			DaggerfallLoot loot = GameObjectHelper.CreateLootContainer(
+				LootContainerTypes.RandomTreasure,
+				InventoryContainerImages.Ground,
+				worldPos,
+				parent,
+				DaggerfallLootDataTables.randomTreasureArchive,
+				record,
+				DaggerfallUnity.NextUID,
+				null,
+				true);
+
+			DeepWaterRendering.DisableShadows(loot != null ? loot.gameObject : null);
+			if (loot != null)
+			{
+				BrightenUnderwaterBillboards(loot.gameObject);
+				DeepWaterWorld.AlignObjectBottomToWorldY(loot.gameObject, worldPos.y);
+			}
+
+			if (tracker != null)
+				tracker.Add(loot != null ? loot.gameObject : null);
+
+			return loot;
+		}
+
+		private static void QueueRubbleSprite(
+			Vector3 worldPos,
+			Transform parent,
+			Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches,
+			UnderwaterDecorationRecord record)
+		{
+			List<UnderwaterDecorationPlacementInfo> batchItems;
+			if (!rubbleBatches.TryGetValue(parent, out batchItems))
+			{
+				batchItems = new List<UnderwaterDecorationPlacementInfo>();
+				rubbleBatches.Add(parent, batchItems);
+			}
+
+			batchItems.Add(new UnderwaterDecorationPlacementInfo(
+				record,
+				worldPos - parent.position));
+		}
+
+		private static int SpawnRubbleBatches(
+			Dictionary<Transform, List<UnderwaterDecorationPlacementInfo>> rubbleBatches,
+			TransientObjectTracker tracker)
+		{
+			int placed = 0;
+			foreach (KeyValuePair<Transform, List<UnderwaterDecorationPlacementInfo>> pair in rubbleBatches)
+			{
+				if (pair.Key == null || pair.Value == null || pair.Value.Count == 0)
+					continue;
+
+				GameObject group = UnderwaterDecorationBatchFactory.Spawn(pair.Key, pair.Value);
+				if (group == null)
+					continue;
+
+				group.name = "DeepWaters_LootRubbleBatch";
+				if (tracker != null)
+				{
+					Vector3 centroidLocal = ComputeCentroidLocal(pair.Value);
+					var anchor = new GameObject("DeepWaters_LootRubbleAnchor");
+					anchor.transform.SetParent(pair.Key, false);
+					anchor.transform.localPosition = centroidLocal;
+					group.transform.SetParent(anchor.transform, false);
+					group.transform.localPosition = -centroidLocal;
+					tracker.Add(anchor);
+				}
+
+				placed += pair.Value.Count;
+			}
+
+			return placed;
+		}
+
+		private static Vector3 ComputeCentroidLocal(List<UnderwaterDecorationPlacementInfo> items)
+		{
+			if (items == null || items.Count == 0)
+				return Vector3.zero;
+
+			Vector3 sum = Vector3.zero;
+			for (int i = 0; i < items.Count; i++)
+				sum += items[i].LocalPosition;
+
+			return sum / items.Count;
+		}
+
+		private static void BrightenUnderwaterBillboards(GameObject go)
+		{
+			if (go == null)
+				return;
+
+			MeshRenderer[] renderers = go.GetComponentsInChildren<MeshRenderer>(true);
+			for (int i = 0; i < renderers.Length; i++)
+				UnderwaterDecorationBatchFactory.ApplyUnderwaterDecorationMaterial(renderers[i]);
+		}
+
+		private static UnderwaterDecorationRecord PickRubbleRecordExcept(HashSet<UnderwaterDecorationRecord> excludedRecords)
+		{
+			if (excludedRecords == null || excludedRecords.Count >= RubbleRecords.Length)
+				return RubbleRecords[Random.Range(0, RubbleRecords.Length)];
+
+			UnderwaterDecorationRecord record;
+			do
+			{
+				record = RubbleRecords[Random.Range(0, RubbleRecords.Length)];
+			}
+			while (excludedRecords.Contains(record));
+
+			return record;
+		}
+
+		private static void FillRandomItem(DaggerfallLoot loot)
+		{
+			if (loot == null)
+				return;
+
+			var pe = GameManager.Instance.PlayerEntity;
+			int level = pe != null ? pe.Level : 1;
+			var gender = pe != null ? pe.Gender : Genders.Male;
+			var race = pe != null ? pe.Race : Races.Breton;
+
+			DaggerfallUnityItem item = null;
+			float roll = Random.value;
+			if (roll < 0.25f)       item = ItemBuilder.CreateRandomReligiousItem();
+			else if (roll < 0.45f)  item = ItemBuilder.CreateRandomPotion();
+			else if (roll < 0.60f)  item = ItemBuilder.CreateRandomJewellery();
+			else if (roll < 0.75f)  item = ItemBuilder.CreateRandomGem();
+			else if (roll < 0.85f)  item = ItemBuilder.CreateRandomClothing(gender, race);
+			else if (roll < 0.95f)  item = ItemBuilder.CreateRandomWeapon(level);
+			else                    item = ItemBuilder.CreateRandomArmor(level, gender, race);
+
+			if (item != null)
+				loot.Items.AddItem(item);
+		}
+
+		private static UnderwaterDecorationRecord R(int archive, int record)
+		{
+			return new UnderwaterDecorationRecord(archive, record);
+		}
+
+        private static bool CanRunLootPulse(out Vector3 playerPos)
         {
+			playerPos = Vector3.zero;
+
             if (DeepWaters.Instance == null)
                 return false;
 
@@ -297,22 +529,17 @@ namespace DeepWaters
             if (gameManager.StreamingWorld == null || gameManager.MainCamera == null)
                 return false;
 
-            Vector3 playerPos;
             if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
                 return false;
 
             if (hasNearbyWaterGateCache && Time.time < nextNearbyWaterGateCheckTime)
                 return lastNearbyWaterGateResult;
 
-            float minSpawnDistance;
-            float maxSpawnDistance;
-            GetLootSpawnDistanceRange(out minSpawnDistance, out maxSpawnDistance);
-
             float depth;
             bool result = DeepWaterWorld.HasNearbyWaterColumn(
                 playerPos,
-                minSpawnDistance,
-                maxSpawnDistance,
+                DefaultLootMinSpawnDistance,
+                DefaultLootMaxSpawnDistance,
                 NearbyWaterProbeDirections,
                 SurfaceLootOriginClearance,
                 out depth);
@@ -323,35 +550,156 @@ namespace DeepWaters
             return result;
         }
 
-        private static float GetWaterContextSpawnMultiplier()
-        {
-            return DeepWaterWorld.IsPlayerInOrAboveDeepWater(SurfaceLootOriginClearance)
-                ? 1f
-                : ShoreLootPulseMultiplier;
-        }
+		private static bool PickSpawnSpot(
+			Vector3 playerPos,
+			float minDistance,
+			float maxDistance,
+			out Vector3 worldPos,
+			out Transform parent,
+			out long spawnCellKey)
+		{
+			worldPos = Vector3.zero;
+			parent = null;
+			spawnCellKey = 0L;
 
-        private static void GetLootSpawnDistanceRange(out float minDistance, out float maxDistance)
-        {
-            if (DeepWaters.Instance == null)
-            {
-                minDistance = UnderwaterLootPlacement.MinSpawnDistance;
-                maxDistance = UnderwaterLootPlacement.MaxSpawnDistance;
-                return;
-            }
+			minDistance = Mathf.Max(0f, minDistance);
+			maxDistance = Mathf.Max(minDistance + 1f, maxDistance);
 
-            minDistance = DeepWaters.Instance.LootSpawnMinDistance;
-            maxDistance = Mathf.Max(minDistance + 1f, DeepWaters.Instance.LootSpawnMaxDistance);
-        }
+			for (int attempt = 0; attempt < SpawnSpotAttempts; attempt++)
+			{
+				float worldX, worldZ;
+				Vector3 aheadPoint;
+				if (Random.value < DeepWaterWorld.FogAheadSpawnChance &&
+					DeepWaterWorld.TryPickFogAheadPoint(playerPos, FogAheadMaxDistance, out aheadPoint))
+				{
+					worldX = aheadPoint.x;
+					worldZ = aheadPoint.z;
+				}
+				else
+				{
+					float angle = PickSpawnAngle();
+					float dist = DeepWaterWorld.PickRingDistance(minDistance, maxDistance);
+					worldX = playerPos.x + Mathf.Cos(angle) * dist;
+					worldZ = playerPos.z + Mathf.Sin(angle) * dist;
+				}
 
-        private static float GetLootDespawnDistance()
-        {
-            return DespawnDistance;
-        }
+				long key = DeepWaterWorld.WorldCellKey(worldX, worldZ, SpawnCellSize);
+				if (recentSpawnCells.Contains(key))
+					continue;
 
-        private static int GetMaxLiveLootObjects()
-        {
-            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveLootObjects : 32;
-        }
+				float worldY;
+				Transform terrainParent;
+				if (!ResolveSeafloorAt(worldX, worldZ, out worldY, out terrainParent))
+					continue;
+
+				worldPos = new Vector3(worldX, worldY, worldZ);
+				if (!DeepWaterWorld.IsOutsideImmediateView(
+					worldPos,
+					playerPos,
+					DeepWaterWorld.UnderwaterVisionDistance,
+					0.12f))
+				{
+					continue;
+				}
+
+				parent = terrainParent;
+				spawnCellKey = key;
+				return true;
+			}
+
+			return false;
+		}
+
+		private static bool TryPickClusterLootSpot(Vector3 centre, List<Vector3> placedLootSpots, out Vector3 spot)
+		{
+			for (int attempt = 0; attempt < ClusterLootSpotAttempts; attempt++)
+			{
+				float r = Mathf.Sqrt(Random.value) * ClusterLootRadius;
+				float angle = Random.Range(0f, Mathf.PI * 2f);
+				spot = new Vector3(
+					centre.x + Mathf.Cos(angle) * r,
+					0f,
+					centre.z + Mathf.Sin(angle) * r);
+
+				if (IsFarEnoughFromClusterLoot(spot, placedLootSpots))
+					return true;
+			}
+
+			spot = Vector3.zero;
+			return false;
+		}
+
+		private static bool ResolveSeafloorAt(float worldX, float worldZ, out float seafloorWorldY, out Transform terrainTransform)
+		{
+			seafloorWorldY = 0f;
+			terrainTransform = null;
+
+			DeepWaterColumn column;
+			if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
+				return false;
+
+			if (column.Parent == null || column.Depth < SeafloorYClearance)
+				return false;
+
+			float seafloorLocalY;
+			if (!DeepWaterWorld.TryGetRenderedSeafloorLocalY(column, worldX, worldZ, out seafloorLocalY))
+				return false;
+
+			if (column.OceanLocalY - seafloorLocalY < SeafloorYClearance)
+				return false;
+
+			terrainTransform = column.Parent;
+			seafloorWorldY = terrainTransform.position.y + seafloorLocalY + LootFloorLift;
+			return true;
+		}
+
+		private static void RememberSpawnCell(long key)
+		{
+			if (recentSpawnCells.Contains(key))
+				return;
+
+			recentSpawnCells.Add(key);
+			recentSpawnCellOrder.Enqueue(key);
+
+			while (recentSpawnCellOrder.Count > MaxRememberedSpawnCells)
+			{
+				long oldKey = recentSpawnCellOrder.Dequeue();
+				recentSpawnCells.Remove(oldKey);
+			}
+		}
+
+		private static float PickSpawnAngle()
+		{
+			Vector3 forward = Vector3.zero;
+			GameManager gameManager = GameManager.Instance;
+			if (gameManager != null && gameManager.MainCamera != null)
+				forward = gameManager.MainCamera.transform.forward;
+			if (forward.sqrMagnitude < 0.001f && gameManager != null && gameManager.PlayerObject != null)
+				forward = gameManager.PlayerObject.transform.forward;
+
+			forward.y = 0f;
+			if (forward.sqrMagnitude < 0.001f || Random.value > ForwardBiasChance)
+				return Random.Range(0f, Mathf.PI * 2f);
+
+			forward.Normalize();
+			float baseAngle = Mathf.Atan2(forward.z, forward.x);
+			float arc = ForwardSpawnArcDegrees * Mathf.Deg2Rad;
+			return baseAngle + Random.Range(-arc, arc);
+		}
+
+		private static bool IsFarEnoughFromClusterLoot(Vector3 spot, List<Vector3> placedLootSpots)
+		{
+			float minSq = ClusterLootMinSpacing * ClusterLootMinSpacing;
+			for (int i = 0; i < placedLootSpots.Count; i++)
+			{
+				float dx = spot.x - placedLootSpots[i].x;
+				float dz = spot.z - placedLootSpots[i].z;
+				if (dx * dx + dz * dz < minSq)
+					return false;
+			}
+
+			return true;
+		}
 
         // Live treasure clusters near the player, tracked by centre position so
         // 'max treasure' caps how many wreck sites exist around you at once
@@ -361,7 +709,7 @@ namespace DeepWaters
 
         private static void PruneLiveClusters(Vector3 playerPos)
         {
-            float maxDistance = GetLootDespawnDistance();
+            float maxDistance = DespawnDistance;
             float maxSq = maxDistance * maxDistance;
             for (int i = liveClusterCentres.Count - 1; i >= 0; i--)
             {
@@ -370,11 +718,6 @@ namespace DeepWaters
                 if (delta.sqrMagnitude > maxSq)
                     liveClusterCentres.RemoveAt(i);
             }
-        }
-
-        private static int GetMaxLiveTreasureClusters()
-        {
-            return DeepWaters.Instance != null ? DeepWaters.Instance.MaxLiveTreasureClusters : 3;
         }
 
     }

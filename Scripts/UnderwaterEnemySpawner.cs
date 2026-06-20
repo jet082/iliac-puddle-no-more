@@ -15,7 +15,7 @@ namespace DeepWaters
     /// area (same model as the passive fish). A rare boss roll seeds undead/vampire
     /// "bosses" only in the deep open ocean.
     /// </summary>
-    public static class UnderwaterEnemySpawner
+    internal static class UnderwaterEnemySpawner
     {
         // Depth-banded aquatic pool (issue 7). Each entry prefers a band of the
         // water column (fraction of max depth). Shallow coves read as living
@@ -24,12 +24,12 @@ namespace DeepWaters
         // down deep.
         private struct DepthAquatic
         {
-            public MobileTypes Type;
-            public int Weight;
-            public float MinDepthFraction;
-            public float MaxDepthFraction;
+            internal MobileTypes Type;
+            internal int Weight;
+            internal float MinDepthFraction;
+            internal float MaxDepthFraction;
 
-            public DepthAquatic(MobileTypes type, int weight, float minDepthFraction, float maxDepthFraction)
+            internal DepthAquatic(MobileTypes type, int weight, float minDepthFraction, float maxDepthFraction)
             {
                 Type = type;
                 Weight = weight;
@@ -94,54 +94,43 @@ namespace DeepWaters
 
         private sealed class PixelEnemyGroup
         {
-            public readonly TransientObjectTracker Enemies = new TransientObjectTracker();
-            public int AttemptsRemaining;
+            internal readonly TransientObjectTracker Enemies = new TransientObjectTracker();
+            internal int AttemptsRemaining;
         }
 
-        private static readonly Dictionary<long, PixelEnemyGroup> pixelGroups = new Dictionary<long, PixelEnemyGroup>();
-        private static readonly List<long> despawnScratch = new List<long>();
-        private static bool installed;
+		private static readonly Dictionary<long, PixelEnemyGroup> pixelGroups = new Dictionary<long, PixelEnemyGroup>();
+		private static readonly List<long> despawnScratch = new List<long>();
+		private static bool installed;
+		private static int liveCount;
 
-        public static void Install()
+        internal static void Install()
         {
             if (installed)
                 return;
 
-            DeepWaterRuntime.OnTransientReset += OnTransientReset;
+            DeepWaterRuntime.OnTransientReset += ClearAll;
             installed = true;
         }
 
-        private static void OnTransientReset()
-        {
-            ClearAll();
-        }
-
-        internal static int LiveCount
-        {
-            get
-            {
-                int total = 0;
-                foreach (var kv in pixelGroups)
-                    total += kv.Value.Enemies.Count;
-                return total;
-            }
-        }
+		internal static int LiveCount
+		{
+			get { return liveCount; }
+		}
 
         internal static bool CanPopulate()
         {
             return DeepWaters.Instance != null &&
-                   DeepWaterRuntime.CanRunHeavyRuntimeWork &&
                    DeepWaters.Instance.SpawnUnderwaterEnemies &&
-                   DeepWaters.Instance.EnemyFrequency > 0f &&
-                   DeepWaterWorld.IsPlayerInExteriorWaterContext();
+                   DeepWaters.Instance.EnemyFrequency > 0f;
         }
 
         internal static void ClearAll()
         {
-            foreach (var kv in pixelGroups)
-                kv.Value.Enemies.Clear();
-            pixelGroups.Clear();
-        }
+			foreach (var kv in pixelGroups)
+				kv.Value.Enemies.Clear();
+			pixelGroups.Clear();
+			liveCount = 0;
+		}
 
         internal static void TickDespawn(HashSet<long> keepKeys)
         {
@@ -152,12 +141,14 @@ namespace DeepWaters
                     despawnScratch.Add(kv.Key);
             }
 
-            for (int i = 0; i < despawnScratch.Count; i++)
-            {
-                long key = despawnScratch[i];
-                pixelGroups[key].Enemies.Clear();
-                pixelGroups.Remove(key);
-            }
+			for (int i = 0; i < despawnScratch.Count; i++)
+			{
+				long key = despawnScratch[i];
+				PixelEnemyGroup group = pixelGroups[key];
+				liveCount = Mathf.Max(0, liveCount - group.Enemies.Count);
+				group.Enemies.Clear();
+				pixelGroups.Remove(key);
+			}
         }
 
         internal static void TickPopulate(DaggerfallTerrain dfTerrain, ref int attemptBudget)
@@ -182,10 +173,10 @@ namespace DeepWaters
 
             while (attemptBudget > 0 && group.AttemptsRemaining > 0)
             {
-                if (LiveCount >= liveCap)
-                {
-                    group.AttemptsRemaining = 0;
-                    return;
+				if (liveCount >= liveCap)
+				{
+					group.AttemptsRemaining = 0;
+					return;
                 }
 
                 attemptBudget--;
@@ -202,21 +193,19 @@ namespace DeepWaters
                     continue;
 
                 MobileGender gender;
-                bool boss;
-                MobileTypes type = PickEnemyForDepth(depthFraction, out gender, out boss);
+                MobileTypes type = PickEnemyForDepth(depthFraction, out gender);
 				Vector3 resolvedPos = PickEnemyPosition(worldX, worldZ, floorY, surfaceY, type, depthFraction);
 
                 GameObject enemy = SpawnEnemy(resolvedPos, parent, type, gender);
-                if (enemy != null)
-                {
-                    group.Enemies.Add(enemy);
-                    if (boss)
-                        LogBossSpawn(type, gender, depthFraction);
-                }
+				if (enemy != null)
+				{
+					group.Enemies.Add(enemy);
+					liveCount++;
+				}
             }
         }
 
-        public static int TrySpawnRareEnemiesNearTreasureCluster(Vector3 centre)
+        internal static int TrySpawnRareEnemiesNearTreasureCluster(Vector3 centre)
         {
             if (DeepWaters.Instance == null || !DeepWaters.Instance.SpawnUnderwaterEnemies)
                 return 0;
@@ -340,24 +329,14 @@ namespace DeepWaters
 
         // Deep-ocean spawns roll for a boss; otherwise the depth-weighted
         // aquatic pick.
-        private static MobileTypes PickEnemyForDepth(float depthFraction, out MobileGender gender, out bool boss)
+        private static MobileTypes PickEnemyForDepth(float depthFraction, out MobileGender gender)
         {
             gender = MobileGender.Unspecified;
-            boss = false;
 
             if (depthFraction >= BossMinDepthFraction && Random.value < BossSpawnChance)
-            {
-                boss = true;
                 return PickBoss(out gender);
-            }
 
             return PickAquaticForDepth(depthFraction);
-        }
-
-        private static void LogBossSpawn(MobileTypes type, MobileGender gender, float depthFraction)
-        {
-            Debug.Log("[DeepWaters] Boss spawned: " + type + " (" + gender + ") at depthFraction " +
-                      depthFraction.ToString("F2"));
         }
 
 		private static MobileTypes PickBoss(out MobileGender gender)

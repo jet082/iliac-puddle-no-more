@@ -22,7 +22,7 @@ namespace DeepWaters
     /// outdoor swim collider gate disables its collider locally to let the
     /// player descend to the seafloor mesh.
     /// </summary>
-    public static class DeepWaterFloorBuilder
+    internal static class DeepWaterFloorBuilder
     {
         private const string FloorChildName = "DeepWaters_Seafloor";
         // Buffer of non-hole vanilla terrain we keep around the shoreline.
@@ -46,20 +46,12 @@ namespace DeepWaters
         // IT's beach sand starts to fade up from sea level.
         internal const float HoleBufferMeters = 0.5f;
 
-        // Event raised after a tile's seafloor mesh has been built or
-        // refreshed. UnderwaterDecorations subscribes to this so it can
-        // queue per-tile decoration placement without polling. Added
-        // here because the working backup's UnderwaterDecorations
-        // hooked OnPromoteTerrainData directly, but the current version
-        // expects OnFloorRefreshed as a signal that the tile is fully
-        // set up (including the seafloor mesh, which decorations sample
-        // for spawn heights).
-        public delegate void FloorRefreshedHandler(DaggerfallTerrain dfTerrain);
-        public static event FloorRefreshedHandler OnFloorRefreshed;
+        // Decorations wait for this so spawn heights sample the finished floor.
+        internal static event System.Action<DaggerfallTerrain> OnFloorRefreshed;
 
         private static bool installed;
 
-        public static void Install()
+        internal static void Install()
         {
             if (installed) return;
             DaggerfallTerrain.OnPromoteTerrainData += HandlePromote;
@@ -70,14 +62,14 @@ namespace DeepWaters
         // callers that genuinely need a rebuild (settings changed, save
         // load completed) actually get one even when DFU hasn't
         // re-allocated heightmap arrays.
-        public static void RefreshLoadedTiles(bool force = false)
+        internal static void RefreshLoadedTiles(bool force = false)
         {
             DaggerfallTerrain[] terrains = Object.FindObjectsOfType<DaggerfallTerrain>();
             for (int i = 0; i < terrains.Length; i++)
                 RefreshLoadedTile(terrains[i], force);
         }
 
-        public static void RefreshLoadedTile(DaggerfallTerrain dfTerrain, bool force = false)
+        private static void RefreshLoadedTile(DaggerfallTerrain dfTerrain, bool force = false)
         {
             if (dfTerrain == null)
                 return;
@@ -85,36 +77,6 @@ namespace DeepWaters
             Terrain unityTerrain = dfTerrain.GetComponent<Terrain>();
             if (unityTerrain != null && unityTerrain.terrainData != null)
                 HandlePromote(dfTerrain, unityTerrain.terrainData, force);
-        }
-
-        // API surface used by DeepWaterStreamingBuffer to warm the
-        // expanded streaming ring while the player is in exterior
-        // water. Forwards to RefreshLoadedTiles WITHOUT force, so the
-        // IsCurrentBuild guard short-circuits the per-stream-cycle
-        // re-promotion of every loaded tile. Without that guard, every
-        // OnUpdateTerrainsEnd bumped each tile's BuildVersion, which
-        // invalidated UnderwaterDecorations markers and caused the
-        // entire decoration ring to tear down and respawn on every
-        // streaming pulse.
-        public static void RefreshPlayerArea()
-        {
-            RefreshLoadedTiles(false);
-        }
-
-        // Fire OnFloorRefreshed after a floor mesh is built. Called from
-        // BuildOrRefreshFloor's success path (see additions below).
-        internal static void RaiseFloorRefreshed(DaggerfallTerrain dfTerrain)
-        {
-            if (OnFloorRefreshed != null)
-            {
-                try { OnFloorRefreshed(dfTerrain); }
-                catch (System.Exception ex)
-                {
-                    Debug.LogWarning("[DeepWaters.Builder] OnFloorRefreshed subscriber threw for tile (" +
-                                     (dfTerrain != null ? dfTerrain.MapPixelX : -1) + "," +
-                                     (dfTerrain != null ? dfTerrain.MapPixelY : -1) + "): " + ex.Message);
-                }
-            }
         }
 
         private static void HandlePromote(DaggerfallTerrain dfTerrain, TerrainData terrainData)
@@ -140,7 +102,6 @@ namespace DeepWaters
 
         private static void HandlePromote(DaggerfallTerrain dfTerrain, TerrainData terrainData, bool force, bool fromPromoteEvent)
         {
-            System.Diagnostics.Stopwatch profile = DeepWaterRuntime.StartProfile();
             try
             {
                 HandlePromoteCore(dfTerrain, terrainData, force, fromPromoteEvent);
@@ -152,13 +113,7 @@ namespace DeepWaters
                 Debug.LogError("[DeepWaters] HandlePromote crashed for tile (" + mx + "," + my +
                                "): " + ex.Message + "\n" + ex.StackTrace);
             }
-            finally
-            {
-                DeepWaterRuntime.LogProfile(profile, "floor-promote", dfTerrain);
-            }
         }
-
-        public static bool DiagnosticLogging = false;
 
         private static void HandlePromoteCore(DaggerfallTerrain dfTerrain, TerrainData terrainData, bool force, bool fromPromoteEvent)
         {
@@ -179,8 +134,6 @@ namespace DeepWaters
             // otherwise turning surfaces off breaks water generation entirely.
             if (DeepWaters.Instance == null)
             {
-                if (DiagnosticLogging)
-                    Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + ") skipped (mod not ready)");
                 RemoveFloor(dfTerrain);
                 return;
             }
@@ -220,10 +173,6 @@ namespace DeepWaters
 
             if (!tile.IsOceanConnected || !tile.HasDistanceField)
             {
-                if (DiagnosticLogging)
-                    Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY +
-                              ") NOT ocean-connected (connected=" + tile.IsOceanConnected +
-                              " distField=" + tile.HasDistanceField + ") — no seafloor mesh");
                 RemoveFloor(dfTerrain);
                 return;
             }
@@ -232,18 +181,21 @@ namespace DeepWaters
             bool hasAnyHoles = ComputeHoleMask(dfTerrain, tile, terrainData, out holes);
             if (!hasAnyHoles)
             {
-                if (DiagnosticLogging)
-                    Debug.Log("[DeepWaters.Builder] tile=(" + dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY +
-                              ") ocean-connected but no carved cells (entirely buffered shoreline?) — no seafloor mesh");
                 RemoveFloor(dfTerrain);
                 return;
             }
 
             BuildOrRefreshFloor(dfTerrain, terrainData, tile, holes);
             UpdateTerrainCapRenderer(dfTerrain);
-            // Fire the OnFloorRefreshed signal so UnderwaterDecorations
-            // (and any other subscribers) can queue per-tile work.
-            RaiseFloorRefreshed(dfTerrain);
+			if (OnFloorRefreshed != null)
+			{
+				try { OnFloorRefreshed(dfTerrain); }
+				catch (System.Exception ex)
+				{
+					Debug.LogWarning("[DeepWaters.Builder] OnFloorRefreshed subscriber threw for tile (" +
+						dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + "): " + ex.Message);
+				}
+			}
         }
 
         private static int ResolveClimateIndex(DaggerfallTerrain dfTerrain)
@@ -429,4 +381,354 @@ namespace DeepWaters
                 !hidePureOceanCap && DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData));
         }
     }
+
+	internal static class DeepWaterTerrainCapRenderer
+	{
+		private sealed class HiddenCapMarker : MonoBehaviour
+		{
+			internal bool HasOriginalDrawHeightmap;
+			internal bool OriginalDrawHeightmap;
+			internal bool Hidden;
+			internal Shader OriginalShader;
+			internal Texture OriginalTilemapTexture;
+			internal Texture2D PatchedTilemapTexture;
+			internal bool WaterTexelsClipped;
+		}
+
+		private static readonly int TilemapTexProperty = Shader.PropertyToID("_TilemapTex");
+		private static Shader tilemapTextureArrayClipShader;
+		private static Shader tilemapClipShader;
+		private static bool clipShadersResolved;
+		private static bool loggedUnknownTerrainShader;
+
+		internal static void Apply(DaggerfallTerrain dfTerrain, bool hide)
+		{
+			if (dfTerrain == null)
+				return;
+
+			Terrain terrain = dfTerrain.GetComponent<Terrain>();
+			if (terrain == null)
+				return;
+
+			if (!hide)
+			{
+				Restore(dfTerrain);
+				return;
+			}
+
+			HiddenCapMarker marker = dfTerrain.GetComponent<HiddenCapMarker>();
+			if (marker == null)
+				marker = dfTerrain.gameObject.AddComponent<HiddenCapMarker>();
+
+			if (!marker.HasOriginalDrawHeightmap)
+			{
+				marker.OriginalDrawHeightmap = terrain.drawHeightmap;
+				marker.HasOriginalDrawHeightmap = true;
+			}
+
+			terrain.drawHeightmap = false;
+			marker.Hidden = true;
+		}
+
+		internal static void Restore(DaggerfallTerrain dfTerrain)
+		{
+			if (dfTerrain == null)
+				return;
+
+			ApplyWaterTexelClip(dfTerrain, false);
+
+			HiddenCapMarker marker = dfTerrain.GetComponent<HiddenCapMarker>();
+			if (marker == null || !marker.Hidden)
+				return;
+
+			Terrain terrain = dfTerrain.GetComponent<Terrain>();
+			if (terrain != null && marker.HasOriginalDrawHeightmap)
+				terrain.drawHeightmap = marker.OriginalDrawHeightmap;
+
+			marker.Hidden = false;
+		}
+
+		internal static void ApplyWaterTexelClip(DaggerfallTerrain dfTerrain, bool clip)
+		{
+			if (dfTerrain == null)
+				return;
+
+			Terrain terrain = dfTerrain.GetComponent<Terrain>();
+			Material material = terrain != null ? terrain.materialTemplate : null;
+			if (material == null || material.shader == null)
+				return;
+
+			HiddenCapMarker marker = dfTerrain.GetComponent<HiddenCapMarker>();
+
+			if (!clip)
+			{
+				if (marker != null && marker.WaterTexelsClipped)
+				{
+					if (marker.OriginalShader != null)
+						material.shader = marker.OriginalShader;
+					RestoreTilemapTexture(material, marker);
+					marker.WaterTexelsClipped = false;
+				}
+				return;
+			}
+
+			if (marker != null && marker.WaterTexelsClipped)
+			{
+				ApplyTilemapTextureClip(dfTerrain, material, marker);
+				return;
+			}
+
+			string originalShaderName = material.shader.name;
+			Shader clipShader = ResolveClipShader(originalShaderName);
+			if (clipShader == null)
+				return;
+
+			if (marker == null)
+				marker = dfTerrain.gameObject.AddComponent<HiddenCapMarker>();
+
+			marker.OriginalShader = material.shader;
+			material.shader = clipShader;
+			marker.WaterTexelsClipped = true;
+			ApplyTilemapTextureClip(dfTerrain, material, marker);
+		}
+
+		private static void ApplyTilemapTextureClip(DaggerfallTerrain dfTerrain, Material material, HiddenCapMarker marker)
+		{
+			if (dfTerrain == null || material == null || marker == null)
+				return;
+
+			Color32[] source = dfTerrain.TileMap;
+			if (source == null || source.Length == 0)
+				return;
+
+			int dim = Mathf.RoundToInt(Mathf.Sqrt(source.Length));
+			if (dim <= 0 || dim * dim != source.Length)
+				return;
+
+			bool textureArray =
+				(marker.OriginalShader != null && marker.OriginalShader.name == "Daggerfall/TilemapTextureArray") ||
+				(material.shader != null && material.shader.name == "DeepWaters/TilemapTextureArrayClipWater");
+
+			var pixels = new Color32[source.Length];
+			bool changed = false;
+			for (int z = 0; z < dim; z++)
+			{
+				for (int x = 0; x < dim; x++)
+				{
+					int i = z * dim + x;
+					Color32 color = source[i];
+					bool waterTexel = IsClippedWaterTileData(color.a, textureArray);
+					if (waterTexel && ShouldClipPromotedWaterTexel(dfTerrain, color.a, textureArray, x, z, dim))
+					{
+						color.r = 255;
+						color.g = 0;
+						color.b = 255;
+						color.a = 0;
+						changed = true;
+					}
+					else if (waterTexel && TryFindNearestSolidTexel(source, textureArray, x, z, dim, out color))
+					{
+						changed = true;
+					}
+					pixels[i] = color;
+				}
+			}
+
+			if (!changed)
+				return;
+
+			if (marker.OriginalTilemapTexture == null)
+				marker.OriginalTilemapTexture = material.GetTexture(TilemapTexProperty);
+
+			if (marker.PatchedTilemapTexture != null)
+				Object.Destroy(marker.PatchedTilemapTexture);
+
+			Texture2D texture = new Texture2D(dim, dim, TextureFormat.RGBA32, false);
+			texture.name = "DeepWaters_ClippedTilemap_" + dfTerrain.MapPixelX + "_" + dfTerrain.MapPixelY;
+			texture.filterMode = FilterMode.Point;
+			texture.wrapMode = TextureWrapMode.Clamp;
+			texture.SetPixels32(pixels);
+			texture.Apply(false, true);
+
+			marker.PatchedTilemapTexture = texture;
+			material.SetTexture(TilemapTexProperty, texture);
+		}
+
+		private static bool TryFindNearestSolidTexel(
+			Color32[] source,
+			bool textureArray,
+			int texelX,
+			int texelZ,
+			int dim,
+			out Color32 replacement)
+		{
+			replacement = default(Color32);
+			if (source == null || dim <= 0)
+				return false;
+
+			const int maxRadius = 8;
+			for (int radius = 1; radius <= maxRadius; radius++)
+			{
+				for (int dz = -radius; dz <= radius; dz++)
+				{
+					for (int dx = -radius; dx <= radius; dx++)
+					{
+						if (Mathf.Abs(dx) != radius && Mathf.Abs(dz) != radius)
+							continue;
+
+						int x = texelX + dx;
+						int z = texelZ + dz;
+						if (x < 0 || z < 0 || x >= dim || z >= dim)
+							continue;
+
+						Color32 candidate = source[z * dim + x];
+						if (!IsClippedWaterTileData(candidate.a, textureArray))
+						{
+							replacement = candidate;
+							return true;
+						}
+					}
+				}
+			}
+
+			return false;
+		}
+
+		private static void RestoreTilemapTexture(Material material, HiddenCapMarker marker)
+		{
+			if (material != null && marker.OriginalTilemapTexture != null)
+				material.SetTexture(TilemapTexProperty, marker.OriginalTilemapTexture);
+
+			if (marker.PatchedTilemapTexture != null)
+			{
+				Object.Destroy(marker.PatchedTilemapTexture);
+				marker.PatchedTilemapTexture = null;
+			}
+
+			marker.OriginalTilemapTexture = null;
+		}
+
+		internal static bool IsClippedWaterTileData(byte tileData, bool textureArray)
+		{
+			int tileIndex = textureArray ? tileData >> 2 : tileData & 0x3f;
+			return tileIndex == 0 ||
+				(tileIndex >= 5 && tileIndex <= 7) ||
+				tileIndex == 48;
+		}
+
+		internal static bool ShouldClipPromotedWaterTexel(
+			DaggerfallTerrain terrain,
+			byte tileData,
+			bool textureArray,
+			int texelX,
+			int texelZ,
+			int texelDim)
+		{
+			return IsClippedWaterTileData(tileData, textureArray) &&
+				IsPromotedTerrainTexelSafeToClip(terrain, texelX, texelZ, texelDim);
+		}
+
+		private static bool IsPromotedTerrainTexelSafeToClip(
+			DaggerfallTerrain terrain,
+			int texelX,
+			int texelZ,
+			int texelDim)
+		{
+			if (terrain == null || terrain.MapData.heightmapSamples == null || texelDim <= 0)
+				return true;
+
+			DaggerfallUnity dfu = DaggerfallUnity.Instance;
+			if (dfu == null || dfu.TerrainSampler == null)
+				return true;
+
+			float threshold = dfu.TerrainSampler.OceanElevation /
+				dfu.TerrainSampler.MaxTerrainHeight + 1e-5f;
+			float[,] heights = terrain.MapData.heightmapSamples;
+			int rows = heights.GetLength(0);
+			int cols = heights.GetLength(1);
+			if (rows <= 0 || cols <= 0)
+				return true;
+
+			int x0 = Mathf.Clamp(Mathf.FloorToInt(texelX * (cols - 1) / (float)texelDim), 0, cols - 1);
+			int x1 = Mathf.Clamp(Mathf.CeilToInt((texelX + 1) * (cols - 1) / (float)texelDim), 0, cols - 1);
+			int z0 = Mathf.Clamp(Mathf.FloorToInt(texelZ * (rows - 1) / (float)texelDim), 0, rows - 1);
+			int z1 = Mathf.Clamp(Mathf.CeilToInt((texelZ + 1) * (rows - 1) / (float)texelDim), 0, rows - 1);
+
+			for (int z = z0; z <= z1; z++)
+			{
+				for (int x = x0; x <= x1; x++)
+				{
+					if (heights[z, x] > threshold)
+						return false;
+				}
+			}
+
+			return true;
+		}
+
+		private static Shader ResolveClipShader(string currentShaderName)
+		{
+			if (!clipShadersResolved)
+			{
+				clipShadersResolved = true;
+				tilemapTextureArrayClipShader = LoadModShader(
+					"DeepWaters/TilemapTextureArrayClipWater",
+					"DeepWaterTilemapTextureArrayClipWater.shader");
+				tilemapClipShader = LoadModShader(
+					"DeepWaters/TilemapClipWater",
+					"DeepWaterTilemapClipWater.shader");
+			}
+
+			if (currentShaderName == "DeepWaters/TilemapTextureArrayClipWater")
+				return tilemapTextureArrayClipShader;
+			if (currentShaderName == "DeepWaters/TilemapClipWater")
+				return tilemapClipShader;
+			if (currentShaderName == "Daggerfall/TilemapTextureArray")
+				return tilemapTextureArrayClipShader;
+			if (currentShaderName == "Daggerfall/Tilemap")
+				return tilemapClipShader;
+
+			if (!loggedUnknownTerrainShader)
+			{
+				loggedUnknownTerrainShader = true;
+				Debug.Log("[DeepWaters.Cap] Terrain uses shader '" + currentShaderName +
+					"' — no water-texel clip variant available, so the sea-level " +
+					"water cap stays visible on mixed land/water map pixels.");
+			}
+
+			return null;
+		}
+
+		private static Shader LoadModShader(string shaderName, string assetName)
+		{
+			Shader shader = Shader.Find(shaderName);
+
+			if (shader == null && DeepWaters.Mod != null)
+				shader = DeepWaters.Mod.GetAsset<Shader>(assetName);
+
+			if (shader == null)
+				Debug.LogWarning("[DeepWaters.Cap] " + shaderName + " shader not found; " +
+					"water-texel clipping unavailable for this terrain mode.");
+
+			return shader;
+		}
+
+		internal static bool ShouldHidePureOceanCap(DaggerfallTerrain dfTerrain)
+		{
+			if (dfTerrain == null)
+				return false;
+
+			if (!DeepWaterDistanceBake.IsLoaded ||
+				!DeepWaterDistanceBake.MapPixelHasWaterCells(dfTerrain.MapPixelX, dfTerrain.MapPixelY))
+			{
+				return false;
+			}
+
+			if (DeepWaterDistanceBake.MapPixelHasLandCells(dfTerrain.MapPixelX, dfTerrain.MapPixelY))
+				return false;
+
+			return DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData) &&
+				DeepWaterWaterClassification.MapDataFullySubmerged(dfTerrain.MapData);
+		}
+	}
 }

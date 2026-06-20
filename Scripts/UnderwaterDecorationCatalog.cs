@@ -9,10 +9,10 @@ namespace DeepWaters
 {
     internal struct UnderwaterDecorationRecord : IEquatable<UnderwaterDecorationRecord>
     {
-        public readonly int Archive;
-        public readonly int Record;
+        internal readonly int Archive;
+        internal readonly int Record;
 
-        public UnderwaterDecorationRecord(int archive, int record)
+        internal UnderwaterDecorationRecord(int archive, int record)
         {
             Archive = archive;
             Record = record;
@@ -42,18 +42,18 @@ namespace DeepWaters
 
     internal struct UnderwaterDecorationPlacementInfo
     {
-        public readonly int Archive;
-        public readonly int Record;
-        public readonly Vector3 LocalPosition;
+        internal readonly int Archive;
+        internal readonly int Record;
+        internal readonly Vector3 LocalPosition;
 
-        public UnderwaterDecorationPlacementInfo(UnderwaterDecorationRecord record, Vector3 localPosition)
+        internal UnderwaterDecorationPlacementInfo(UnderwaterDecorationRecord record, Vector3 localPosition)
         {
             Archive = record.Archive;
             Record = record.Record;
             LocalPosition = localPosition;
         }
 
-        public UnderwaterDecorationRecord ToRecord()
+        internal UnderwaterDecorationRecord ToRecord()
         {
             return new UnderwaterDecorationRecord(Archive, Record);
         }
@@ -61,7 +61,6 @@ namespace DeepWaters
 
 	internal static class UnderwaterDecorationCatalog
 	{
-		public const int Archive = 105;
 		private const float Texture106FramesPerSecond = 5f;
 
 		private static readonly UnderwaterDecorationRecord[] OpenOceanPool = BuildOpenOceanPool();
@@ -71,12 +70,7 @@ namespace DeepWaters
 		private static readonly UnderwaterDecorationRecord[] ColdPool = BuildColdPool();
 		private static readonly UnderwaterDecorationRecord[] DesertPool = BuildDesertPool();
 
-        public static UnderwaterDecorationRecord PickRecord()
-        {
-            return PickRecordForBiome(WaterBiome.OpenOcean);
-        }
-
-        public static UnderwaterDecorationRecord PickRecord(int climateIndex)
+        internal static UnderwaterDecorationRecord PickRecord(int climateIndex)
         {
             return PickRecordForBiome(PassiveFishSpeciesCatalog.ClimateToBiome(climateIndex));
         }
@@ -100,7 +94,7 @@ namespace DeepWaters
 			}
 		}
 
-        public static bool TryGetFramesPerSecond(int archive, out float framesPerSecond)
+        internal static bool TryGetFramesPerSecond(int archive, out float framesPerSecond)
         {
             if (archive == 106)
             {
@@ -112,7 +106,7 @@ namespace DeepWaters
             return false;
         }
 
-        public static bool UsesArchiveAnimation(UnderwaterDecorationRecord record)
+        internal static bool UsesArchiveAnimation(UnderwaterDecorationRecord record)
         {
             return record.Archive == 106 && record.Record >= 2 && record.Record <= 6;
         }
@@ -183,7 +177,7 @@ namespace DeepWaters
 			Add(records, 211, 10, 6);
 			AddMany(records, 14, R(213, 15));
 			AddMany(records, 16, R(502, 3), R(502, 4), R(502, 5), R(502, 6), R(502, 7), R(502, 8), R(502, 9), R(502, 10), R(502, 21), R(502, 22), R(502, 29), R(502, 30));
-			AddMany(records, 10, R(501, 18), R(501, 21), R(501, 22), R(501, 23), R(501, 26), R(501, 27), R(501, 28), R(501, 29));
+			AddMany(records, 10, R(501, 18), R(501, 21), R(501, 23), R(501, 26), R(501, 27), R(501, 28), R(501, 29));
 			Add(records, 105, 5, 4);
 			Add(records, 105, 10, 4);
 			AddDeadSeaLife(records, 2);

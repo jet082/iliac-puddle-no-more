@@ -13,13 +13,10 @@ The mod has four major jobs:
 
 ## File Map
 
-- `DeepWaters.cs`: mod entry point and persistent singleton.
-- `DeepWaters.Settings.cs`: loaded settings, slider scaling, and derived runtime values.
-- `DeepWaters.Bootstrap.cs`: subsystem installation, fish item registration, and
-  DFU terrain-texturing wrapping.
-- `DeepWaterWorld.cs`: shared world/terrain helpers. `TryGetWaterColumn` routes
-  seafloor-Y queries through the bathymetry function.
-- `DeepWaterTerrainLookup.cs`: cached map-pixel terrain lookup.
+- `DeepWaters.cs`: mod entry point, persistent singleton, loaded settings, slider scaling, and derived runtime values.
+- `DeepWaters.Bootstrap.cs`: subsystem installation, fish item registration, and diagnostics.
+- `DeepWaterWorld.cs`: shared world/terrain/rendering helpers. `TryGetWaterColumn`
+	routes seafloor-Y queries through the bathymetry function.
 - `DeepBathymetry.cs`: deterministic depth function — pure
   `f(worldX, worldZ, climate, distanceToCoast) → depth`. Layered Perlin plus
   climate-specific baselines plus an offshore trench mask.
@@ -29,54 +26,33 @@ The mod has four major jobs:
 - `DeepWaterFloorBuilder.cs`: listens to terrain promotion, decides if the tile
   is ocean-connected, computes a hole mask, calls `TerrainData.SetHoles`,
   spawns the seafloor sub-mesh child.
-- `DeepWaterFloorMesh.cs`: per-tile seafloor sub-mesh. 65x65 vertex grid sampled
-  from `DeepBathymetry`. Vertex color packs depth/climate/distance signals.
-- `DeepWaterFloorMaterial.cs`: shared seafloor material and base-texture loader.
-- `DeepWaterRuntime.cs`: shared reset signal for save loads and teleports.
-- `UnderwaterEncounterPulse.cs`: shared pulse clock for enemies and passive fish.
-- `TransientObjectTracker.cs`: shared cleanup for spawned transient objects.
-- `DeepWaterRendering.cs`: shared rendering policies for cheap transient visuals.
-- `DeepWaterTexturing.cs`: slim post-pass converting pure-water tilemap (0) to
-  dirt (1) so unholed shore-buffer cells don't render as flat blue water.
-- `WaterSurfaceManager.cs`: per-tile water surface lifecycle and non-blocking
-  detection trigger.
-- `WaterSurfaceResources.cs`: shared water mesh, material, shader, texture, and
-  user-facing material settings.
+- `DeepWaterFloorMesh.cs`: per-tile seafloor sub-mesh and shared seafloor
+	material loader. 65x65 vertex grid sampled from `DeepBathymetry`.
+	Vertex color packs depth/climate/distance signals.
+- `DeepWaterRuntime.cs`: shared reset signal, load gate, and location-update
+	skipper for save loads, teleports, and terrain streaming.
+- `UnderwaterEncounterPulse.cs`: shared pulse clock and cleanup for enemies and passive fish.
+- `WaterSurfaceManager.cs`: per-tile water surface lifecycle, shared water
+	materials, owned ship waterline anchoring, and non-blocking detection trigger.
 - `UnderwaterDecorationCatalog.cs`: weighted decoration archive records.
-- `UnderwaterDecorationReplacementCache.cs`: DREAM/texture-replacer material cache
-  for decoration batches.
-- `UnderwaterDecorationPlacement.cs`: seafloor decoration sampling and spacing.
+- `UnderwaterDecorations.cs`: seafloor decoration queue, sampling, spacing, and
+  stale-batch cleanup.
 - `UnderwaterDecorationBatchFactory.cs`: archive and texture-replacer decoration
-  batch construction.
+  batch construction, plus DREAM/texture-replacer material caching.
 - `StenciledWaterSurface.shader`: transparent top/underside water rendering.
-- `OutdoorSwimDriver.cs`: outdoor swimming bridge and underwater presentation control.
-- `OutdoorSwimDfuBridge.cs`: reflection wrapper for DFU swim/dungeon state fields.
-- `OutdoorShoreExitAssist.cs`: terrain/static-geometry shore snap helper.
-- `PlayerShipWaterlineFix.cs`: owned ship exterior scene anchoring.
+- `OutdoorSwimDriver.cs`: outdoor swimming bridge, DFU swim-state reflection,
+	shore snap helper, and underwater presentation control.
 - `UnderwaterDistanceFog.cs` and `UnderwaterDistanceFog.shader`: underwater
   sky/no-depth fog pass.
-- `UnderwaterAmbientMuter.cs`: underwater audio low-pass filter.
-- `SwimmingSfxBridge.cs`: lightweight swim splash cadence.
-- `UnderwaterWeatherSuppressor.cs`: rain and snow particle suppression while swimming.
-- `UnderwaterWaveShadowFix.cs`: underwater compatibility for player-following
-  lights and third-party wave shadows.
-- `ArgonianWaterBreathing.cs`: optional Argonian infinite breath.
-- `UnderwaterDecorations.cs`: seafloor flora and debris batches.
+- `SwimmingSfxBridge.cs`: lightweight swim splash cadence plus underwater audio,
+  weather, and player-following light presentation effects.
 - `UnderwaterEnemySpawner.cs`: aquatic enemies and rare treasure guards.
-- `UnderwaterLootSpawner.cs`: stray loot and treasure cluster pulse rules.
-- `UnderwaterLootCatalog.cs`: treasure container sprites and random item mix.
-- `UnderwaterLootPlacement.cs`: loot spawn-ring, seafloor, cluster-spacing, and
-  recent-cell placement state.
-- `UnderwaterLootObjectFactory.cs`: loot container and rubble-batch construction.
-- `UnderwaterTreasureClusterSpawner.cs`: treasure cluster assembly.
-- `UnderwaterPassiveFishSpawner.cs`: passive fish pulse budgeting and school
-  orchestration.
-- `PassiveFishSpeciesCatalog.cs`: editable passive fish species table.
-- `PassiveFishResources.cs`: passive fish texture loading, custom item creation, and inventory icons.
-- `PassiveFishPlacement.cs`: passive fish water-column and school-member placement.
-- `PassiveFishFactory.cs`: runtime creation of lootable fish billboard GameObjects.
-- `FishLootIconBridge.cs`: inventory-window icon bridge for picked-up fish.
-- `PassiveFishSchool.cs` and `PassiveFishBehaviour.cs`: school movement and fish behavior.
+- `UnderwaterLootSpawner.cs`: stray loot, treasure clusters, rubble batches,
+  container construction, placement state, and rare guard hooks.
+- `UnderwaterPassiveFishSpawner.cs`: passive fish pulse budgeting, water-column
+  and school placement, billboard creation, inventory icon bridge, and cleanup.
+- `PassiveFishSpeciesCatalog.cs`: editable passive fish species table, texture loading, custom item creation, and inventory icons.
+- `PassiveFishBehaviour.cs`: school movement and fish behavior.
 - `ItemTemplates.json`: custom fish item templates.
 
 ## Startup Flow
@@ -88,15 +64,15 @@ Startup order:
 
 1. Store the `Mod` handle and create a persistent host GameObject.
 2. Load settings from `modsettings.json`.
-3. Wrap DFU's current `ITerrainTexturing` with `DeepWaterTexturing`.
+3. Load bundled distance-bake and passive fish assets.
 4. Register passive fish item templates.
 5. Install terrain and gameplay subsystems.
 6. Mark the mod as ready.
 
 `DeepWaterFloorBuilder` installs first because it needs to hear every terrain
 promotion — its hole mask and sub-mesh must be applied in the same frame the
-tile is first used. The water surface, enemy, decoration, loot, fish, swim,
-breath, weather, and audio systems all install at startup and gate their own
+tile is first used. The water surface, enemy, decoration, loot, fish, swim, and
+presentation systems all install at startup and gate their own
 behavior from settings. That lets disabled subfeatures also remove stale
 terrain children when DFU reuses terrain objects.
 
@@ -283,7 +259,7 @@ tile footprint. For each vertex:
 
 Normals come from grid-neighbor cross products (cheaper than `RecalculateNormals`
 for a regular grid). The mesh is shared collider and renderer; a single
-`DeepWaterFloorMaterial.GetMaterial()` instance backs all tiles.
+`DeepWaterFloorMaterial.GetMaterial()` lives beside the seafloor mesh and backs all tiles.
 
 ### Seafloor shader
 
@@ -302,8 +278,8 @@ When a terrain tile contains water, it creates one child object named
 
 Each surface uses:
 
-- a shared top-only quad mesh from `WaterSurfaceResources`;
-- one shared `DeepWaters.WaterSurface` material from `WaterSurfaceResources`;
+- per-tile generated surface meshes from `WaterSurfaceManager`;
+- shared water materials from `WaterSurfaceResources`;
 - the custom `DeepWaters/StenciledWaterSurface` shader;
 - Daggerfall's terrain water tile texture `(302,0)` when available;
 - a thin `BoxCollider` trigger with a `DeepWatersWaterSurface` marker component.
@@ -370,7 +346,7 @@ is low, because it is hiding skybox/missing-terrain leaks rather than styling
 nearby objects. `UnderwaterFogDistance` stretches or compresses that safety fade
 through `DeepWaters.UnderwaterFogDistanceMultiplier`.
 
-`UnderwaterWaveShadowFix` handles the compatibility side:
+`UnderwaterPresentationEffects` handles the compatibility side:
 DFU has player-following local lights that do not cast shadows. The exterior
 `IndirectLight` is always near the player, and `EnablePlayerTorch` can briefly
 enable the player torch because `OutdoorSwimDriver` borrows DFU's dungeon
@@ -420,11 +396,11 @@ clip through the player's `DaggerfallAudioSource` after every 2.5 world units
 of swimming movement. This covers both dungeon and outdoor swimming and avoids
 copying the rest of DFU's footstep logic.
 
-`UnderwaterWeatherSuppressor` works with DFU's
-`PlayerWeather` owns the rain and snow particle GameObjects, so the suppressor
-only disables those particles while the player is swimming outdoors. It leaves
-the actual weather type, music, sky, and lighting alone, then reapplies
-`PlayerWeather.WeatherType` when the player leaves the water.
+`UnderwaterPresentationEffects` works with DFU's `PlayerWeather`, which owns
+the rain and snow particle GameObjects. It only disables those particles while
+the player is swimming outdoors. It leaves the actual weather type, music, sky,
+and lighting alone, then reapplies `PlayerWeather.WeatherType` when the player
+leaves the water.
 
 Presentation state is intentionally separate from swim physics. This lets the
 player swim with their head above water without fog or muffled audio, while
@@ -446,11 +422,12 @@ near the waterline.
 
 ## Audio And Breath
 
-`UnderwaterAmbientMuter` adds an `AudioLowPassFilter` to the active audio
-listener when `OutdoorSwimDriver.IsPresentationUnderwater()` is true. The filter
-is disabled when the player surfaces, goes indoors, or the component is disabled.
+`UnderwaterPresentationEffects` adds an `AudioLowPassFilter` to the active
+audio listener when `OutdoorSwimDriver.IsPresentationUnderwater()` is true. The
+filter is disabled when the player surfaces, goes indoors, or the component is
+disabled.
 
-`ArgonianWaterBreathing` runs in `LateUpdate()` and reapplies
+`DeepWaters.LateUpdate()` reapplies
 `PlayerEntity.IsWaterBreathing = true` for Argonians. It runs late because DFU
 clears constant effects earlier in the frame.
 
@@ -463,8 +440,8 @@ loaded tile immediately. Instead:
 - a worker processes the queue at `StreamingWorld.OnUpdateTerrainsEnd`;
 - each terrain object records which map pixel its decoration state belongs to;
 - stale batches are removed when DFU reuses a terrain object for a new map pixel;
-- `UnderwaterDecorationPlacement` generates positions on a stride through the
-  heightmap and enforces spacing;
+- `UnderwaterDecorations` generates positions on a stride through the heightmap
+  and enforces spacing;
 - `UnderwaterDecorationBatchFactory` creates archive or texture-replacer
   billboard batches.
 
@@ -472,7 +449,7 @@ Decorations use archive `105`, weighted toward flora records and lightly toward
 debris records. The frequency setting rolls decoration passes, so values above
 the old `1.0` density can add more seafloor dressing instead of simply capping.
 
-When asset injection is enabled, `UnderwaterDecorationReplacementCache` probes
+When asset injection is enabled, `UnderwaterDecorationBatchFactory` probes
 each decoration record once and reuses the replacement material and batch sizing.
 That keeps DREAM-compatible decorations from falling back to white boxes without
 creating one GameObject per decoration.
@@ -513,9 +490,9 @@ separate treasure-guard curve that can spawn up to 5 rare guards at frequency
 ## Loot
 
 `UnderwaterLootSpawner` uses pulse spawning rather than pre-populating the
-ocean. This keeps work proportional to exploration. Placement details live in
-`UnderwaterLootPlacement`, including the forward-biased spawn ring, seafloor
-resolution, cluster loot spacing, and recent-cell memory.
+ocean. This keeps work proportional to exploration. The spawner owns the
+forward-biased spawn ring, seafloor resolution, cluster loot spacing, and
+recent-cell memory.
 
 A pulse can happen when:
 
@@ -536,8 +513,8 @@ Stray loot:
 Treasure clusters:
 
 - roll as a per-pulse chance;
-- delegate cluster assembly to `UnderwaterTreasureClusterSpawner`;
-- build containers and rubble batches through `UnderwaterLootObjectFactory`;
+- use the same placement state as stray loot;
+- build containers and rubble batches in `UnderwaterLootSpawner`;
 - optionally spawn rare enemy guards.
 
 Treasure container graphics use archive `216`, but passive fish item icons also
@@ -552,13 +529,12 @@ ocean column is near the player. Unlike loot, the player does not need to be
 over deep water at their exact position; fish may populate nearby water when the
 player is near shore.
 
-The fish path is intentionally split:
+The fish path keeps the runtime fish work in one spawner:
 
-- `PassiveFishSpeciesCatalog` picks a weighted species.
-- `PassiveFishPlacement` resolves water columns and school-member positions.
-- `PassiveFishFactory` builds the billboard, collider, loot component, and
-  behaviour.
-- `UnderwaterPassiveFishSpawner` owns pulse budgeting and live-object cleanup.
+- `PassiveFishSpeciesCatalog` picks a weighted species, loads textures, and creates custom fish item templates.
+- `UnderwaterPassiveFishSpawner` resolves water columns, school-member
+  positions, billboard creation, loot setup, pulse budgeting, and live-object
+  cleanup.
 
 Spawn rules:
 

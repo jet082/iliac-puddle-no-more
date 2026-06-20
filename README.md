@@ -10,19 +10,16 @@ Drop `iliac-puddle-no-more.dfmod` into `DaggerfallUnity_Data/StreamingAssets/Mod
 
 | File                          | Role                                                                                         |
 |-------------------------------|----------------------------------------------------------------------------------------------|
-| `DeepWaters.cs`               | Bootstrap. Loads settings, wraps `TerrainTexturing`, installs the other components.          |
+| `DeepWaters.cs`               | Bootstrap. Loads settings, registers custom items, installs the other components, and applies Argonian infinite breath. |
 | `DeepBathymetry.cs`           | Pure depth function `f(worldX, worldZ, climate, distanceToCoast) → depth`. Layered Perlin + climate-specific baselines + trench mask. Adjacent tiles agree at seams because they sample the same world coords. |
 | `DeepWaterTileData.cs`        | Per-tile cache: climate index and distance-to-coast field. Computed once at promotion via a chamfer-distance pass over the heightmap. |
 | `DeepWaterFloorBuilder.cs`    | Listens to terrain promotion. Decides if the tile is ocean-connected, computes a hole mask, calls `TerrainData.SetHoles`, spawns the seafloor sub-mesh. |
-| `DeepWaterFloorMesh.cs`       | Per-tile seafloor sub-mesh. 65x65 vertex grid sampled from `DeepBathymetry`. Vertex color packs depth/climate/coast-distance signals for the shader. |
-| `DeepWaterFloorMaterial.cs`   | Shared seafloor material/shader resources. Loads the bundled shader and a base texture grain. |
-| `DeepWaterTexturing.cs`       | Slim post-pass: converts pure-water tilemap (0) to dirt (1) so unholed shore-buffer cells don't show flat blue water under the surface. |
+| `DeepWaterFloorMesh.cs`       | Per-tile seafloor sub-mesh plus shared material/shader resources. 65x65 vertex grid sampled from `DeepBathymetry`. |
 | `WaterSurfaceManager.cs`      | Spawns a visible water-surface quad and non-blocking trigger at ocean elevation on every terrain with water. |
 | `OutdoorSwimDriver.cs`        | Tricks DFU's existing dungeon-swim logic into running outdoors. Includes shore-exit assist.   |
 | `UnderwaterEnemySpawner.cs`   | Spawns aquatic encounters near the player while loaded ocean is nearby.                       |
-| `UnderwaterPassiveFishSpawner.cs` | Spawns lootable passive fish with simple underwater movement.                              |
-| `UnderwaterLootSpawner.cs`    | Spawns stray underwater loot and treasure clusters near exploration paths.                    |
-| `ArgonianWaterBreathing.cs`   | Sets `IsWaterBreathing = true` for Argonians every frame, anywhere in the world.              |
+| `UnderwaterPassiveFishSpawner.cs` | Spawns, places, builds, and tracks lootable passive fish schools.                         |
+| `UnderwaterLootSpawner.cs`    | Spawns stray underwater loot, wreck rubble, containers, and treasure clusters near exploration paths. |
 
 ### How the swim driver works
 
@@ -33,13 +30,11 @@ DFU's dungeon swim system is complete — movement, speed, SFX, breath, fog, cro
 
 Whether the player actually swims is decided by DFU's dungeon branch comparing player.y against blockWaterLevel — exactly the mechanism used in dungeons. There's no custom motion code and no custom speed math.
 
-`DeepWaters.cs` also installs `SwimmingSfxBridge`, which plays DFU's own `SplashSmall` clip through the player audio source after every 2.5 world units of swimming movement. It is intentionally tiny and covers both dungeon and outdoor swimming.
-
-The driver is about 100 lines of real logic.
+`SwimmingSfxBridge.cs` contains `UnderwaterPresentationEffects`, which plays DFU's own `SplashSmall` clip through the player audio source after every 2.5 world units of swimming movement and owns the small underwater presentation effects such as audio muffling and weather suppression.
 
 ### How the Argonian breath works
 
-Vanilla DFU only gives Argonians a 50% chance per drowning tick to NOT lose breath — they can still drown, just slower. This mod sets `entity.IsWaterBreathing = true` every frame for Argonian player characters, which short-circuits the drowning code at line 323 of `PlayerEntity.cs`. Same flag the water-breathing potion uses, just permanent. Works everywhere — outdoors, dungeons, anywhere submerged.
+Vanilla DFU only gives Argonians a 50% chance per drowning tick to NOT lose breath — they can still drown, just slower. `DeepWaters.LateUpdate()` sets `entity.IsWaterBreathing = true` every frame for Argonian player characters, which short-circuits the drowning code at line 323 of `PlayerEntity.cs`. Same flag the water-breathing potion uses, just permanent. Works everywhere — outdoors, dungeons, anywhere submerged.
 
 ## Settings
 

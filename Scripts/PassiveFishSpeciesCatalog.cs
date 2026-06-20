@@ -2,8 +2,13 @@
 // License:         MIT
 
 using System.Collections.Generic;
+using System.Reflection;
 using DaggerfallConnect.Arena2;
+using DaggerfallConnect.Utility;
+using DaggerfallWorkshop;
+using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Game.Items;
+using DaggerfallWorkshop.Utility;
 using UnityEngine;
 
 namespace DeepWaters
@@ -30,29 +35,29 @@ namespace DeepWaters
 
     internal sealed class PassiveFishSpecies
     {
-        public readonly int TemplateIndex;
-        public readonly string ItemName;
-        public readonly int TextureArchive;
-        public readonly int TextureRecord;
-        public readonly int SpawnWeight;
-        public readonly float BillboardHeight;
-        public readonly string[] TextureAssetNames;
-        public readonly float CruiseSpeedMultiplier;
-        public readonly float FleeSpeedMultiplier;
-        public readonly int MinSchoolSize;
-        public readonly int MaxSchoolSize;
-        public readonly float MinHeightMultiplier;
-        public readonly float MaxHeightMultiplier;
-        public readonly float FleeDartHoldMin;
-        public readonly float FleeDartHoldMax;
+        internal readonly int TemplateIndex;
+        internal readonly string ItemName;
+        internal readonly int TextureArchive;
+        internal readonly int TextureRecord;
+        internal readonly int SpawnWeight;
+        internal readonly float BillboardHeight;
+        internal readonly string[] TextureAssetNames;
+        internal readonly float CruiseSpeedMultiplier;
+        internal readonly float FleeSpeedMultiplier;
+        internal readonly int MinSchoolSize;
+        internal readonly int MaxSchoolSize;
+        internal readonly float MinHeightMultiplier;
+        internal readonly float MaxHeightMultiplier;
+        internal readonly float FleeDartHoldMin;
+        internal readonly float FleeDartHoldMax;
         // Biomes this species inhabits, and the band of the water column (as a
         // fraction of the location's max depth) it prefers. (issues 6 & 7)
-        public readonly WaterBiome Biomes;
-        public readonly float MinDepthFraction;
-        public readonly float MaxDepthFraction;
+        internal readonly WaterBiome Biomes;
+        internal readonly float MinDepthFraction;
+        internal readonly float MaxDepthFraction;
 
-        public Texture2D Texture;
-        public Texture2D IconTexture;
+        internal Texture2D Texture;
+        internal Texture2D IconTexture;
 
         // NOTE: biomes / minDepthFraction / maxDepthFraction are REQUIRED (no
         // defaults), placed before the remaining optional params. DFU's old
@@ -61,7 +66,7 @@ namespace DeepWaters
         // and `WaterBiome? b = null` fail), so the biome arg must not be
         // optional. Every species entry already supplies all three by name, so
         // this needs no call-site changes.
-        public PassiveFishSpecies(
+        internal PassiveFishSpecies(
             int templateIndex,
             string itemName,
             int textureRecord,
@@ -104,7 +109,7 @@ namespace DeepWaters
         // Soft depth preference: full weight inside [min,max], tapering to zero
         // over DepthEdgeSoftness outside it. Keeps depth-dwellers out of the
         // shallows (and reef fish off the abyssal plain) without hard popping.
-        public float DepthWeight01(float depthFraction)
+        internal float DepthWeight01(float depthFraction)
         {
             if (depthFraction >= MinDepthFraction && depthFraction <= MaxDepthFraction)
                 return 1f;
@@ -118,20 +123,20 @@ namespace DeepWaters
 
     internal static class PassiveFishSpeciesCatalog
     {
-        public const int LongnoseButterflyfishTemplateIndex = 9001;
-        public const int LargemouthBassTemplateIndex = 9002;
-        public const int CanaryRockfishTemplateIndex = 9003;
-        public const int CrucianCarpTemplateIndex = 9004;
-        public const int MackerelTemplateIndex = 9005;
-        public const int WhiteZebraAngelfishTemplateIndex = 9006;
-        public const int FinulonTemplateIndex = 9007;
-        public const ItemGroups FishItemGroup = ItemGroups.UselessItems2;
+        internal const int LongnoseButterflyfishTemplateIndex = 9001;
+        internal const int LargemouthBassTemplateIndex = 9002;
+        internal const int CanaryRockfishTemplateIndex = 9003;
+        internal const int CrucianCarpTemplateIndex = 9004;
+        internal const int MackerelTemplateIndex = 9005;
+        internal const int WhiteZebraAngelfishTemplateIndex = 9006;
+        internal const int FinulonTemplateIndex = 9007;
+        internal const ItemGroups FishItemGroup = ItemGroups.UselessItems2;
 
         // How far outside a species' depth band its weight tapers to zero, as a
         // fraction of max depth.
-        public const float DepthEdgeSoftness = 0.18f;
+        internal const float DepthEdgeSoftness = 0.18f;
 
-        public static readonly int[] CustomItemTemplateIndices =
+        internal static readonly int[] CustomItemTemplateIndices =
         {
             LongnoseButterflyfishTemplateIndex,
             LargemouthBassTemplateIndex,
@@ -149,7 +154,7 @@ namespace DeepWaters
         // tropical shallows, freshwater fish in swamp/temperate coasts, the
         // mackerel everywhere as the ubiquitous pelagic filler, and rockfish /
         // the rare Finulon out in the cold deep and abyss.
-        public static readonly PassiveFishSpecies[] All =
+        internal static readonly PassiveFishSpecies[] All =
         {
             new PassiveFishSpecies(
                 LongnoseButterflyfishTemplateIndex,
@@ -283,13 +288,13 @@ namespace DeepWaters
         private static bool spawnableCacheBuilt;
         private static int totalSpawnWeight;
 
-        public static bool HasAnySpawnableSpecies()
+        internal static bool HasAnySpawnableSpecies()
         {
             BuildSpawnableCache();
             return totalSpawnWeight > 0;
         }
 
-        public static WaterBiome ClimateToBiome(int climateIndex)
+        internal static WaterBiome ClimateToBiome(int climateIndex)
         {
             switch (climateIndex)
             {
@@ -312,7 +317,7 @@ namespace DeepWaters
         /// Falls back to a plain weighted pick if nothing fits (so a spawn pulse
         /// never silently fails).
         /// </summary>
-        public static PassiveFishSpecies PickRandom(int climateIndex, float depthFraction)
+        internal static PassiveFishSpecies PickRandom(int climateIndex, float depthFraction)
         {
             BuildSpawnableCache();
             if (totalSpawnWeight <= 0)
@@ -341,7 +346,7 @@ namespace DeepWaters
             return spawnableSpecies[spawnableSpecies.Count - 1];
         }
 
-        public static PassiveFishSpecies PickRandom()
+        internal static PassiveFishSpecies PickRandom()
         {
             BuildSpawnableCache();
             if (totalSpawnWeight <= 0)
@@ -402,4 +407,217 @@ namespace DeepWaters
             };
         }
     }
+
+	internal static class PassiveFishResources
+	{
+		private const float FishItemGroupMigrationInterval = 2f;
+
+		private static FieldInfo itemImagesField;
+		private static float nextFishItemGroupMigrationTime;
+
+		internal static bool TryCreateFishItem(PassiveFishSpecies species, out DaggerfallUnityItem item)
+		{
+			if (species == null)
+			{
+				item = null;
+				return false;
+			}
+
+			item = ItemBuilder.CreateItem(PassiveFishSpeciesCatalog.FishItemGroup, species.TemplateIndex);
+			CacheInventoryIcons();
+			return item != null && item.TemplateIndex == species.TemplateIndex;
+		}
+
+		private static bool IsFishTemplateIndex(int templateIndex)
+		{
+			int[] indices = PassiveFishSpeciesCatalog.CustomItemTemplateIndices;
+			for (int i = 0; i < indices.Length; i++)
+			{
+				if (indices[i] == templateIndex)
+					return true;
+			}
+
+			return false;
+		}
+
+		internal static void UpdateInventoryState()
+		{
+			if (Time.time < nextFishItemGroupMigrationTime)
+				return;
+
+			nextFishItemGroupMigrationTime = Time.time + FishItemGroupMigrationInterval;
+
+			var gameManager = GameManager.Instance;
+			if (gameManager == null || gameManager.PlayerEntity == null)
+				return;
+
+			NormalizeFishItemCollection(gameManager.PlayerEntity.Items);
+			NormalizeFishItemCollection(gameManager.PlayerEntity.WagonItems);
+		}
+
+		internal static void CacheInventoryIcons()
+		{
+			var itemImages = GetItemImageCache();
+			if (itemImages == null)
+				return;
+
+			PassiveFishSpecies[] speciesTable = PassiveFishSpeciesCatalog.All;
+			for (int i = 0; i < speciesTable.Length; i++)
+			{
+				PassiveFishSpecies species = speciesTable[i];
+				if (!LoadFishIconTexture(species))
+					continue;
+
+				ImageData imageData = CreateFishIconImageData(species);
+				itemImages[MakeItemImageKey((int)DyeColors.Unchanged, species.TextureArchive, species.TextureRecord, true)] = imageData;
+				itemImages[MakeItemImageKey((int)DyeColors.Unchanged, species.TextureArchive, species.TextureRecord, false)] = imageData;
+			}
+		}
+
+		internal static bool LoadFishTexture(PassiveFishSpecies species)
+		{
+			if (species == null)
+				return false;
+
+			if (species.Texture != null)
+				return true;
+
+			for (int i = 0; i < species.TextureAssetNames.Length; i++)
+			{
+				species.Texture = TryLoadTexture(species.TextureAssetNames[i]);
+				if (species.Texture != null)
+					break;
+			}
+
+			// Deliberately NOT falling back to vanilla archive 216 via
+			// TextureReader. Archive 216 records 42-48 hold misc inventory
+			// icons in vanilla Daggerfall data, and when the mod-bundled
+			// PNG replacements fail to resolve, that fallback path made
+			// every spawned fish appear as a random Daggerfall loot icon
+			// (longsword, potion bottle, ...). It is much better to skip
+			// the spawn entirely than to render the wrong content.
+			if (species.Texture == null)
+			{
+				Debug.LogWarning("[DeepWaters] Could not load fish texture for '" + species.ItemName +
+					"'. Tried " + species.TextureAssetNames.Length +
+					" asset names; the species will not spawn until the PNGs resolve.");
+				return false;
+			}
+
+			species.Texture.filterMode = FilterMode.Point;
+			return true;
+		}
+
+		private static bool LoadFishIconTexture(PassiveFishSpecies species)
+		{
+			if (species == null)
+				return false;
+
+			if (species.IconTexture != null)
+				return true;
+
+			string archiveName = "216_" + species.TextureRecord + "-0";
+			species.IconTexture = TryLoadTexture(archiveName);
+			if (species.IconTexture == null)
+				species.IconTexture = TryLoadTexture(archiveName + ".png");
+			if (species.IconTexture == null)
+				species.IconTexture = TryLoadTexture("Assets/Game/Mods/deep-waters/Flats/" + archiveName + ".png");
+
+			for (int i = 0; species.IconTexture == null && i < species.TextureAssetNames.Length; i++)
+				species.IconTexture = TryLoadTexture(species.TextureAssetNames[i]);
+
+			if (species.IconTexture == null)
+				return false;
+
+			species.IconTexture.filterMode = FilterMode.Point;
+			return true;
+		}
+
+		internal static Texture2D GetFishIconTexture(PassiveFishSpecies species)
+		{
+			if (species == null)
+				return null;
+
+			if (LoadFishIconTexture(species))
+				return species.IconTexture;
+
+			return species.Texture;
+		}
+
+		private static Dictionary<int, ImageData> GetItemImageCache()
+		{
+			var dfUnity = DaggerfallUnity.Instance;
+			if (dfUnity == null || dfUnity.ItemHelper == null)
+				return null;
+
+			if (itemImagesField == null)
+				itemImagesField = typeof(ItemHelper).GetField("itemImages", BindingFlags.Instance | BindingFlags.NonPublic);
+
+			return itemImagesField != null
+				? itemImagesField.GetValue(dfUnity.ItemHelper) as Dictionary<int, ImageData>
+				: null;
+		}
+
+		private static ImageData CreateFishIconImageData(PassiveFishSpecies species)
+		{
+			Texture2D texture = species.IconTexture != null ? species.IconTexture : species.Texture;
+			ImageData data = new ImageData();
+			data.type = ImageTypes.TEXTURE;
+			data.filename = string.Format("TEXTURE.{0:000}", species.TextureArchive);
+			data.record = species.TextureRecord;
+			data.frame = 0;
+			data.hasAlpha = true;
+			data.alphaIndex = 0;
+			data.width = texture.width;
+			data.height = texture.height;
+			data.texture = texture;
+			data.size = new DFSize(texture.width, texture.height);
+			data.scale = new DFSize(texture.width, texture.height);
+			return data;
+		}
+
+		private static int MakeItemImageKey(int color, int archive, int record, bool removeMask)
+		{
+			int mask = removeMask ? 1 : 0;
+			return (color << 27) + (archive << 18) + (record << 11) + (mask << 10);
+		}
+
+		private static void NormalizeFishItemCollection(ItemCollection items)
+		{
+			if (items == null)
+				return;
+
+			for (int i = 0; i < items.Count; i++)
+			{
+				DaggerfallUnityItem item = items.GetItem(i);
+				if (item == null || item.ItemGroup == PassiveFishSpeciesCatalog.FishItemGroup || !IsFishTemplateIndex(item.TemplateIndex))
+					continue;
+
+				int stackCount = item.stackCount;
+				int currentCondition = item.currentCondition;
+				int maxCondition = item.maxCondition;
+				item.SetItem(PassiveFishSpeciesCatalog.FishItemGroup, item.TemplateIndex);
+				item.stackCount = stackCount;
+				item.currentCondition = currentCondition;
+				item.maxCondition = maxCondition;
+			}
+		}
+
+		private static Texture2D TryLoadTexture(string assetName)
+		{
+			if (DeepWaters.Mod == null)
+				return null;
+
+			if (!DeepWaters.Mod.HasAsset(assetName))
+			{
+				if (DeepWaters.Mod.AssetBundle == null)
+					DeepWaters.Mod.LoadAssetBundle();
+
+				if (!DeepWaters.Mod.HasAsset(assetName))
+					return null;
+			}
+
+			return DeepWaters.Mod.GetAsset<Texture2D>(assetName);
+		}
+	}
 }

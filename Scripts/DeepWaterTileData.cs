@@ -20,28 +20,28 @@ namespace DeepWaters
     /// are identical regardless of which tile is asking, so adjacent meshes
     /// automatically meet at the same depth.
     /// </summary>
-    public class DeepWaterTileData : MonoBehaviour
+    internal class DeepWaterTileData : MonoBehaviour
     {
 		private const float LocalWaterFallbackDistanceMeters = DeepBathymetry.ShelfRampMeters * 0.30f;
 
-        public int ClimateIndex { get; private set; }
-		public int BiomeClimateIndex { get; private set; }
-        public bool IsOceanConnected { get; private set; }
-		public bool UsesLocalWaterFallback { get; private set; }
-        public int MapPixelX { get; private set; }
-        public int MapPixelY { get; private set; }
+        internal int ClimateIndex { get; private set; }
+		internal int BiomeClimateIndex { get; private set; }
+        internal bool IsOceanConnected { get; private set; }
+		internal bool UsesLocalWaterFallback { get; private set; }
+        internal int MapPixelX { get; private set; }
+        internal int MapPixelY { get; private set; }
 
         private float tileWorldSize;
         private Vector3 cachedOrigin;
         private bool initialized;
 		private MapPixelData mapData;
 
-        public bool HasDistanceField
+        internal bool HasDistanceField
         {
             get { return initialized && DeepWaterDistanceBake.IsLoaded; }
         }
 
-        public void Initialize(DaggerfallTerrain dfTerrain, int climateIndex)
+        internal void Initialize(DaggerfallTerrain dfTerrain, int climateIndex)
         {
             ClimateIndex = climateIndex;
             MapPixelX = dfTerrain.MapPixelX;
@@ -55,7 +55,7 @@ namespace DeepWaters
             initialized = true;
         }
 
-        public float GetDistanceToCoastMeters(float worldX, float worldZ)
+        internal float GetDistanceToCoastMeters(float worldX, float worldZ)
         {
             if (!DeepWaterDistanceBake.IsLoaded)
                 return float.MaxValue;
@@ -72,7 +72,7 @@ namespace DeepWaters
         // Distance (meters) to the nearest CARVED SHORE EDGE — resolves small
         // islands the coast-distance field misses. Falls back to coast distance
         // on pre-v5 bakes (handled inside SampleEdgeDistanceMeters).
-        public float GetDistanceToEdgeMeters(float worldX, float worldZ)
+        internal float GetDistanceToEdgeMeters(float worldX, float worldZ)
         {
 			if (UsesLocalWaterFallback)
 				return LocalWaterFallbackDistanceMeters;
@@ -89,7 +89,7 @@ namespace DeepWaters
                 mapPixelX, mapPixelY, fracX, fracZ);
         }
 
-        public bool IsBakedWater(float worldX, float worldZ)
+        internal bool IsBakedWater(float worldX, float worldZ)
         {
             if (!DeepWaterDistanceBake.IsLoaded)
                 return false;
@@ -111,7 +111,7 @@ namespace DeepWaters
         /// bakes (no fine mask), returns false; the caller is expected
         /// to fall back to the heightmap any-corner check.
         /// </summary>
-        public bool IsCarvedWater(float worldX, float worldZ)
+        internal bool IsCarvedWater(float worldX, float worldZ)
         {
             int mapPixelX;
             int mapPixelY;
@@ -139,7 +139,7 @@ namespace DeepWaters
         // the same physical point return the same value regardless of when, or
         // at what origin offset, they were built — so the Perlin seabed hills
         // meet exactly at shared map-pixel edges instead of tearing into seams.
-        public void GetNoiseWorldCoords(float worldX, float worldZ, out float noiseX, out float noiseZ)
+        internal void GetNoiseWorldCoords(float worldX, float worldZ, out float noiseX, out float noiseZ)
         {
             int mapPixelX;
             int mapPixelY;
@@ -156,7 +156,7 @@ namespace DeepWaters
         // smooths the per-climate base/band across pixel boundaries — no hard
         // depth STEP (wall/seam) and no abrupt texture line where the climate
         // changes, while regional variety is preserved between boundaries.
-        public void GetBlendedClimate(float worldX, float worldZ, out float baseDepth, out float band)
+        internal void GetBlendedClimate(float worldX, float worldZ, out float baseDepth, out float band)
         {
             int climateWN, climateEN, climateWS, climateES;
             float wx, wy;
@@ -171,7 +171,7 @@ namespace DeepWaters
             band = Mathf.Lerp(bandN, bandS, wy);
         }
 
-        public float GetBlendedClimateBaseDepth(float worldX, float worldZ)
+        internal float GetBlendedClimateBaseDepth(float worldX, float worldZ)
         {
             float baseDepth, band;
             GetBlendedClimate(worldX, worldZ, out baseDepth, out band);
@@ -394,11 +394,7 @@ namespace DeepWaters
             // combined with coarse-mask neighbor check. Identical to
             // v0.52.4 behavior so old bakes still get the shoreline
             // ocean-connectivity improvement.
-            return DeepWaterDistanceBake.MapPixelHasWaterCells(mx + 1, my)
-                || DeepWaterDistanceBake.MapPixelHasWaterCells(mx - 1, my)
-                || DeepWaterDistanceBake.MapPixelHasWaterCells(mx, my + 1)
-                || DeepWaterDistanceBake.MapPixelHasWaterCells(mx, my - 1)
-                || DeepWaterDistanceBake.MapPixelHasWaterCells(mx, my);
+            return DeepWaterDistanceBake.MapPixelOrCardinalNeighborHasWaterCells(mx, my);
         }
 
     }

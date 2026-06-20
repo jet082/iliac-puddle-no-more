@@ -20,73 +20,78 @@ namespace DeepWaters
     public partial class DeepWaters
     {
         // Registers the mod's debug console commands (open with the backquote key).
-        internal static class DeepWaterConsoleCommands
+        private static class DeepWaterConsoleCommands
         {
-			private static bool loggedCurrentDepth;
+			private const string CurrentDepthName = "currentdepth";
+			private const string CurrentDepthDescription = "Prints how deep the player is below the ocean surface and the water-column depth at the player's position.";
+			private const string CurrentDepthUsage = "currentdepth";
 
-            public static void RegisterCommands()
+			private static bool currentDepthRegistered;
+			private static bool loggedRegistrationError;
+
+            internal static void RegisterCommands()
             {
+				if (currentDepthRegistered)
+					return;
+
                 try
                 {
-					if (!ConsoleCommandsDatabase.HasCommand(CurrentDepth.name))
+					if (ConsoleCommandsDatabase.HasCommand(CurrentDepthName))
 					{
-						ConsoleCommandsDatabase.RegisterCommand(CurrentDepth.name, CurrentDepth.description, CurrentDepth.usage, CurrentDepth.Execute);
-						if (!loggedCurrentDepth)
-						{
-							Debug.Log("[DeepWaters] Registered console command: " + CurrentDepth.name);
-							loggedCurrentDepth = true;
-						}
+						currentDepthRegistered = true;
+						return;
 					}
+
+					ConsoleCommandsDatabase.RegisterCommand(CurrentDepthName, CurrentDepthDescription, CurrentDepthUsage, ExecuteCurrentDepth);
+					currentDepthRegistered = true;
+					Debug.Log("[DeepWaters] Registered console command: " + CurrentDepthName);
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogException(ex);
-                }
-            }
-
-            private static class CurrentDepth
-            {
-                public static readonly string name = "currentdepth";
-                public static readonly string description = "Prints how deep the player is below the ocean surface and the water-column depth at the player's position.";
-                public static readonly string usage = "currentdepth";
-
-                public static string Execute(params string[] args)
-                {
-                    GameManager gameManager = GameManager.Instance;
-                    if (gameManager == null || gameManager.PlayerObject == null)
-                        return Report("No player.");
-
-                    Vector3 playerPos = gameManager.PlayerObject.transform.position;
-					Vector3 probePos = playerPos;
-					string probeName = "player";
-                    DeepWaterColumn column;
-                    if (!DeepWaterWorld.TryGetWaterColumn(playerPos.x, playerPos.z, out column))
+					if (!loggedRegistrationError && !(ex is NullReferenceException))
 					{
-						if (gameManager.MainCamera == null)
-							return Report("No Deep Waters ocean column at player.");
-
-						probePos = gameManager.MainCamera.transform.position;
-						probeName = "camera";
-						if (!DeepWaterWorld.TryGetWaterColumn(probePos.x, probePos.z, out column))
-							return Report("No Deep Waters ocean column at player or camera.");
+						Debug.LogException(ex);
+						loggedRegistrationError = true;
 					}
-
-                    float belowSurface = column.OceanWorldY - probePos.y;
-                    string playerDepth = belowSurface >= 0f
-                        ? belowSurface.ToString("F1", CultureInfo.InvariantCulture) + "m below surface"
-                        : (-belowSurface).ToString("F1", CultureInfo.InvariantCulture) + "m above surface";
-
-                    return Report(probeName + ": " + playerDepth +
-						" | column: " + column.Depth.ToString("F1", CultureInfo.InvariantCulture) + "m deep");
                 }
-
-				private static string Report(string message)
-				{
-					Debug.Log("[DeepWaters.currentdepth] " + message);
-					DaggerfallUI.AddHUDText(message);
-					return message;
-				}
             }
+
+			private static string ExecuteCurrentDepth(params string[] args)
+			{
+				GameManager gameManager = GameManager.Instance;
+				if (gameManager == null || gameManager.PlayerObject == null)
+					return Report("No player.");
+
+				Vector3 playerPos = gameManager.PlayerObject.transform.position;
+				Vector3 probePos = playerPos;
+				string probeName = "player";
+				DeepWaterColumn column;
+				if (!DeepWaterWorld.TryGetWaterColumn(playerPos.x, playerPos.z, out column))
+				{
+					if (gameManager.MainCamera == null)
+						return Report("No Deep Waters ocean column at player.");
+
+					probePos = gameManager.MainCamera.transform.position;
+					probeName = "camera";
+					if (!DeepWaterWorld.TryGetWaterColumn(probePos.x, probePos.z, out column))
+						return Report("No Deep Waters ocean column at player or camera.");
+				}
+
+				float belowSurface = column.OceanWorldY - probePos.y;
+				string playerDepth = belowSurface >= 0f
+					? belowSurface.ToString("F1", CultureInfo.InvariantCulture) + "m below surface"
+					: (-belowSurface).ToString("F1", CultureInfo.InvariantCulture) + "m above surface";
+
+				return Report(probeName + ": " + playerDepth +
+					" | column: " + column.Depth.ToString("F1", CultureInfo.InvariantCulture) + "m deep");
+			}
+
+			private static string Report(string message)
+			{
+				Debug.Log("[DeepWaters.currentdepth] " + message);
+				DaggerfallUI.AddHUDText(message);
+				return message;
+			}
         }
 
         private static void InstallSubsystems(GameObject go)
@@ -99,10 +104,8 @@ namespace DeepWaters
             // === Core path ===
             // The floor builder must subscribe to OnPromoteTerrainData before
             // any tile promotes.
-            DeepWaterLocationLoadGate.Install();
-            DeepWaterFloorBuilder.Install();
             DeepWaterRuntime.Install();
-            DeepWaterLocationUpdateSkipper.Install();
+            DeepWaterFloorBuilder.Install();
             OutdoorSwimDriver.Install(go);
             // Swim extras (speed multiplier, strokes, anti-tunnel clamps)
             // layered on top of DFU's native swim movement.
@@ -119,47 +122,13 @@ namespace DeepWaters
             UnderwaterEncounterPulse.Install();
             UnderwaterDecorations.Install();
             UnderwaterLootSpawner.Install();
-            DeepWaterConsoleCommands.RegisterCommands();
-			go.AddComponent<DeepWaterConsoleCommandInstaller>();
             go.AddComponent<PlayerShipWaterlineFix>();
-            go.AddComponent<CutoutDepthQueueFix>();
             go.AddComponent<UnderwaterDistanceFog>();
-            go.AddComponent<UnderwaterWaveShadowFix>();
-            go.AddComponent<ArgonianWaterBreathing>();
-            go.AddComponent<SwimmingSfxBridge>();
-            go.AddComponent<UnderwaterWeatherSuppressor>();
-            go.AddComponent<UnderwaterAmbientMuter>();
+            go.AddComponent<UnderwaterPresentationEffects>();
             DeepWaterDiagnosticsRunner.Install(go);
         }
 
-        private void RegisterCustomItems()
-        {
-            int[] templateIndices = UnderwaterPassiveFishSpawner.CustomItemTemplateIndices;
-            for (int i = 0; i < templateIndices.Length; i++)
-            {
-                DaggerfallUnity.Instance.ItemHelper.RegisterCustomItem(
-                    templateIndices[i],
-                    UnderwaterPassiveFishSpawner.FishItemGroup);
-            }
-        }
-
-        private void WrapTerrainTexturing()
-        {
-            var inner = DaggerfallUnity.Instance.TerrainTexturing;
-            if (inner is DeepWaterTexturing)
-                return;
-
-            DaggerfallUnity.Instance.TerrainTexturing = new DeepWaterTexturing(inner);
-        }
     }
-
-	internal sealed class DeepWaterConsoleCommandInstaller : MonoBehaviour
-	{
-		void Start()
-		{
-			DeepWaters.DeepWaterConsoleCommands.RegisterCommands();
-		}
-	}
 
     internal sealed class DeepWaterDiagnosticsRunner : MonoBehaviour
     {
@@ -179,6 +148,39 @@ namespace DeepWaters
         private const float TargetedVisualHoldSeconds = 5f;
         private const float TargetedScreenshotIntervalSeconds = 5f;
 
+		private static readonly HashSet<string> TargetedScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+		{
+			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
+			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery"
+		};
+
+		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+		{
+			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt"
+		};
+
+		private static readonly HashSet<string> BiomeVisualProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+		{
+			"temperate", "swamp", "tropical", "desert", "cold", "open ocean", "open ocean 2", "mystery"
+		};
+
+		private static readonly HashSet<string> MovementProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+		{
+			"iii", "kkkk", "lll", "mmm", "qqq"
+		};
+
+		private static readonly Dictionary<string, string> ForwardScenarioPhases =
+			new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+			{
+				{ "ddd", "ddd_straight_shore_entry" },
+				{ "iii", "iii_straight_shore_entry" },
+				{ "kkkk", "kkkk_straight_shore_entry" },
+				{ "lll", "lll_straight_shore_probe" },
+				{ "mmm", "mmm_straight_water_entry" },
+				{ "qqq", "qqq_straight_boat_probe" },
+				{ "mystery", "mystery_straight_lake_probe" }
+			};
+
         private readonly List<MetricWindow> windows = new List<MetricWindow>();
         private StreamWriter writer;
         private string characterName = "Miranda";
@@ -193,14 +195,11 @@ namespace DeepWaters
         private float lastFrameTime;
         private bool hasLastFramePlayer;
 
-        public static void Install(GameObject host)
+        internal static void Install(GameObject host)
         {
             if (!IsEnabled())
                 return;
 
-            DeepWaterRuntime.DiagnosticProfiling = true;
-            DeepWaterFloorBuilder.DiagnosticLogging = true;
-            DeepWaterFloorMesh.DiagnosticLogging = true;
             host.AddComponent<DeepWaterDiagnosticsRunner>();
         }
 
@@ -487,40 +486,14 @@ namespace DeepWaters
 
         private static bool IsTargetedScenarioSave(string saveName)
         {
-            return string.Equals(saveName, "ddd", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "eee", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "fff", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "ggg", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "hhh", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "iii", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "jjj", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "kkkk", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "lll", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "nnn", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "rrr", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(saveName, "ttt", StringComparison.OrdinalIgnoreCase) ||
-				   string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase) ||
-				   IsBiomeVisualProbeSave(saveName);
+			return TargetedScenarioSaves.Contains(saveName) || IsBiomeVisualProbeSave(saveName);
         }
 
         private IEnumerator RunTargetedScenario(string saveName)
         {
             yield return CaptureDiagnosticScreenshot(saveName, "after-load");
 
-            if (string.Equals(saveName, "eee", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "ggg", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "hhh", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "jjj", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "nnn", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "ooo", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "rrr", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "sss", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "ttt", StringComparison.OrdinalIgnoreCase) ||
-				IsBiomeVisualProbeSave(saveName))
+            if (VisualScenarioSaves.Contains(saveName) || IsBiomeVisualProbeSave(saveName))
             {
                 string visualPhase = saveName.ToLowerInvariant() + "_shoreline_visual";
                 yield return RunStationaryPhase(saveName, visualPhase, TargetedVisualHoldSeconds);
@@ -536,22 +509,8 @@ namespace DeepWaters
             }
 
             string phase;
-            if (string.Equals(saveName, "ddd", StringComparison.OrdinalIgnoreCase))
-                phase = "ddd_straight_shore_entry";
-            else if (string.Equals(saveName, "iii", StringComparison.OrdinalIgnoreCase))
-                phase = "iii_straight_shore_entry";
-            else if (string.Equals(saveName, "kkkk", StringComparison.OrdinalIgnoreCase))
-                phase = "kkkk_straight_shore_entry";
-            else if (string.Equals(saveName, "lll", StringComparison.OrdinalIgnoreCase))
-                phase = "lll_straight_shore_probe";
-            else if (string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase))
-                phase = "mmm_straight_water_entry";
-            else if (string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase))
-                phase = "qqq_straight_boat_probe";
-			else if (string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase))
-				phase = "mystery_straight_lake_probe";
-            else
-                phase = "fff_straight_seam_probe";
+			if (!ForwardScenarioPhases.TryGetValue(saveName ?? string.Empty, out phase))
+				phase = "fff_straight_seam_probe";
             float seconds = Mathf.Min(TargetedScenarioSeconds, Mathf.Max(10f, durationSeconds));
             yield return RunNaturalForwardPhase(saveName, phase, seconds);
             yield return CaptureDiagnosticScreenshot(saveName, phase + "-end");
@@ -559,14 +518,7 @@ namespace DeepWaters
 
 		private static bool IsBiomeVisualProbeSave(string saveName)
 		{
-			return string.Equals(saveName, "temperate", StringComparison.OrdinalIgnoreCase) ||
-				   string.Equals(saveName, "swamp", StringComparison.OrdinalIgnoreCase) ||
-				   string.Equals(saveName, "tropical", StringComparison.OrdinalIgnoreCase) ||
-				   string.Equals(saveName, "desert", StringComparison.OrdinalIgnoreCase) ||
-				   string.Equals(saveName, "cold", StringComparison.OrdinalIgnoreCase) ||
-				   string.Equals(saveName, "open ocean", StringComparison.OrdinalIgnoreCase) ||
-				   string.Equals(saveName, "open ocean 2", StringComparison.OrdinalIgnoreCase) ||
-				   string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase);
+			return BiomeVisualProbeSaves.Contains(saveName);
 		}
 
         private IEnumerator RunStationaryPhase(string saveName, string phase, float seconds)
@@ -585,12 +537,7 @@ namespace DeepWaters
             Vector3 direction = GetCameraForwardFlat();
             if (direction.sqrMagnitude < 0.001f)
                 direction = Vector3.forward;
-            bool writeFrameMovement =
-                string.Equals(saveName, "iii", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "kkkk", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "lll", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "mmm", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(saveName, "qqq", StringComparison.OrdinalIgnoreCase);
+            bool writeFrameMovement = MovementProbeSaves.Contains(saveName);
             if (writeFrameMovement)
                 ResetFrameMovementProbe();
 
@@ -1470,9 +1417,9 @@ namespace DeepWaters
         private static RuntimeState SampleRuntimeState()
         {
             RuntimeState state = new RuntimeState();
-            state.LoadGateCount = DeepWaterLocationLoadGate.ActiveLoadCount;
+            state.LoadGateCount = DeepWaterRuntime.ActiveLocationLoadCount;
             state.LoadGateActive = state.LoadGateCount > 0f ? 1f : 0f;
-            state.LoadGateAge = DeepWaterLocationLoadGate.ActiveLoadAgeSeconds;
+            state.LoadGateAge = DeepWaterRuntime.ActiveLocationLoadAgeSeconds;
             state.TerrainUpdateActive = DeepWaterRuntime.IsTerrainUpdateActive ? 1f : 0f;
             state.LoadGraceActive = DeepWaterRuntime.IsLoadGraceActive ? 1f : 0f;
             state.HeavyWorkBlocked = DeepWaterRuntime.CanRunHeavyRuntimeWork ? 0f : 1f;
@@ -1480,8 +1427,8 @@ namespace DeepWaters
             state.PostRefreshPending = DeepWaterRuntime.IsPostTransitionRefreshPending ? 1f : 0f;
             state.DecorQueue = UnderwaterDecorations.PendingWorkCount;
             state.DecorQueuedTerrains = UnderwaterDecorations.QueuedTerrainCount;
-            state.LocationSkippedLast = DeepWaterLocationUpdateSkipper.LastSkippedCount;
-            state.LocationDeferred = DeepWaterLocationUpdateSkipper.DeferredLocationCount;
+            state.LocationSkippedLast = DeepWaterRuntime.LastLocationSkippedCount;
+            state.LocationDeferred = DeepWaterRuntime.DeferredLocationCount;
             return state;
         }
 

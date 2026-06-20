@@ -20,8 +20,7 @@ will not ship in the mod bundle.
 
 ## Lesson 2: Read Settings As Runtime Policy
 
-Open `modsettings.json`, then `Scripts/DeepWaters.cs` and
-`Scripts/DeepWaters.Settings.cs`.
+Open `modsettings.json`, then `Scripts/DeepWaters.cs`.
 
 `modsettings.json` defines user-facing settings. `DeepWaters.LoadSettings()`
 reads those values into properties on the singleton.
@@ -33,10 +32,8 @@ EnemyFrequency = GetScaledSliderSetting(s, "EnemyFrequency", EnemyFrequencyAtMid
 ```
 
 The rate sliders use `0.5` as the normal/default point. `DeepWaters` scales
-that midpoint back to the tuned internal values, so enemies at `0.5` become
-`0.3`, fish become `0.6`, decorations become `1.0`, stray loot becomes `0.7`,
-and treasure clusters become `0.1`. Moving a slider to `1.0` is roughly double
-that default behavior.
+that midpoint back to the tuned internal values. Moving a slider to `1.0` is
+roughly double that default behavior.
 
 The visual sliders use the same midpoint idea. The two water transparency
 sliders keep the current look at `0.5`, become more opaque below that point,
@@ -78,7 +75,7 @@ stale terrain children if DFU reuses an object.
 
 ## Lesson 4: Use Shared World Queries
 
-Open `Scripts/DeepWaterWorld.cs` and `Scripts/DeepWaterTerrainLookup.cs`.
+Open `Scripts/DeepWaterWorld.cs`.
 
 This file is the small helper that keeps the rest of the mod simple. Most
 systems eventually need the same question answered:
@@ -156,16 +153,15 @@ needed** — the old `BoundaryReconciler.cs` is gone.
 
 ## Lesson 6: Draw The Water Surface
 
-Open `Scripts/WaterSurfaceManager.cs`, `Scripts/WaterSurfaceResources.cs`, and
-`Shaders/StenciledWaterSurface.shader`.
+Open `Scripts/WaterSurfaceManager.cs` and `Shaders/StenciledWaterSurface.shader`.
 
 The seafloor sub-mesh provides the depth, but it does not draw water. The
 surface manager creates a child mesh on any terrain tile that contains water.
 
-Each tile gets a `DeepWaters_Surface` child, but every child shares resources
+Each tile gets a generated `DeepWaters_Surface` child, with shared resources
 owned by `WaterSurfaceResources`:
 
-- one flat quad mesh;
+- per-tile clipped meshes;
 - one water material;
 - one custom shader.
 
@@ -198,13 +194,13 @@ the mod's camera-space underwater visibility pass.
 
 ## Lesson 7: Make Outdoor Swimming Work
 
-Open `Scripts/OutdoorSwimDriver.cs` and `Scripts/OutdoorSwimDfuBridge.cs`.
+Open `Scripts/OutdoorSwimDriver.cs`.
 
 DFU knows how to swim indoors. The driver temporarily makes outdoor water look
 like indoor water to the parts of DFU that handle swimming.
 
-The reflection-heavy DFU field access lives in `OutdoorSwimDfuBridge`, while
-`OutdoorSwimDriver` owns the actual swim and presentation decisions.
+The reflection-heavy DFU field access and swim/presentation decisions live in
+`OutdoorSwimDriver`; splitting that single-owner helper out bought nothing.
 
 Two execution orders make this possible:
 
@@ -214,22 +210,22 @@ Two execution orders make this possible:
 The same driver also refreshes DFU's water state in `FixedUpdate()` so DFU's
 own audio and submerged-state systems see the outdoor water consistently.
 
-Open `Scripts/OutdoorShoreExitAssist.cs`, then `Scripts/SwimmingSfxBridge.cs`.
+Open `Scripts/OutdoorSwimDriver.cs`, then `Scripts/SwimmingSfxBridge.cs`.
 
-The shore assist is separated from the reflection-heavy swim driver. It only
-handles the forward raycast used to climb onto terrain or static geometry, and
-it explicitly ignores passive fish and enemies near the surface.
+The shore assist lives with the swim driver now. It handles the forward raycast
+used to climb onto terrain or static geometry, and it explicitly ignores
+passive fish and enemies near the surface.
 
 This small bridge plays DFU's own `SplashSmall` clip through the player's
 `DaggerfallAudioSource` after every 2.5 world units of swimming movement. It
 does not replace swimming physics, fog, breath, or movement; it just restores an
 audible swim cadence in dungeon and outdoor water.
 
-Open `Scripts/UnderwaterWeatherSuppressor.cs`. DFU already stores the
-active weather on `PlayerWeather`, including the rain and snow particle objects.
-The suppressor does not change the weather. It only hides those particles while
-the player is swimming outdoors, then re-applies the current `WeatherType` when
-swimming ends.
+Open `Scripts/SwimmingSfxBridge.cs`. DFU already stores the active weather on
+`PlayerWeather`, including the rain and snow particle objects.
+`UnderwaterPresentationEffects` does not change the weather. It only hides
+those particles while the player is swimming outdoors, then re-applies the
+current `WeatherType` when swimming ends.
 
 The driver separates two concepts:
 
@@ -243,8 +239,8 @@ or static geometry, and it ignores passive fish and enemies.
 
 ## Lesson 8: Add Underwater Presentation
 
-Open `Scripts/UnderwaterAmbientMuter.cs`, `Scripts/UnderwaterDistanceFog.cs`,
-`Scripts/UnderwaterWaveShadowFix.cs`, and `Shaders/UnderwaterDistanceFog.shader`.
+Open `Scripts/SwimmingSfxBridge.cs`, `Scripts/UnderwaterDistanceFog.cs`, and
+`Shaders/UnderwaterDistanceFog.shader`.
 
 The audio muter asks `OutdoorSwimDriver.IsPresentationUnderwater(oceanY)`. If
 true, it adds an `AudioLowPassFilter` to the main audio listener. If false, it
@@ -264,35 +260,33 @@ The no-depth safety pass has its own density floor. That keeps low cosmetic fog
 settings from exposing skybox at the missing-terrain horizon while preserving
 the player's chosen fog strength on normal rendered geometry.
 
-The wave-shadow fix is a compatibility shim for surface wave mods such as Come
-Sail Away. DFU's exterior `IndirectLight` follows the player as an unshadowed
-point light, and the outdoor swim bridge can briefly make `EnablePlayerTorch`
-think the player is in a dungeon while it borrows DFU's swimming logic.
-Underwater, those local lights can erase contrast in a perfect circle around the
-camera, so the shim suppresses both while underwater presentation is active. It
-also disables real shadow casting on Come Sail Away-style wave meshes while
-submerged. Their visible wave meshes remain, but their shadows are left off
-underwater because Unity's shadow culling produced circular holes and floating
-artifacts from below.
+The presentation component also carries the wave-shadow compatibility shim for
+surface wave mods such as Come Sail Away. DFU's exterior `IndirectLight` follows
+the player as an unshadowed point light, and the outdoor swim bridge can briefly
+make `EnablePlayerTorch` think the player is in a dungeon while it borrows DFU's
+swimming logic. Underwater, those local lights can erase contrast in a perfect
+circle around the camera, so the presentation component suppresses both while
+underwater presentation is active. It also disables real shadow casting on Come
+Sail Away-style wave meshes while submerged. Their visible wave meshes remain,
+but their shadows are left off underwater because Unity's shadow culling
+produced circular holes and floating artifacts from below.
 
-Open `Scripts/PlayerShipWaterlineFix.cs`.
+Open `Scripts/WaterSurfaceManager.cs`.
 
 Owned ships are exterior `HomeYourShips` locations. DFU places those locations
 at terrain height, which deep water lowers to the seafloor. The fix listens for
 location creation/update events and anchors only the owned ship location root to
 the ocean waterline.
 
-Open `Scripts/ArgonianWaterBreathing.cs`.
+Open `Scripts/DeepWaters.cs`.
 
-This file is tiny but instructive. DFU clears constant-effect flags each frame,
-so the mod reapplies Argonian water breathing in `LateUpdate()`.
+DFU clears constant-effect flags each frame, so `DeepWaters.LateUpdate()`
+reapplies Argonian water breathing after DFU has done that reset.
 
 ## Lesson 9: Spawn Decorations
 
 Open `Scripts/UnderwaterDecorations.cs`,
 `Scripts/UnderwaterDecorationCatalog.cs`, and
-`Scripts/UnderwaterDecorationReplacementCache.cs`.
-Then open `Scripts/UnderwaterDecorationPlacement.cs` and
 `Scripts/UnderwaterDecorationBatchFactory.cs`.
 
 Decorations are terrain content, not moment-to-moment encounters. The system
@@ -300,7 +294,7 @@ therefore runs from terrain events:
 
 1. Terrain promotion or nearby tile movement enqueues a tile.
 2. A worker processes the queue after terrain updates.
-3. `UnderwaterDecorationPlacement` samples the tile on a stride.
+3. `UnderwaterDecorations` samples the tile on a stride.
 4. Valid seafloor positions become billboard batch entries.
 5. `UnderwaterDecorationBatchFactory` creates archive or replacement-aware
    batches for the whole tile.
@@ -352,10 +346,7 @@ moderate.
 
 ## Lesson 11: Spawn Loot
 
-Open `Scripts/UnderwaterLootSpawner.cs`,
-`Scripts/UnderwaterLootPlacement.cs`, `Scripts/UnderwaterLootCatalog.cs`,
-`Scripts/UnderwaterLootObjectFactory.cs`, and
-`Scripts/UnderwaterTreasureClusterSpawner.cs`.
+Open `Scripts/UnderwaterLootSpawner.cs`.
 
 Loot is pulse-driven. A pulse can happen when loaded lootable ocean exists near
 the player or when the player travels far enough from the last pulse anchor.
@@ -372,24 +363,21 @@ treasure cluster rolls are reduced to one eighth of their normal chance. This
 keeps shore walking possible without making beaches the best treasure farm.
 
 Stray loot uses a spawn ring and recent-cell memory to avoid obvious repeats.
-That placement state lives in `UnderwaterLootPlacement`, which also owns the
-forward-biased angle pick, seafloor resolution, and cluster loot spacing.
-Treasure clusters use the same center-picking logic, then
-`UnderwaterTreasureClusterSpawner` adds rubble batches, several loot
-containers, and optional rare guards through `UnderwaterLootObjectFactory`.
+`UnderwaterLootSpawner` owns that placement state, the forward-biased angle
+pick, seafloor resolution, cluster loot spacing, rubble batches, containers,
+and optional rare guards.
 
 One wrinkle: treasure pile graphics and passive fish icons both use archive
-`216`. Fish occupy records `42-48`, so `UnderwaterLootCatalog` excludes those
-records from treasure pile visuals. Otherwise a treasure horde can accidentally
-use fish art as a container sprite.
+`216`. Fish occupy records `42-48`, so the treasure visual pool excludes those
+records. Otherwise a treasure horde can accidentally use fish art as a
+container sprite.
 
 When performance is a concern, this pulse model is the key idea: do a little
 work near the player, not a lot of work across the loaded ocean.
 
 ## Lesson 12: Spawn Passive Fish
 
-Open `Scripts/PassiveFishSpeciesCatalog.cs`, `Scripts/PassiveFishResources.cs`,
-`Scripts/PassiveFishPlacement.cs`, `Scripts/PassiveFishFactory.cs`, and
+Open `Scripts/PassiveFishSpeciesCatalog.cs` and
 `Scripts/UnderwaterPassiveFishSpawner.cs`.
 
 Fish are lightweight GameObjects with:
@@ -422,11 +410,11 @@ another has weight `1`, the second appears about one tenth as often.
 
 The runtime flow is deliberately layered:
 
-- `PassiveFishSpeciesCatalog` owns the species table and weighted pick cache.
-- `PassiveFishResources` loads textures and creates inventory items.
-- `PassiveFishPlacement` chooses legal water positions and school offsets.
-- `PassiveFishFactory` creates a lootable billboard GameObject.
-- `UnderwaterPassiveFishSpawner` runs the pulse budget and tracks live fish.
+- `PassiveFishSpeciesCatalog` owns the species table, weighted pick cache,
+	texture loading, and inventory items.
+- `UnderwaterPassiveFishSpawner` chooses legal water positions and school
+	offsets, creates lootable billboard GameObjects, runs the pulse budget, and
+	tracks live fish.
 
 `FishParadise` is intentionally blunt: it multiplies fish spawn counts, raises
 the live fish cap, and lets successful pulses happen sooner. It lives beside

@@ -12,18 +12,18 @@ namespace DeepWaters
 {
     internal struct DeepWaterColumn
     {
-        public DaggerfallTerrain DaggerfallTerrain;
-        public Terrain Terrain;
-        public TerrainData TerrainData;
-        public Transform Parent;
-        public float SeafloorLocalY;
-        public float OceanLocalY;
-        public float SeafloorWorldY;
-        public float OceanWorldY;
-        public int SampleX;
-        public int SampleY;
+        internal DaggerfallTerrain DaggerfallTerrain;
+        internal Terrain Terrain;
+        internal TerrainData TerrainData;
+        internal Transform Parent;
+        internal float SeafloorLocalY;
+        internal float OceanLocalY;
+        internal float SeafloorWorldY;
+        internal float OceanWorldY;
+        internal int SampleX;
+        internal int SampleY;
 
-        public float Depth
+        internal float Depth
         {
             get { return OceanWorldY - SeafloorWorldY; }
         }
@@ -35,16 +35,12 @@ namespace DeepWaters
     /// </summary>
     internal static class DeepWaterWorld
     {
-        private const float FallbackEncounterMinSpawnDistance = 35f;
-        private const float FallbackEncounterMaxSpawnDistance = 55f;
-        private const float FallbackEncounterViewSafetyDistance = 55f;
-
         // Forward "emerge from the fog" spawns. A point past the fog reveal
         // distance (vision distance + how far the player swims in the next
         // SpawnRevealLeadSeconds) is hidden now and stays hidden long enough
         // that it won't visibly pop as the player advances. FogAheadSpawnChance
         // is how often a spawner tries ahead-in-fog instead of its near ring.
-        public const float FogAheadSpawnChance = 0.5f;
+        internal const float FogAheadSpawnChance = 0.5f;
         private const float SpawnRevealLeadSeconds = 2f;
         private const float FogAheadBandMeters = 25f;
         private const float FogAheadArcDegrees = 45f;
@@ -54,39 +50,23 @@ namespace DeepWaters
         // within this horizontal radius are treated as directly above/below and
         // stay allowed.
         private const float AboveBelowHorizontalRadius = 12f;
-        private const float FrontRingArcDegrees = 90f;
         // Enemy/loot spawn rate scales up to this multiplier at full water depth.
-        public const float MaxDepthSpawnMultiplier = 2.0f;
+        internal const float MaxDepthSpawnMultiplier = 2.0f;
 
         private static readonly Dictionary<Transform, DeepWaterFloorMesh> floorMeshCache =
             new Dictionary<Transform, DeepWaterFloorMesh>();
 
-        public static float TileWorldSize
+        internal static float TileWorldSize
         {
             get { return MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale; }
         }
 
-        public static float EncounterSpawnMinDistance
-        {
-            get { return DeepWaters.Instance != null ? DeepWaters.Instance.EncounterSpawnMinDistance : FallbackEncounterMinSpawnDistance; }
-        }
-
-        public static float EncounterSpawnMaxDistance
-        {
-            get { return DeepWaters.Instance != null ? DeepWaters.Instance.EncounterSpawnMaxDistance : FallbackEncounterMaxSpawnDistance; }
-        }
-
-        public static float EncounterSpawnViewSafetyDistance
-        {
-            get { return DeepWaters.Instance != null ? DeepWaters.Instance.EncounterSpawnViewSafetyDistance : FallbackEncounterViewSafetyDistance; }
-        }
-
-        public static float UnderwaterVisionDistance
+        internal static float UnderwaterVisionDistance
         {
             get { return DeepWaters.Instance != null ? DeepWaters.Instance.UnderwaterVisionDistance : 70f; }
         }
 
-        public static bool TryGetPlayerPosition(out Vector3 position)
+        internal static bool TryGetPlayerPosition(out Vector3 position)
         {
             position = Vector3.zero;
             var gameManager = GameManager.Instance;
@@ -97,7 +77,7 @@ namespace DeepWaters
             return true;
         }
 
-        public static bool IsPlayerInExteriorWaterContext()
+        internal static bool IsPlayerInExteriorWaterContext()
         {
             var gameManager = GameManager.Instance;
             if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.PlayerObject == null)
@@ -110,18 +90,7 @@ namespace DeepWaters
                    gameManager.PlayerMotor.OnExteriorWater != PlayerMotor.OnExteriorWaterMethod.None;
         }
 
-        public static bool IsPlayerOverDeepWater(float minimumDepth)
-        {
-            Vector3 position;
-            if (!TryGetPlayerPosition(out position))
-                return false;
-
-            DeepWaterColumn column;
-            return TryGetWaterColumn(position.x, position.z, out column) &&
-                   column.Depth >= minimumDepth;
-        }
-
-        public static bool IsPlayerInOrAboveDeepWater(float minimumDepth)
+        internal static bool IsPlayerInOrAboveDeepWater(float minimumDepth)
         {
             var gameManager = GameManager.Instance;
             if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.PlayerObject == null || gameManager.MainCamera == null)
@@ -141,61 +110,18 @@ namespace DeepWaters
             return column.Depth >= minimumDepth;
         }
 
-        public static Vector3 PickRingPoint(Vector3 center, float minDistance, float maxDistance)
-        {
-            float angle = Random.Range(0f, Mathf.PI * 2f);
-            float distance = PickRingDistance(minDistance, maxDistance);
-            return new Vector3(
-                center.x + Mathf.Cos(angle) * distance,
-                center.y,
-                center.z + Mathf.Sin(angle) * distance);
-        }
-
-        public static float PickRingDistance(float minDistance, float maxDistance)
+        internal static float PickRingDistance(float minDistance, float maxDistance)
         {
             float minSq = minDistance * minDistance;
             float maxSq = maxDistance * maxDistance;
             return Mathf.Sqrt(Mathf.Lerp(minSq, maxSq, Random.value));
         }
 
-        // Ring point biased into the front hemisphere of the player's heading, so
-        // off-screen spawns land ahead/to the sides rather than behind (where the
-        // not-behind gate would reject them anyway). Falls back to a full circle
-        // when the heading is unknown.
-        public static Vector3 PickFrontRingPoint(Vector3 center, float minDistance, float maxDistance)
-        {
-            float distance = PickRingDistance(minDistance, maxDistance);
-
-            Vector3 forward = Vector3.zero;
-            var gameManager = GameManager.Instance;
-            if (gameManager != null && gameManager.MainCamera != null)
-                forward = gameManager.MainCamera.transform.forward;
-            forward.y = 0f;
-
-            float angle;
-            if (forward.sqrMagnitude < 0.001f)
-            {
-                angle = Random.Range(0f, Mathf.PI * 2f);
-            }
-            else
-            {
-                forward.Normalize();
-                float baseAngle = Mathf.Atan2(forward.z, forward.x);
-                float arc = FrontRingArcDegrees * Mathf.Deg2Rad;
-                angle = baseAngle + Random.Range(-arc, arc);
-            }
-
-            return new Vector3(
-                center.x + Mathf.Cos(angle) * distance,
-                center.y,
-                center.z + Mathf.Sin(angle) * distance);
-        }
-
         // A spawn is "behind" when it sits in the rear horizontal hemisphere of
         // the player's heading. Near-vertical (above/below) points within
         // AboveBelowHorizontalRadius are exempt so overhead/under spawns stay
         // valid. Unknown heading -> not restricted.
-        public static bool IsBehindPlayerHeading(Vector3 worldPos, Vector3 playerPos)
+        internal static bool IsBehindPlayerHeading(Vector3 worldPos, Vector3 playerPos)
         {
             Vector3 forward = Vector3.zero;
             var gameManager = GameManager.Instance;
@@ -213,29 +139,22 @@ namespace DeepWaters
             return Vector3.Dot(forward, to) < 0f;
         }
 
-        // Water depth under the player as a fraction of max ocean depth (0 over
-        // shallow/no water, 1 over the deepest ocean).
-        public static float GetPlayerDepthFraction()
-        {
-            Vector3 playerPos;
-            if (!TryGetPlayerPosition(out playerPos))
-                return 0f;
-
-            DeepWaterColumn column;
-            if (!TryGetWaterColumn(playerPos.x, playerPos.z, out column))
-                return 0f;
-
-            float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
-            return Mathf.Clamp01(column.Depth / maxDepth);
-        }
-
         // Enemy/loot spawn-rate multiplier that rises with the player's depth.
-        public static float DepthSpawnMultiplier()
+        internal static float DepthSpawnMultiplier()
         {
-            return Mathf.Lerp(1f, MaxDepthSpawnMultiplier, GetPlayerDepthFraction());
+			Vector3 playerPos;
+			if (!TryGetPlayerPosition(out playerPos))
+				return 1f;
+
+			DeepWaterColumn column;
+			if (!TryGetWaterColumn(playerPos.x, playerPos.z, out column))
+				return 1f;
+
+			float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
+			return Mathf.Lerp(1f, MaxDepthSpawnMultiplier, Mathf.Clamp01(column.Depth / maxDepth));
         }
 
-        public static int RollCount(float scaledCount)
+        internal static int RollCount(float scaledCount)
         {
             int targetCount = Mathf.FloorToInt(Mathf.Max(0f, scaledCount));
             if (Random.value < scaledCount - targetCount)
@@ -244,22 +163,16 @@ namespace DeepWaters
             return targetCount;
         }
 
-        public static float GetPlayerHorizontalSpeed()
-        {
-            var gameManager = GameManager.Instance;
-            if (gameManager == null || gameManager.PlayerController == null)
-                return 0f;
-
-            Vector3 velocity = gameManager.PlayerController.velocity;
-            velocity.y = 0f;
-            return velocity.magnitude;
-        }
-
         // Distance past which a point dead ahead is fully hidden by fog AND
         // stays hidden for the next SpawnRevealLeadSeconds of swimming.
-        public static float SpawnRevealDistance()
+        internal static float SpawnRevealDistance()
         {
-            return UnderwaterVisionDistance + GetPlayerHorizontalSpeed() * SpawnRevealLeadSeconds;
+			var gameManager = GameManager.Instance;
+			Vector3 velocity = gameManager != null && gameManager.PlayerController != null
+				? gameManager.PlayerController.velocity
+				: Vector3.zero;
+			velocity.y = 0f;
+            return UnderwaterVisionDistance + velocity.magnitude * SpawnRevealLeadSeconds;
         }
 
         // Pick a spawn XZ out ahead in the fog: beyond the reveal distance but
@@ -267,7 +180,7 @@ namespace DeepWaters
         // instant it spawns). Returns false when the reveal distance already
         // reaches maxDistance — i.e. the water is clear enough that nothing can
         // hide ahead within range, so callers fall back to their off-screen ring.
-        public static bool TryPickFogAheadPoint(Vector3 center, float maxDistance, out Vector3 point)
+        internal static bool TryPickFogAheadPoint(Vector3 center, float maxDistance, out Vector3 point)
         {
             point = center;
 
@@ -297,7 +210,7 @@ namespace DeepWaters
             return true;
         }
 
-        public static bool IsOutsideImmediateView(Vector3 worldPos, Vector3 playerPos, float visibleDistance, float viewportMargin)
+        internal static bool IsOutsideImmediateView(Vector3 worldPos, Vector3 playerPos, float visibleDistance, float viewportMargin)
         {
             var gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.MainCamera == null)
@@ -343,7 +256,7 @@ namespace DeepWaters
         private static bool hasCachedOceanSurfaceY;
         private static float cachedOceanSurfaceY;
 
-        public static bool TryGetOceanSurfaceWorldY(out float oceanY)
+        internal static bool TryGetOceanSurfaceWorldY(out float oceanY)
         {
             oceanY = 0f;
 
@@ -377,7 +290,7 @@ namespace DeepWaters
             return true;
         }
 
-        public static bool TryGetWaterColumn(float worldX, float worldZ, out DeepWaterColumn column)
+        internal static bool TryGetWaterColumn(float worldX, float worldZ, out DeepWaterColumn column)
         {
             column = new DeepWaterColumn();
 
@@ -466,7 +379,7 @@ namespace DeepWaters
             return true;
         }
 
-        public static bool TryGetRenderedSeafloorLocalY(
+        internal static bool TryGetRenderedSeafloorLocalY(
             DeepWaterColumn column,
             float worldX,
             float worldZ,
@@ -510,7 +423,7 @@ namespace DeepWaters
             return floorMesh;
         }
 
-        public static bool TryGetRenderedSeafloorWorldY(
+        internal static bool TryGetRenderedSeafloorWorldY(
             DeepWaterColumn column,
             float worldX,
             float worldZ,
@@ -534,7 +447,7 @@ namespace DeepWaters
         /// relief, so no hole/sub-mesh was built. Callers use the false result to
         /// treat the position as solid ground rather than swimmable water.
         /// </summary>
-        public static bool TryGetCarvedSeafloorWorldY(float worldX, float worldZ, out float seafloorWorldY)
+        internal static bool TryGetCarvedSeafloorWorldY(float worldX, float worldZ, out float seafloorWorldY)
         {
             seafloorWorldY = 0f;
 
@@ -582,7 +495,7 @@ namespace DeepWaters
 
             return vanillaSample * terrainData.size.y;
         }
-        public static bool AlignObjectBottomToWorldY(GameObject gameObject, float bottomWorldY)
+        internal static bool AlignObjectBottomToWorldY(GameObject gameObject, float bottomWorldY)
         {
             if (gameObject == null)
                 return false;
@@ -646,7 +559,7 @@ namespace DeepWaters
             return hasBounds;
         }
 
-        public static bool HasNearbyWaterColumn(Vector3 center, float minDistance, float maxDistance, int directions, float minimumDepth, out float depth)
+        internal static bool HasNearbyWaterColumn(Vector3 center, float minDistance, float maxDistance, int directions, float minimumDepth, out float depth)
         {
             if (TryGetWaterColumnDepth(center.x, center.z, minimumDepth, out depth))
                 return true;
@@ -685,17 +598,556 @@ namespace DeepWaters
             return depth >= minimumDepth;
         }
 
-        public static long TileKey(int x, int y)
+        internal static long TileKey(int x, int y)
         {
             return ((long)x << 32) | (uint)y;
         }
 
-        public static long WorldCellKey(float worldX, float worldZ, float cellSize)
+        internal static long WorldCellKey(float worldX, float worldZ, float cellSize)
         {
             int cellX = Mathf.FloorToInt(worldX / cellSize);
             int cellZ = Mathf.FloorToInt(worldZ / cellSize);
             return ((long)cellX << 32) | (uint)cellZ;
         }
     }
+
+	internal static class DeepWaterRendering
+	{
+		internal static void DisableShadows(GameObject go)
+		{
+			if (go == null)
+				return;
+
+			Renderer[] renderers = go.GetComponentsInChildren<Renderer>();
+			for (int i = 0; i < renderers.Length; i++)
+				DisableShadows(renderers[i]);
+		}
+
+		internal static void DisableShadows(Renderer renderer)
+		{
+			if (renderer == null)
+				return;
+
+			renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+			renderer.receiveShadows = false;
+		}
+
+		internal static void FaceMainCamera(Transform transform)
+		{
+			var gameManager = GameManager.Instance;
+			if (gameManager == null || gameManager.MainCamera == null || transform == null)
+				return;
+
+			Vector3 viewDirection = -gameManager.MainCamera.transform.forward;
+			if (viewDirection.sqrMagnitude < 0.0001f)
+				return;
+
+			transform.LookAt(transform.position + viewDirection, Vector3.up);
+		}
+	}
+
+	internal static class DeepWaterTerrainLookup
+	{
+		private const int MaxCachedLookups = 32;
+		private static readonly Dictionary<long, CachedTerrainLookup> cache =
+			new Dictionary<long, CachedTerrainLookup>();
+
+		private struct CachedTerrainLookup
+		{
+			internal DaggerfallTerrain DfTerrain;
+			internal Terrain Terrain;
+
+			internal CachedTerrainLookup(DaggerfallTerrain dfTerrain, Terrain terrain)
+			{
+				DfTerrain = dfTerrain;
+				Terrain = terrain;
+			}
+		}
+
+		internal static void Clear()
+		{
+			cache.Clear();
+			frameSnapshot.Clear();
+			frameSnapshotFrame = -1;
+			lastHitIndex = -1;
+		}
+
+		internal static bool TryGet(
+			StreamingWorld streamingWorld,
+			int mapPixelX,
+			int mapPixelY,
+			out DaggerfallTerrain dfTerrain,
+			out Terrain terrain)
+		{
+			dfTerrain = null;
+			terrain = null;
+
+			long key = DeepWaterWorld.TileKey(mapPixelX, mapPixelY);
+			CachedTerrainLookup cached;
+			if (cache.TryGetValue(key, out cached) &&
+				cached.DfTerrain != null &&
+				cached.Terrain != null &&
+				cached.DfTerrain.MapPixelX == mapPixelX &&
+				cached.DfTerrain.MapPixelY == mapPixelY)
+			{
+				dfTerrain = cached.DfTerrain;
+				terrain = cached.Terrain;
+				return true;
+			}
+
+			GameObject terrainObject = streamingWorld.GetTerrainFromPixel(mapPixelX, mapPixelY);
+			if (terrainObject == null)
+				return false;
+
+			dfTerrain = terrainObject.GetComponent<DaggerfallTerrain>();
+			terrain = terrainObject.GetComponent<Terrain>();
+			if (dfTerrain == null || terrain == null)
+				return false;
+
+			if (cache.Count >= MaxCachedLookups)
+				cache.Clear();
+
+			cache[key] = new CachedTerrainLookup(dfTerrain, terrain);
+			return true;
+		}
+
+		private struct TerrainSnapshotEntry
+		{
+			internal DaggerfallTerrain DfTerrain;
+			internal Terrain Terrain;
+			internal float OriginX;
+			internal float OriginZ;
+		}
+
+		private static readonly List<TerrainSnapshotEntry> frameSnapshot = new List<TerrainSnapshotEntry>(80);
+		private static int frameSnapshotFrame = -1;
+		private static int lastHitIndex = -1;
+
+		internal static bool TryGetByWorldPosition(
+			float worldX,
+			float worldZ,
+			out DaggerfallTerrain dfTerrain,
+			out Terrain terrain)
+		{
+			dfTerrain = null;
+			terrain = null;
+
+			if (float.IsNaN(worldX) || float.IsNaN(worldZ) ||
+				float.IsInfinity(worldX) || float.IsInfinity(worldZ))
+			{
+				return false;
+			}
+
+			float tileWorldSize = DeepWaterWorld.TileWorldSize;
+			if (tileWorldSize <= 0f)
+				return false;
+
+			List<TerrainSnapshotEntry> snapshot = GetFrameSnapshot();
+
+			if (lastHitIndex >= 0 && lastHitIndex < snapshot.Count &&
+				SnapshotEntryContains(snapshot[lastHitIndex], worldX, worldZ, tileWorldSize))
+			{
+				dfTerrain = snapshot[lastHitIndex].DfTerrain;
+				terrain = snapshot[lastHitIndex].Terrain;
+				return true;
+			}
+
+			for (int i = 0; i < snapshot.Count; i++)
+			{
+				if (!SnapshotEntryContains(snapshot[i], worldX, worldZ, tileWorldSize))
+					continue;
+
+				lastHitIndex = i;
+				dfTerrain = snapshot[i].DfTerrain;
+				terrain = snapshot[i].Terrain;
+				return true;
+			}
+
+			return false;
+		}
+
+		internal static void GetLoadedTerrains(List<DaggerfallTerrain> dfTerrains, List<Terrain> terrains)
+		{
+			dfTerrains.Clear();
+			if (terrains != null)
+				terrains.Clear();
+
+			List<TerrainSnapshotEntry> snapshot = GetFrameSnapshot();
+			for (int i = 0; i < snapshot.Count; i++)
+			{
+				dfTerrains.Add(snapshot[i].DfTerrain);
+				if (terrains != null)
+					terrains.Add(snapshot[i].Terrain);
+			}
+		}
+
+		private static bool SnapshotEntryContains(TerrainSnapshotEntry entry, float worldX, float worldZ, float tileWorldSize)
+		{
+			const float edgeEpsilon = 0.25f;
+			return worldX >= entry.OriginX - edgeEpsilon &&
+				worldX <= entry.OriginX + tileWorldSize + edgeEpsilon &&
+				worldZ >= entry.OriginZ - edgeEpsilon &&
+				worldZ <= entry.OriginZ + tileWorldSize + edgeEpsilon;
+		}
+
+		private static List<TerrainSnapshotEntry> GetFrameSnapshot()
+		{
+			int frame = Time.frameCount;
+			if (frameSnapshotFrame == frame)
+				return frameSnapshot;
+
+			frameSnapshot.Clear();
+			lastHitIndex = -1;
+			frameSnapshotFrame = frame;
+
+			Transform streamingTarget = null;
+			try
+			{
+				GameManager gameManager = GameManager.Instance;
+				StreamingWorld streamingWorld = gameManager != null ? gameManager.StreamingWorld : null;
+				streamingTarget = streamingWorld != null ? streamingWorld.StreamingTarget : null;
+			}
+			catch
+			{
+				streamingTarget = null;
+			}
+
+			if (streamingTarget != null)
+			{
+				for (int i = 0; i < streamingTarget.childCount; i++)
+				{
+					Transform child = streamingTarget.GetChild(i);
+					if (child == null || !child.gameObject.activeInHierarchy)
+						continue;
+
+					TryAddSnapshotEntry(child.GetComponent<DaggerfallTerrain>());
+				}
+
+				if (frameSnapshot.Count > 0)
+					return frameSnapshot;
+			}
+
+			try
+			{
+				DaggerfallTerrain[] terrains = UnityEngine.Object.FindObjectsOfType<DaggerfallTerrain>();
+				for (int i = 0; i < terrains.Length; i++)
+					TryAddSnapshotEntry(terrains[i]);
+			}
+			catch (System.Exception)
+			{
+				return frameSnapshot;
+			}
+
+			return frameSnapshot;
+		}
+
+		private static void TryAddSnapshotEntry(DaggerfallTerrain candidate)
+		{
+			if (candidate == null)
+				return;
+
+			try
+			{
+				Terrain candidateTerrain = candidate.GetComponent<Terrain>();
+				if (candidateTerrain == null || candidateTerrain.terrainData == null)
+					return;
+
+				Vector3 origin = candidate.transform.position;
+				TerrainSnapshotEntry entry;
+				entry.DfTerrain = candidate;
+				entry.Terrain = candidateTerrain;
+				entry.OriginX = origin.x;
+				entry.OriginZ = origin.z;
+				frameSnapshot.Add(entry);
+			}
+			catch
+			{
+				// Race: candidate destroyed between enumeration and member access.
+			}
+		}
+	}
+
+	internal static class DeepWaterWaterClassification
+	{
+		private const float WaterThresholdEpsilon = 1e-5f;
+		private const float CarveWaterHeadroomMeters = 0.25f;
+
+		internal static bool MapDataHasWater(MapPixelData mapData)
+		{
+			if (TilemapHasWater(mapData.tilemapSamples, mapData.heightmapSamples))
+				return true;
+
+			return HeightmapHasWater(mapData.heightmapSamples);
+		}
+
+		internal static bool MapDataFullySubmerged(MapPixelData mapData)
+		{
+			float waterThreshold;
+			if (!TryGetWaterThreshold(out waterThreshold))
+				return false;
+
+			return HeightmapFullyBelowThreshold(mapData.heightmapSamples, waterThreshold);
+		}
+
+		internal static bool IsLocalPointWater(MapPixelData mapData, float fracX, float fracZ)
+		{
+			float carveWaterThreshold;
+			if (!TryGetCarveWaterThreshold(out carveWaterThreshold))
+				return false;
+
+			if (TilemapPointHasWater(mapData.tilemapSamples, mapData.heightmapSamples, fracX, fracZ, carveWaterThreshold))
+				return true;
+
+			return HeightmapPointBelowThreshold(mapData.heightmapSamples, fracX, fracZ, carveWaterThreshold);
+		}
+
+		internal static bool CellContainsWaterTile(MapPixelData mapData, int cellX, int cellY, int cellResolution)
+		{
+			byte[,] tilemap = mapData.tilemapSamples;
+			if (tilemap == null || cellResolution <= 0)
+				return false;
+
+			int rows = tilemap.GetLength(0);
+			int cols = tilemap.GetLength(1);
+			if (rows <= 0 || cols <= 0)
+				return false;
+
+			int x0 = Mathf.Clamp(cellX * cols / cellResolution, 0, cols - 1);
+			int x1 = Mathf.Clamp(((cellX + 1) * cols - 1) / cellResolution, 0, cols - 1);
+			int y0 = Mathf.Clamp(cellY * rows / cellResolution, 0, rows - 1);
+			int y1 = Mathf.Clamp(((cellY + 1) * rows - 1) / cellResolution, 0, rows - 1);
+
+			for (int y = y0; y <= y1; y++)
+				for (int x = x0; x <= x1; x++)
+					if (TileValueContainsWater(tilemap[y, x]))
+						return true;
+
+			return false;
+		}
+
+		internal static bool IsLocalPointPureWaterTile(MapPixelData mapData, float fracX, float fracZ)
+		{
+			byte[,] tilemap = mapData.tilemapSamples;
+			if (tilemap == null)
+				return false;
+
+			int rows = tilemap.GetLength(0);
+			int cols = tilemap.GetLength(1);
+			if (rows <= 0 || cols <= 0)
+				return false;
+
+			int x = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracX) * cols), 0, cols - 1);
+			int y = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracZ) * rows), 0, rows - 1);
+			return (tilemap[y, x] & 0x3F) == 0;
+		}
+
+		internal static bool IsCellPartiallySubmerged(MapPixelData mapData, int cellX, int cellY, int cellResolution)
+		{
+			float waterThreshold;
+			if (!TryGetWaterThreshold(out waterThreshold))
+				return false;
+
+			return HeightmapCellBelowThreshold(
+				mapData.heightmapSamples, cellX, cellY, cellResolution, waterThreshold);
+		}
+
+		internal static bool IsCellVisuallyWet(MapPixelData mapData, int cellX, int cellY, int cellResolution)
+		{
+			float waterThreshold;
+			if (!TryGetVisualWaterThreshold(out waterThreshold))
+				return IsCellPartiallySubmerged(mapData, cellX, cellY, cellResolution);
+
+			return HeightmapCellBelowThreshold(
+				mapData.heightmapSamples, cellX, cellY, cellResolution, waterThreshold);
+		}
+
+		private static bool TilemapHasWater(byte[,] tilemap, float[,] heights)
+		{
+			if (tilemap == null)
+				return false;
+
+			int rows = tilemap.GetLength(0);
+			int cols = tilemap.GetLength(1);
+			bool requireLowTerrain = heights != null;
+			float visualWaterThreshold = 0f;
+			if (requireLowTerrain && !TryGetVisualWaterThreshold(out visualWaterThreshold))
+				requireLowTerrain = false;
+
+			for (int y = 0; y < rows; y++)
+			{
+				for (int x = 0; x < cols; x++)
+				{
+					if (!TileValueContainsWater(tilemap[y, x]))
+						continue;
+
+					if (!requireLowTerrain ||
+						HeightmapCellBelowThreshold(heights, x, y, cols, visualWaterThreshold))
+					{
+						return true;
+					}
+				}
+			}
+
+			return false;
+		}
+
+		private static bool TilemapPointHasWater(
+			byte[,] tilemap,
+			float[,] heights,
+			float fracX,
+			float fracZ,
+			float lowTerrainThreshold)
+		{
+			if (tilemap == null)
+				return false;
+
+			int rows = tilemap.GetLength(0);
+			int cols = tilemap.GetLength(1);
+			if (rows <= 0 || cols <= 0)
+				return false;
+
+			int x = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracX) * cols), 0, cols - 1);
+			int y = Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(fracZ) * rows), 0, rows - 1);
+			if (!TileValueContainsWater(tilemap[y, x]))
+				return false;
+
+			return heights == null ||
+				HeightmapPointBelowThreshold(heights, fracX, fracZ, lowTerrainThreshold);
+		}
+
+		private static bool HeightmapHasWater(float[,] heights)
+		{
+			if (heights == null)
+				return false;
+
+			float waterThreshold;
+			if (!TryGetWaterThreshold(out waterThreshold))
+				return false;
+
+			int rows = heights.GetLength(0);
+			int cols = heights.GetLength(1);
+			for (int y = 0; y < rows; y++)
+			{
+				for (int x = 0; x < cols; x++)
+				{
+					if (heights[y, x] <= waterThreshold)
+						return true;
+				}
+			}
+
+			return false;
+		}
+
+		private static bool HeightmapFullyBelowThreshold(float[,] heights, float threshold)
+		{
+			if (heights == null)
+				return false;
+
+			int rows = heights.GetLength(0);
+			int cols = heights.GetLength(1);
+			for (int y = 0; y < rows; y++)
+				for (int x = 0; x < cols; x++)
+					if (heights[y, x] > threshold)
+						return false;
+
+			return rows > 0 && cols > 0;
+		}
+
+		private static bool HeightmapPointBelowThreshold(
+			float[,] heights,
+			float fracX,
+			float fracZ,
+			float threshold)
+		{
+			if (heights == null)
+				return false;
+
+			int rows = heights.GetLength(0);
+			int cols = heights.GetLength(1);
+			if (rows <= 0 || cols <= 0)
+				return false;
+
+			int x = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(fracX) * (cols - 1)), 0, cols - 1);
+			int y = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(fracZ) * (rows - 1)), 0, rows - 1);
+			return heights[y, x] <= threshold;
+		}
+
+		private static bool HeightmapCellBelowThreshold(
+			float[,] heights,
+			int cellX,
+			int cellY,
+			int cellResolution,
+			float threshold)
+		{
+			if (heights == null || cellResolution <= 0)
+				return false;
+
+			int rows = heights.GetLength(0);
+			int cols = heights.GetLength(1);
+			if (rows <= 0 || cols <= 0)
+				return false;
+
+			int x0 = Mathf.Clamp(Mathf.FloorToInt(cellX * (cols - 1) / (float)cellResolution), 0, cols - 1);
+			int x1 = Mathf.Clamp(Mathf.CeilToInt((cellX + 1) * (cols - 1) / (float)cellResolution), 0, cols - 1);
+			int y0 = Mathf.Clamp(Mathf.FloorToInt(cellY * (rows - 1) / (float)cellResolution), 0, rows - 1);
+			int y1 = Mathf.Clamp(Mathf.CeilToInt((cellY + 1) * (rows - 1) / (float)cellResolution), 0, rows - 1);
+
+			for (int y = y0; y <= y1; y++)
+			{
+				for (int x = x0; x <= x1; x++)
+				{
+					if (heights[y, x] <= threshold)
+						return true;
+				}
+			}
+
+			return false;
+		}
+
+		private static bool TryGetWaterThreshold(out float waterThreshold)
+		{
+			waterThreshold = 0f;
+			DaggerfallUnity dfu = DaggerfallUnity.Instance;
+			if (dfu == null || dfu.TerrainSampler == null)
+				return false;
+
+			waterThreshold = dfu.TerrainSampler.OceanElevation /
+				dfu.TerrainSampler.MaxTerrainHeight +
+				WaterThresholdEpsilon;
+			return true;
+		}
+
+		private static bool TryGetCarveWaterThreshold(out float waterThreshold)
+		{
+			waterThreshold = 0f;
+			DaggerfallUnity dfu = DaggerfallUnity.Instance;
+			if (dfu == null || dfu.TerrainSampler == null)
+				return false;
+
+			waterThreshold = (dfu.TerrainSampler.OceanElevation + CarveWaterHeadroomMeters) /
+				dfu.TerrainSampler.MaxTerrainHeight;
+			return true;
+		}
+
+		private static bool TryGetVisualWaterThreshold(out float waterThreshold)
+		{
+			waterThreshold = 0f;
+			DaggerfallUnity dfu = DaggerfallUnity.Instance;
+			if (dfu == null || dfu.TerrainSampler == null)
+				return false;
+
+			waterThreshold = dfu.TerrainSampler.BeachElevation /
+				dfu.TerrainSampler.MaxTerrainHeight;
+			return true;
+		}
+
+		private static bool TileValueContainsWater(byte tile)
+		{
+			int index = tile & 0x3f;
+			return index == 0 ||
+				(index >= 5 && index <= 7) ||
+				index == 48;
+		}
+	}
 
 }

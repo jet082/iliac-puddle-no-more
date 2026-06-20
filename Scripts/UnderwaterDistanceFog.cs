@@ -13,7 +13,7 @@ namespace DeepWaters
     /// only runs while underwater to fog sky/no-depth pixels that DFU's normal
     /// RenderSettings fog cannot see.
     /// </summary>
-    public class UnderwaterDistanceFog : MonoBehaviour
+    internal class UnderwaterDistanceFog : MonoBehaviour
     {
         private static readonly int GlobalUnderwaterProperty = Shader.PropertyToID("_DeepWatersUnderwater");
         private static readonly int GlobalWaterSurfaceYProperty = Shader.PropertyToID("_DeepWatersWaterSurfaceY");
@@ -21,9 +21,6 @@ namespace DeepWaters
         private Camera hookedCamera;
         private UnderwaterDistanceFogEffect hookedEffect;
         private WaterSurfaceDepthTextureEnabler hookedDepthEnabler;
-        private bool diagnosticInitialized;
-        private bool lastDiagnosticUnderwater;
-        private float nextDiagnosticTime;
 
         void LateUpdate()
         {
@@ -56,8 +53,6 @@ namespace DeepWaters
             if (underwaterPresentation)
                 WaterSurfaceResources.SetHorizonColor(
                     UnderwaterDistanceFogEffect.ComputeHorizonAmbientColor(oceanSurfaceY));
-
-            LogVisibilityState(gameManager, gameManager.MainCamera, underwaterPresentation, oceanSurfaceY);
         }
 
         private void EnsureCameraHooks(Camera camera)
@@ -257,53 +252,10 @@ namespace DeepWaters
             return DeepWaterWorld.HasNearbyWaterColumn(worldPosition, 4f, 36f, 8, 0.25f, out nearbyDepth);
         }
 
-        private void LogVisibilityState(GameManager gameManager, Camera camera, bool underwaterPresentation, float oceanSurfaceY)
-        {
-            if (gameManager == null)
-                return;
-
-            bool waterContext = underwaterPresentation || IsExteriorSwimming(gameManager);
-            bool stateChanged = !diagnosticInitialized || underwaterPresentation != lastDiagnosticUnderwater;
-            if (!stateChanged && (!waterContext || Time.unscaledTime < nextDiagnosticTime))
-                return;
-
-            diagnosticInitialized = true;
-            lastDiagnosticUnderwater = underwaterPresentation;
-            nextDiagnosticTime = Time.unscaledTime + 5f;
-
-            Vector3 cameraPosition = camera != null ? camera.transform.position : Vector3.zero;
-            Vector3 headPosition;
-            bool hasHead = TryGetPlayerHeadPosition(gameManager, out headPosition);
-
-            DeepWaterColumn cameraColumn;
-            bool hasCameraColumn = camera != null &&
-                                   DeepWaterWorld.TryGetWaterColumn(cameraPosition.x, cameraPosition.z, out cameraColumn);
-
-            PlayerMotor playerMotor = gameManager.PlayerMotor;
-            string exteriorWater = playerMotor != null ? playerMotor.OnExteriorWater.ToString() : "none";
-            bool playerSwimming = gameManager.PlayerEnterExit != null && gameManager.PlayerEnterExit.IsPlayerSwimming;
-            bool motorSwimming = playerMotor != null && playerMotor.IsSwimming;
-
-            Debug.Log(
-                "[DeepWaters.Visibility] underwater=" + underwaterPresentation +
-                " effect=" + (hookedEffect != null && hookedEffect.enabled) +
-                " playerSwimming=" + playerSwimming +
-                " motorSwimming=" + motorSwimming +
-                " exteriorWater=" + exteriorWater +
-                " cameraY=" + cameraPosition.y.ToString("F2") +
-                " headY=" + (hasHead ? headPosition.y.ToString("F2") : "none") +
-                " oceanY=" + oceanSurfaceY.ToString("F2") +
-                " cameraColumn=" + hasCameraColumn +
-                " depthMode=" + (camera != null ? camera.depthTextureMode.ToString() : "none") +
-                " renderFog=" + RenderSettings.fog +
-                " fogMode=" + RenderSettings.fogMode +
-                " fogDensity=" + RenderSettings.fogDensity.ToString("F5") +
-                " fogColor=#" + ColorUtility.ToHtmlStringRGB(RenderSettings.fogColor));
-        }
     }
 
     [RequireComponent(typeof(Camera))]
-    public class UnderwaterDistanceFogEffect : MonoBehaviour
+    internal class UnderwaterDistanceFogEffect : MonoBehaviour
     {
         private static readonly int FogColorProperty = Shader.PropertyToID("_UnderwaterFogColor");
         private static readonly int FogDensityProperty = Shader.PropertyToID("_FogDensity");
@@ -477,7 +429,6 @@ namespace DeepWaters
 
             material = new Material(shader) { name = "DeepWaters.UnderwaterDistanceFog" };
             material.hideFlags = HideFlags.HideAndDontSave;
-            Debug.Log("[DeepWaters.Visibility] imageEffectShader=" + shader.name + " supported=" + shader.isSupported);
             return material;
         }
 
@@ -573,7 +524,7 @@ namespace DeepWaters
     }
 
     [RequireComponent(typeof(Camera))]
-    public class WaterSurfaceDepthTextureEnabler : MonoBehaviour
+    internal class WaterSurfaceDepthTextureEnabler : MonoBehaviour
     {
         private Camera targetCamera;
 

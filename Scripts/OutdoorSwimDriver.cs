@@ -2,6 +2,8 @@
 // License:         MIT
 
 using System.Collections.Generic;
+using System.Reflection;
+using DaggerfallConnect.Utility;
 using DaggerfallWorkshop;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Game.MagicAndEffects;
@@ -33,7 +35,7 @@ namespace DeepWaters
     ///    and the swim extras in OutdoorSwimMovementController.
     /// </summary>
     [DefaultExecutionOrder(-32000)]
-    public class OutdoorSwimDriver : MonoBehaviour
+    internal class OutdoorSwimDriver : MonoBehaviour
     {
         private const short NoWaterSentinel = 10000;
 
@@ -115,7 +117,7 @@ namespace DeepWaters
         internal static int DiagnosticDisabledWaterColliderCount { get; private set; }
         internal static int DiagnosticDesiredWaterColliderCount { get; private set; }
 
-        public static OutdoorSwimDriver Install(GameObject host)
+        internal static OutdoorSwimDriver Install(GameObject host)
         {
             var driver = host.GetComponent<OutdoorSwimDriver>() ?? host.AddComponent<OutdoorSwimDriver>();
             var after = host.GetComponent<OutdoorSwimDriverAfter>() ?? host.AddComponent<OutdoorSwimDriverAfter>();
@@ -620,7 +622,7 @@ namespace DeepWaters
             return headY > oceanSurfaceY;
         }
 
-        public static bool IsPresentationUnderwater(float oceanSurfaceY)
+        internal static bool IsPresentationUnderwater(float oceanSurfaceY)
         {
             float cameraY = GetCameraY();
             bool shouldBeUnderwater = cameraY < oceanSurfaceY + CameraEnterUnderwaterClearance ||
@@ -667,7 +669,7 @@ namespace DeepWaters
             headWaterStateInitialized = false;
         }
 
-        public static float ComputeOceanSurfaceY()
+        internal static float ComputeOceanSurfaceY()
         {
             float oceanSurfaceY;
             return DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) ? oceanSurfaceY : 0f;
@@ -1026,7 +1028,7 @@ namespace DeepWaters
                     continue;
 
                 TerrainCollider collider = terrain.GetComponent<TerrainCollider>();
-                if (collider != null && !ContainsCollider(desiredWaterTerrainColliders, collider))
+                if (collider != null && !desiredWaterTerrainColliders.Contains(collider))
                     desiredWaterTerrainColliders.Add(collider);
             }
 
@@ -1229,7 +1231,7 @@ namespace DeepWaters
             if (collider == null)
                 return;
 
-            if (!ContainsCollider(disabledWaterTerrainColliders, collider))
+            if (!disabledWaterTerrainColliders.Contains(collider))
                 disabledWaterTerrainColliders.Add(collider);
 
             if (collider.enabled)
@@ -1247,7 +1249,7 @@ namespace DeepWaters
                     continue;
                 }
 
-                if (ContainsCollider(keepDisabled, collider))
+                if (keepDisabled.Contains(collider))
                     continue;
 
                 if (WouldEjectSubmergedPlayer(collider))
@@ -1338,17 +1340,6 @@ namespace DeepWaters
             DiagnosticDesiredWaterColliderCount = desiredWaterTerrainColliders.Count;
         }
 
-        private static bool ContainsCollider(List<TerrainCollider> colliders, TerrainCollider collider)
-        {
-            for (int i = 0; i < colliders.Count; i++)
-            {
-                if (colliders[i] == collider)
-                    return true;
-            }
-
-            return false;
-        }
-
         #endregion
     }
 
@@ -1356,7 +1347,7 @@ namespace DeepWaters
     /// Companion that runs after PlayerEnterExit.Update to restore state.
     /// </summary>
     [DefaultExecutionOrder(32000)]
-    public class OutdoorSwimDriverAfter : MonoBehaviour
+    internal class OutdoorSwimDriverAfter : MonoBehaviour
     {
         internal OutdoorSwimDriver owner;
         void Update() { owner?.PostPhaseRestore(); }
@@ -1372,7 +1363,7 @@ namespace DeepWaters
     ///  - safety clamps so the collider gate can't let the player tunnel through
     ///    the seafloor or shore terrain that has no collider right now.
     /// </summary>
-    public class OutdoorSwimMovementController : MonoBehaviour
+    internal class OutdoorSwimMovementController : MonoBehaviour
     {
         private const float MultiplierEpsilon = 0.001f;
         private const float StrokeDuration = 0.48f;
@@ -1717,4 +1708,379 @@ namespace DeepWaters
             return OutdoorSwimDriver.IsPresentationUnderwater(oceanSurfaceY);
         }
     }
+
+	internal sealed class DeepWaterSwimWorldTracker : MonoBehaviour
+	{
+		private const float SurfaceActivationMargin = 2f;
+		private const float RecenterJumpThreshold = 300f;
+		private const float RecenterJumpThresholdSq = RecenterJumpThreshold * RecenterJumpThreshold;
+
+		private Vector3 lastTrackPos;
+		private int lastWorldX;
+		private int lastWorldZ;
+		private double pendingWorldX;
+		private double pendingWorldZ;
+		private bool tracking;
+
+		private void OnEnable()
+		{
+			SaveLoadManager.OnStartLoad += OnStartLoad;
+			StreamingWorld.OnTeleportToCoordinates += OnTeleportToCoordinates;
+		}
+
+		private void OnDisable()
+		{
+			SaveLoadManager.OnStartLoad -= OnStartLoad;
+			StreamingWorld.OnTeleportToCoordinates -= OnTeleportToCoordinates;
+			ResetTracking();
+		}
+
+		private void LateUpdate()
+		{
+			GameManager gameManager = GameManager.Instance;
+			if (gameManager == null || !gameManager.IsPlayingGame() ||
+				gameManager.PlayerGPS == null || gameManager.PlayerObject == null)
+			{
+				ResetTracking();
+				return;
+			}
+
+			if (!ShouldTrack(gameManager))
+			{
+				ResetTracking();
+				return;
+			}
+
+			Vector3 position = gameManager.PlayerGPS.transform.position;
+			if (!tracking)
+			{
+				BeginTracking(gameManager, position);
+				return;
+			}
+
+			Vector3 delta = position - lastTrackPos;
+			if (delta.sqrMagnitude > RecenterJumpThresholdSq)
+			{
+				BeginTracking(gameManager, position);
+				return;
+			}
+
+			float ratio = StreamingWorld.SceneMapRatio;
+			pendingWorldX += delta.x * ratio - (gameManager.PlayerGPS.WorldX - lastWorldX);
+			pendingWorldZ += delta.z * ratio - (gameManager.PlayerGPS.WorldZ - lastWorldZ);
+
+			int nudgeX = (int)pendingWorldX;
+			int nudgeZ = (int)pendingWorldZ;
+			if (nudgeX != 0)
+			{
+				gameManager.PlayerGPS.WorldX += nudgeX;
+				pendingWorldX -= nudgeX;
+			}
+
+			if (nudgeZ != 0)
+			{
+				gameManager.PlayerGPS.WorldZ += nudgeZ;
+				pendingWorldZ -= nudgeZ;
+			}
+
+			lastTrackPos = position;
+			lastWorldX = gameManager.PlayerGPS.WorldX;
+			lastWorldZ = gameManager.PlayerGPS.WorldZ;
+		}
+
+		private static bool ShouldTrack(GameManager gameManager)
+		{
+			if (gameManager.PlayerEnterExit != null && gameManager.PlayerEnterExit.IsPlayerInside)
+				return false;
+
+			if (!DeepWaterWorld.IsPlayerInExteriorWaterContext())
+				return false;
+
+			float oceanSurfaceY;
+			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY))
+				return false;
+
+			return gameManager.PlayerObject.transform.position.y <= oceanSurfaceY + SurfaceActivationMargin;
+		}
+
+		private void BeginTracking(GameManager gameManager, Vector3 position)
+		{
+			lastTrackPos = position;
+			lastWorldX = gameManager.PlayerGPS.WorldX;
+			lastWorldZ = gameManager.PlayerGPS.WorldZ;
+			pendingWorldX = 0d;
+			pendingWorldZ = 0d;
+			tracking = true;
+		}
+
+		private void ResetTracking()
+		{
+			tracking = false;
+			pendingWorldX = 0d;
+			pendingWorldZ = 0d;
+		}
+
+		private void OnStartLoad(SaveData_v1 saveData)
+		{
+			ResetTracking();
+		}
+
+		private void OnTeleportToCoordinates(DFPosition worldPos)
+		{
+			ResetTracking();
+		}
+	}
+
+	internal sealed class OutdoorSwimDfuBridge
+	{
+		private FieldInfo isPlayerInsideDungeonField;
+		private FieldInfo isPlayerSubmergedField;
+		private FieldInfo onExteriorWaterMethodField;
+		private FieldInfo dungeonField;
+		private FieldInfo lastPlayerDungeonBlockIndexField;
+
+		private bool outdoorDungeonParentAssigned;
+		private DaggerfallDungeon outdoorDungeonParent;
+
+		internal bool Initialize()
+		{
+			const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+			isPlayerInsideDungeonField = typeof(PlayerEnterExit).GetField("isPlayerInsideDungeon", flags);
+			isPlayerSubmergedField = typeof(PlayerEnterExit).GetField("isPlayerSubmerged", flags);
+			onExteriorWaterMethodField = typeof(PlayerMotor).GetField("onExteriorWaterMethod", flags);
+			dungeonField = typeof(PlayerEnterExit).GetField("dungeon", flags);
+			lastPlayerDungeonBlockIndexField = typeof(PlayerEnterExit).GetField("lastPlayerDungeonBlockIndex", flags);
+
+			return isPlayerInsideDungeonField != null &&
+				   isPlayerSubmergedField != null &&
+				   onExteriorWaterMethodField != null &&
+				   dungeonField != null &&
+				   lastPlayerDungeonBlockIndexField != null;
+		}
+
+		internal void ForgeDungeonState(PlayerEnterExit pex)
+		{
+			AssignOutdoorDungeonParent(pex);
+			isPlayerInsideDungeonField.SetValue(pex, true);
+		}
+
+		internal void RestoreDungeonState(PlayerEnterExit pex)
+		{
+			isPlayerInsideDungeonField.SetValue(pex, false);
+			ClearOutdoorDungeonParent(pex);
+		}
+
+		internal void ApplyWaterAudioState(
+			PlayerEnterExit pex,
+			short blockWaterLevel,
+			PlayerMotor.OnExteriorWaterMethod exteriorWaterMethod,
+			bool playerSubmerged)
+		{
+			pex.blockWaterLevel = blockWaterLevel;
+
+			GameManager gameManager = GameManager.Instance;
+			if (gameManager != null && gameManager.PlayerMotor != null)
+				onExteriorWaterMethodField.SetValue(gameManager.PlayerMotor, exteriorWaterMethod);
+
+			isPlayerSubmergedField.SetValue(pex, playerSubmerged);
+		}
+
+		private void AssignOutdoorDungeonParent(PlayerEnterExit pex)
+		{
+			DaggerfallDungeon currentDungeon = dungeonField.GetValue(pex) as DaggerfallDungeon;
+			if (currentDungeon != null && currentDungeon != outdoorDungeonParent)
+				return;
+
+			DaggerfallDungeon parent = GetOutdoorDungeonParent();
+			if (parent == null)
+				return;
+
+			dungeonField.SetValue(pex, parent);
+			lastPlayerDungeonBlockIndexField.SetValue(pex, -1);
+			outdoorDungeonParentAssigned = true;
+		}
+
+		private void ClearOutdoorDungeonParent(PlayerEnterExit pex)
+		{
+			if (!outdoorDungeonParentAssigned)
+				return;
+
+			DaggerfallDungeon currentDungeon = dungeonField.GetValue(pex) as DaggerfallDungeon;
+			if (currentDungeon == outdoorDungeonParent)
+				dungeonField.SetValue(pex, null);
+
+			lastPlayerDungeonBlockIndexField.SetValue(pex, -1);
+			outdoorDungeonParentAssigned = false;
+		}
+
+		private DaggerfallDungeon GetOutdoorDungeonParent()
+		{
+			Transform exteriorParent = GetExteriorParent();
+			if (outdoorDungeonParent != null)
+			{
+				if (exteriorParent != null && outdoorDungeonParent.transform.parent != exteriorParent)
+					outdoorDungeonParent.transform.SetParent(exteriorParent, false);
+
+				return outdoorDungeonParent;
+			}
+
+			GameObject go = new GameObject("DeepWaters Outdoor Spell Parent");
+			if (exteriorParent != null)
+				go.transform.SetParent(exteriorParent, false);
+
+			outdoorDungeonParent = go.AddComponent<DaggerfallDungeon>();
+			return outdoorDungeonParent;
+		}
+
+		private static Transform GetExteriorParent()
+		{
+			GameManager gameManager = GameManager.Instance;
+			if (gameManager == null)
+				return null;
+
+			if (gameManager.PlayerGPS != null &&
+				gameManager.PlayerGPS.IsPlayerInLocationRect &&
+				gameManager.StreamingWorld != null &&
+				gameManager.StreamingWorld.CurrentPlayerLocationObject != null)
+			{
+				return gameManager.StreamingWorld.CurrentPlayerLocationObject.transform;
+			}
+
+			return gameManager.StreamingTarget != null ? gameManager.StreamingTarget.transform : null;
+		}
+	}
+
+	internal static class OutdoorShoreExitAssist
+	{
+		private const float ProbeHeightAboveOcean = 13f;
+		private const float ProbeDistance = 18f;
+		private const float MinimumForwardInput = 0.02f;
+		private const float MinimumLandingNormalY = 0.45f;
+		private const float ShoreLandingWaterMargin = 0.25f;
+		private const float MaximumLandingAboveOcean = 8f;
+		private const float MinimumOpenWaterColumnDepth = 2f;
+
+		internal static bool TryMoveToShore(
+			PlayerEnterExit pex,
+			float oceanY,
+			bool requireSwimming = true,
+			bool requireForwardInput = true)
+		{
+			if (pex == null)
+				return false;
+
+			if (requireSwimming && !pex.IsPlayerSwimming)
+				return false;
+
+			if (requireForwardInput && InputManager.Instance.Vertical <= MinimumForwardInput)
+				return false;
+
+			var controller = GameManager.Instance.PlayerController;
+			var camera = GameManager.Instance.MainCamera;
+			if (controller == null || camera == null)
+				return false;
+
+			Vector3 forward = camera.transform.forward;
+			forward.y = 0f;
+			if (forward.sqrMagnitude < 0.01f)
+				return false;
+
+			forward.Normalize();
+
+			if (TryMoveToLanding(controller, forward, forward * 0.5f, oceanY))
+				return true;
+
+			return TryMoveToLanding(controller, Vector3.zero, Vector3.zero, oceanY);
+		}
+
+		private static bool TryMoveToLanding(
+			CharacterController controller,
+			Vector3 probeOffset,
+			Vector3 landingOffset,
+			float oceanY)
+		{
+			Vector3 probe = controller.transform.position + probeOffset;
+			probe.y = oceanY + ProbeHeightAboveOcean;
+
+			RaycastHit hit;
+			if (!Physics.Raycast(probe, Vector3.down, out hit, ProbeDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+				return false;
+
+			if (!IsValidLandingHit(hit, oceanY))
+				return false;
+
+			float landingY = hit.point.y;
+			if (landingY >= oceanY - 1f &&
+				landingY <= oceanY + MaximumLandingAboveOcean &&
+				landingY > controller.transform.position.y - 0.1f)
+			{
+				controller.Move(hit.point + Vector3.up * 1.5f + landingOffset - controller.transform.position);
+				return true;
+			}
+
+			return false;
+		}
+
+		internal static bool IsValidShoreStandingHit(RaycastHit hit, float oceanY)
+		{
+			return IsValidLandingHit(hit, oceanY);
+		}
+
+		private static bool IsValidLandingHit(RaycastHit hit, float oceanY)
+		{
+			if (!IsShoreGround(hit.collider))
+				return false;
+
+			if (hit.normal.y < MinimumLandingNormalY)
+				return false;
+
+			DeepWaterColumn column;
+			if (DeepWaterWorld.TryGetWaterColumn(hit.point.x, hit.point.z, out column))
+			{
+				if (column.Depth >= MinimumOpenWaterColumnDepth)
+					return false;
+
+				if (hit.point.y <= column.OceanWorldY + ShoreLandingWaterMargin)
+					return false;
+			}
+
+			return hit.point.y >= oceanY - 1f;
+		}
+
+		internal static bool IsShoreGround(Collider collider)
+		{
+			if (collider == null)
+				return false;
+
+			if (collider.isTrigger)
+				return false;
+
+			var player = GameManager.Instance != null ? GameManager.Instance.PlayerObject : null;
+			if (player != null && collider.transform.IsChildOf(player.transform))
+				return false;
+
+			if (collider.GetComponent<PassiveFishBehaviour>() != null)
+				return false;
+
+			if (collider.GetComponentInParent<DeepWaterFloorMesh>() != null ||
+				collider.GetComponentInParent<DeepWatersWaterSurface>() != null)
+			{
+				return false;
+			}
+
+			if (collider.GetComponentInParent<DaggerfallEnemy>() != null)
+				return false;
+
+			if (collider.GetComponentInParent<DaggerfallLoot>() != null ||
+				collider.GetComponentInParent<DaggerfallBillboard>() != null)
+			{
+				return false;
+			}
+
+			// DFU shoreline/location colliders are not consistently tagged.
+			// After excluding water, actors, loot, and billboards, an upward
+			// solid hit above the waterline is shore enough for this handoff.
+			return true;
+		}
+	}
 }
