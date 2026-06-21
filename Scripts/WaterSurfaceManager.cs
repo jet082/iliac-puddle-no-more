@@ -39,6 +39,7 @@ namespace DeepWaters
 		private static Material sharedUndersideMaterial;
 		private static Texture sharedSurfaceTexture;
 		private static readonly Color SurfaceTint = new Color(0.519f, 0.527f, 0.467f, 1f);
+		private static readonly Color NightSurfaceTint = new Color(0.055f, 0.105f, 0.12f, 1f);
 		private static readonly Color FallbackSurfaceColor = new Color(0.075f, 0.24f, 0.38f, 1f);
 		private const float TopSurfaceVisionMultiplier = 1.0f;
 		private const float TopSurfaceFogStrengthMultiplier = 1.0f;
@@ -108,6 +109,7 @@ namespace DeepWaters
 
 		internal static void RefreshDynamicMaterialSettings()
 		{
+			ApplyDynamicTopSettings(sharedTopMaterial);
 			ApplyDynamicUndersideSettings(sharedUndersideMaterial);
 		}
 
@@ -148,7 +150,7 @@ namespace DeepWaters
 
 			if (material.HasProperty(ColorProperty))
 			{
-				Color color = SurfaceTint;
+				Color color = GetTimeAdjustedSurfaceTint();
 				color.a = DeepWaters.Instance.WaterSurfaceTopAlpha;
 				material.SetColor(ColorProperty, color);
 			}
@@ -171,16 +173,32 @@ namespace DeepWaters
 			ConfigureTransparentMaterial(material);
 
 			if (material.HasProperty(ColorProperty))
-				material.SetColor(ColorProperty, SurfaceTint);
+				material.SetColor(ColorProperty, GetTimeAdjustedSurfaceTint());
 
 			ApplySharedWaterProperties(material);
 			ApplyDynamicUndersideSettings(material);
+		}
+
+		private static void ApplyDynamicTopSettings(Material material)
+		{
+			if (material == null || DeepWaters.Instance == null)
+				return;
+
+			if (material.HasProperty(ColorProperty))
+			{
+				Color color = GetTimeAdjustedSurfaceTint();
+				color.a = DeepWaters.Instance.WaterSurfaceTopAlpha;
+				material.SetColor(ColorProperty, color);
+			}
 		}
 
 		private static void ApplyDynamicUndersideSettings(Material material)
 		{
 			if (material == null || DeepWaters.Instance == null)
 				return;
+
+			if (material.HasProperty(ColorProperty))
+				material.SetColor(ColorProperty, GetTimeAdjustedSurfaceTint());
 
 			float shallow = GetPlayerShallowWaterFactor();
 			float bottomAlpha = DeepWaters.Instance.WaterSurfaceBottomAlpha;
@@ -208,6 +226,22 @@ namespace DeepWaters
 			}
 
 			return 1f - Mathf.InverseLerp(3f, 12f, column.Depth);
+		}
+
+		private static Color GetTimeAdjustedSurfaceTint()
+		{
+			return Color.Lerp(NightSurfaceTint, SurfaceTint, GetDaylightFactor());
+		}
+
+		private static float GetDaylightFactor()
+		{
+			DaggerfallUnity dfUnity = DaggerfallUnity.Instance;
+			if (dfUnity != null && dfUnity.WorldTime != null && dfUnity.WorldTime.Now.IsNight)
+				return 0f;
+
+			GameManager gameManager = GameManager.Instance;
+			SunlightManager sunlightManager = gameManager != null ? gameManager.SunlightManager : null;
+			return sunlightManager != null ? Mathf.Clamp01(sunlightManager.DaylightScale) : 1f;
 		}
 
 		private static void ApplySharedWaterProperties(Material material)

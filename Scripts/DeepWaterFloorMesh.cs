@@ -39,8 +39,8 @@ namespace DeepWaters
         private const float BoundarySkirtMaxWidthMeters = 8.0f;
         private const float BoundaryMixedShoreWallMaxDistanceMeters = 48f;
         private const float ShoreTerrainFitMeters = 180f;
-        private const float ShoreTerrainFitClearance = 0.15f;
-        private const float FloorSurfaceClearanceMeters = 1.0f; // keep near-shore floor under the surface so water tints it
+        private const float ShoreTerrainFitClearance = 0.05f;
+        private const float FloorSurfaceClearanceMeters = 0.05f; // keep near-shore floor barely under the water surface
 
         private Mesh mesh;
         private MeshCollider meshCollider;
@@ -307,11 +307,25 @@ namespace DeepWaters
             if (rows <= 0 || cols <= 0)
                 return false;
 
-            float fracX = (quadX + 0.5f) / quadResolution;
-            float fracZ = (quadZ + 0.5f) / quadResolution;
-            int hx = Mathf.Clamp(Mathf.FloorToInt(fracX * cols), 0, cols - 1);
-            int hz = Mathf.Clamp(Mathf.FloorToInt(fracZ * rows), 0, rows - 1);
-            return !holes[hz, hx];
+			float minFracX = quadX / (float)quadResolution;
+			float maxFracX = (quadX + 1) / (float)quadResolution;
+			float minFracZ = quadZ / (float)quadResolution;
+			float maxFracZ = (quadZ + 1) / (float)quadResolution;
+			int minHx = Mathf.Clamp(Mathf.FloorToInt(minFracX * cols), 0, cols - 1);
+			int maxHx = Mathf.Clamp(Mathf.CeilToInt(maxFracX * cols) - 1, 0, cols - 1);
+			int minHz = Mathf.Clamp(Mathf.FloorToInt(minFracZ * rows), 0, rows - 1);
+			int maxHz = Mathf.Clamp(Mathf.CeilToInt(maxFracZ * rows) - 1, 0, rows - 1);
+
+			for (int hz = minHz; hz <= maxHz; hz++)
+			{
+				for (int hx = minHx; hx <= maxHx; hx++)
+				{
+					if (!holes[hz, hx])
+						return true;
+				}
+			}
+
+			return false;
         }
 
         private void AppendHoleEdgeWalls(
@@ -655,14 +669,11 @@ namespace DeepWaters
             float localX = (vx / (float)cols) * tileWorldSize;
             float localZ = (vz / (float)rows) * tileWorldSize;
 
-            // Pin the skirt top to the ACTUAL vanilla terrain height here (which
-            // Interesting Terrains often carves well below sea level), not the
-            // water surface — otherwise the skirt floats above the uncarved
-            // terrain edge and you see a gap straight along the shoreline. The
-            // min() keeps it from poking above the just-under-surface cap.
+            // Boundary skirts stay pinned to vanilla terrain so map-pixel edges
+            // do not become ledges; internal shore skirts can close the waterline.
             float vanillaTopY = SampleVanillaLocalY(vx / (float)cols, vz / (float)rows, oceanLocalY, oceanThreshold);
             vanillaTopY = Mathf.Max(vanillaTopY, SampleNearbyVanillaLocalY(localX, localZ, vanillaTopY, terrainOrigin));
-            float topY = Mathf.Min(skirtTopY, vanillaTopY);
+            float topY = boundaryEdge ? Mathf.Min(skirtTopY, vanillaTopY) : skirtTopY;
 
             Vector2 inward;
             inwardNormals.TryGetValue(key, out inward);

@@ -36,12 +36,12 @@ namespace DeepWaters
         // original 8x8 resolution.
         private const uint MagicBytes = 0x44574442;   // 'DWDB'
         private const ushort MinimumSupportedVersion = 1;
-        // v5 appends a coarse distance-to-carved-EDGE field after the fine mask
-        // (same resolution/scale as the distance-to-coast field). It drives the
-        // seabed shelf so the floor descends gradually from every shore edge
-        // (coast AND islands), instead of distance-to-coast which misses the
-        // fine carve edge and walls/voids it.
-        private const ushort CurrentVersion = 5;
+		// v5 appends a coarse distance-to-carved-EDGE field after the fine mask.
+		// Runtime shelf depth still uses this field for bda0e6e-style shoreline
+		// behavior; raw coast distance makes broad bays grow false ledges.
+		// v6 appends the same edge-distance field built from the unpruned local
+		// water mask, so inland lakes can use baked bathymetry without runtime probes.
+		private const ushort CurrentVersion = 6;
 
         // Asset names (without extension) inside the mod's Resources folder.
         // The primary bake is built against the terrain-overhaul heightmap
@@ -54,7 +54,8 @@ namespace DeepWaters
         private static byte[] data;
         private static byte[] waterMaskBits;        // coarse mask, 8x8 per pixel
         private static byte[] fineWaterMaskBits;    // fine mask, 64x64 per pixel by default (v4+)
-        private static byte[] edgeData;             // distance-to-carved-edge, coarse (v5+)
+		private static byte[] edgeData;             // distance-to-carved-edge, coarse (v5+)
+		private static byte[] localEdgeData;        // distance-to-local-water-edge, coarse (v6+)
         private static int widthCells;
         private static int heightCells;
         private static int widthCellsFine;
@@ -65,7 +66,8 @@ namespace DeepWaters
         private static float distanceScaleMeters;
         private static bool hasWaterMask;
         private static bool hasFineWaterMask;
-        private static bool hasEdgeField;
+		private static bool hasEdgeField;
+		private static bool hasLocalEdgeField;
         private static ushort loadedVersion;
         private const int FineEdgeSearchRadiusCells = 8;
 
@@ -202,6 +204,25 @@ namespace DeepWaters
                     loadedEdge = true;
                 }
 
+				// v6: coarse distance-to-local-water-edge field, appended after
+				// the ocean-connected edge field. Used only by local fallback water.
+				byte[] localEdgeCells = null;
+				bool loadedLocalEdge = false;
+				if (version >= 6)
+				{
+					long fineMaskBytes = loadedFineMask ? ((long)wCellsFine * hCellsFine + 7) / 8 : 0;
+					long remainingLocalEdge = fileBytes.Length - HeaderByteSize - expectedDataBytes - expectedMaskBytes - fineMaskBytes - expectedDataBytes;
+					if (remainingLocalEdge < expectedDataBytes)
+					{
+						Debug.LogError("[DeepWaters.Bake] Local edge-distance field truncated. Header implies " +
+							expectedDataBytes + " local-edge bytes but only " + remainingLocalEdge + " remain.");
+						return false;
+					}
+					localEdgeCells = new byte[expectedDataBytes];
+					br.Read(localEdgeCells, 0, localEdgeCells.Length);
+					loadedLocalEdge = true;
+				}
+
                 widthCells = wCells;
                 heightCells = hCells;
                 widthCellsFine = wCellsFine;
@@ -214,9 +235,11 @@ namespace DeepWaters
                 waterMaskBits = mask;
                 fineWaterMaskBits = fineMask;
                 edgeData = edgeCells;
+				localEdgeData = localEdgeCells;
                 hasWaterMask = loadedWaterMask;
                 hasFineWaterMask = loadedFineMask;
                 hasEdgeField = loadedEdge;
+				hasLocalEdgeField = loadedLocalEdge;
                 loadedVersion = version;
                 loaded = true;
             }
@@ -263,21 +286,27 @@ namespace DeepWaters
             return BilinearSampleMeters(data, mapPixelX, mapPixelY, fracX, fracZ);
         }
 
-        /// <summary>
-        /// Sample the baked distance (meters) to the nearest CARVED SHORE EDGE
-        /// (carved-water boundary) — the field that resolves small islands the
-        /// distance-to-coast grid misses. Same coarse grid + bilinear scheme as
-        /// SampleDistanceMeters. Falls back to distance-to-coast on pre-v5 bakes.
-        /// </summary>
-        public static float SampleEdgeDistanceMeters(int mapPixelX, int mapPixelY, float fracX, float fracZ)
-        {
-            if (!loaded || !hasEdgeField || edgeData == null)
-                return SampleDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
+		/// <summary>
+		/// Sample the baked distance (meters) to the nearest CARVED SHORE EDGE
+		/// (carved-water boundary). Falls back to distance-to-coast on pre-v5 bakes.
+		/// </summary>
+		public static float SampleEdgeDistanceMeters(int mapPixelX, int mapPixelY, float fracX, float fracZ)
+		{
+			if (!loaded || !hasEdgeField || edgeData == null)
+				return SampleDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
 
-            float coarseDistance = BilinearSampleMeters(edgeData, mapPixelX, mapPixelY, fracX, fracZ);
-            float fineDistance = SampleNearbyFineEdgeDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
-            return Mathf.Min(coarseDistance, fineDistance);
-        }
+			float coarseDistance = BilinearSampleMeters(edgeData, mapPixelX, mapPixelY, fracX, fracZ);
+			float fineDistance = SampleNearbyFineEdgeDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
+			return Mathf.Min(coarseDistance, fineDistance);
+		}
+
+		public static float SampleLocalEdgeDistanceMeters(int mapPixelX, int mapPixelY, float fracX, float fracZ)
+		{
+			if (!loaded || !hasLocalEdgeField || localEdgeData == null)
+				return float.MaxValue;
+
+			return BilinearSampleMeters(localEdgeData, mapPixelX, mapPixelY, fracX, fracZ);
+		}
 
         private static float SampleNearbyFineEdgeDistanceMeters(int mapPixelX, int mapPixelY, float fracX, float fracZ)
         {

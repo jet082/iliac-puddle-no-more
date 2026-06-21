@@ -75,12 +75,14 @@ namespace DeepWaters
 		private static readonly HashSet<string> TargetedScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
-			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test"
+			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test",
+			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
-			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt", "distance fog test"
+			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt", "distance fog test",
+			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night"
 		};
 
 		private static readonly HashSet<string> BiomeVisualProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -90,7 +92,7 @@ namespace DeepWaters
 
 		private static readonly HashSet<string> MovementProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
-			"iii", "kkkk", "lll", "mmm", "qqq"
+			"iii", "kkkk", "lll", "mmm", "qqq", "desert"
 		};
 
 		private static readonly Dictionary<string, string> ForwardScenarioPhases =
@@ -102,7 +104,8 @@ namespace DeepWaters
 				{ "lll", "lll_straight_shore_probe" },
 				{ "mmm", "mmm_straight_water_entry" },
 				{ "qqq", "qqq_straight_boat_probe" },
-				{ "mystery", "mystery_straight_lake_probe" }
+				{ "mystery", "mystery_straight_lake_probe" },
+				{ "desert", "desert_straight_lake_probe" }
 			};
 
         private readonly List<MetricWindow> windows = new List<MetricWindow>();
@@ -426,6 +429,9 @@ namespace DeepWaters
 				{
 					yield return CaptureOffsetYawScreenshot(saveName, "left-look", -90f);
 					yield return CaptureOffsetYawScreenshot(saveName, "right-look", 90f);
+					float desertSeconds = Mathf.Min(TargetedScenarioSeconds, Mathf.Max(10f, durationSeconds));
+					yield return RunNaturalForwardPhase(saveName, "desert_straight_lake_probe", desertSeconds);
+					yield return CaptureDiagnosticScreenshot(saveName, "desert_straight_lake_probe-end");
 				}
 				if (string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase))
 					yield return CaptureOffsetYawScreenshot(saveName, "right-look", 90f);

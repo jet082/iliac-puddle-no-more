@@ -1283,3 +1283,90 @@ Correction:
 - Ocean now uses that exact latest-GitHub path at texture strength `0.25`.
 - Swamp now uses the same DFU archive/record path, with stronger texture influence and the swamp palette so shallow shelf color does not wash the texture back to beige.
 - Visual contact sheet: `DeepWatersDiagnostics\open-ocean-swamp-dfu-ground-swamp-strong-check.png`.
+
+## Shoreline Wall / Local Lake Connector Split
+
+Prompt:
+
+- `ledge` and `ledge2` still showed artificial geometry jutting out of the seabed.
+- `desert` still needed a sane shore transition and should not let the player swim through vertical lake walls.
+
+Finding:
+
+- The generated shore skirt was written for the old real-terrain-hole path, where it hid cut terrain edges.
+- The current runtime no longer punches Unity terrain holes. On baked coastline tiles, that same skirt becomes the visible artificial wall/ramp (`ledge2`).
+- Removing the skirt entirely fixed `ledge2`, but exposed a rectangular local-lake boundary gap in the `desert` movement probe.
+
+Change:
+
+- Baked/global shoreline tiles no longer emit the generated skirt.
+- Local fallback lake tiles still emit the connector skirt, because their shore edge comes from promoted local water classification rather than from the global bake.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- `git diff --check` passed.
+- Packed both playable `.dfmod` files by replacing the `DeepWaterFloorMesh.cs` TextAsset.
+- Diagnostic pass completed cleanly for `ledge`, `ledge2`, `desert`, and `weird bathymetry`.
+- Fresh captures:
+  - `DeepWatersDiagnostics\deep-waters-ledge2-shoreline-hold-20260621-114732.png` no longer shows the right-side artificial ramp.
+  - `DeepWatersDiagnostics\deep-waters-desert-desert_straight_lake_probe-5s-20260621-114750.png` no longer shows the rectangular local-lake boundary void.
+  - `DeepWatersDiagnostics\deep-waters-desert-desert_straight_lake_probe-end-20260621-114757.png` reaches dry land instead of trapping the player in the shore wall.
+
+## Near-Shore Floor Clearance Reduction
+
+Prompt:
+
+- After restoring the `bda0e6e` bathymetry path and rebuilding, `gap3` still exposed a large dark band under the shoreline/wall.
+- `gap2` and `gap3` diagnostics showed water points where `localPointWater=1`, `carvedWater=1`, and `bakedWater=0`, with the rendered floor clamped exactly one meter below the ocean surface.
+
+Finding:
+
+- The old `FloorSurfaceClearanceMeters = 1.0f` clamp was too aggressive for shallow carved shore pixels. It left a visible one-meter vertical reveal between surface-level shore/cap geometry and the generated seafloor.
+- Earlier skirt-top experiments did not help, so the skirt logic was restored to the `bda0e6e` behavior.
+
+Change:
+
+- Reduced `FloorSurfaceClearanceMeters` from `1.0f` to `0.25f`.
+- Kept the restored baseline skirt sampling logic.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Patched both playable `.dfmod` files after the Unity build.
+- `gap1`, `gap2`, and `gap3` diagnostics completed cleanly.
+- `gap3` no longer shows the large exposed dark band in `DeepWatersDiagnostics\deep-waters-gap3-shoreline-hold-20260621-195106.png`.
+- Regression pass completed cleanly for `ledge`, `ledge2`, and `desert`.
+- `ledge` and `ledge2` did not reintroduce the giant artificial ramps.
+- `desert` forward probe ended on dry land in `DeepWatersDiagnostics\deep-waters-desert-desert_straight_lake_probe-end-20260621-195344.png`.
+
+## Shoreline Gap Tightening
+
+Prompt:
+
+- `gap1`, `gap2`, and `gap3` still showed visible shore-to-seafloor gaps after the bathymetry rollback.
+- `gap2` was the stubborn case: the center shoreline mostly closed, but the right side still had a dark exposed pocket.
+
+Finding:
+
+- Reducing the near-surface floor clamp to `0.05m` fixed most of the vertical reveal.
+- The remaining `gap2` pocket came from downsampling the terrain carve mask to the rendered floor grid with a single center sample. Thin carved shoreline strips could exist in the hole mask but be skipped by the floor quad.
+- A cap-threshold slack experiment made white/bright holes and was rejected.
+
+Change:
+
+- Reduced `ShoreTerrainFitClearance` from `0.15m` to `0.05m`.
+- Reduced `FloorSurfaceClearanceMeters` from `1.0m` to `0.05m`.
+- Floor quads now render when any covered carve-mask cell is water, instead of only checking the quad center.
+- Internal shore skirts can rise to the normal skirt top; boundary skirts remain pinned to vanilla terrain to avoid map-pixel ledges.
+
+Validation:
+
+- `dotnet build .\Assembly-CSharp.csproj -v:minimal` succeeded with existing project warnings only.
+- Patched both playable `.dfmod` files after the Unity build.
+- `gap1`, `gap2`, and `gap3` diagnostics completed cleanly.
+- `gap2` right-side dark pocket was mostly closed in `DeepWatersDiagnostics\deep-waters-gap2-shoreline-hold-20260621-202042.png`.
+- `gap1` and `gap3` stayed clean in `DeepWatersDiagnostics\deep-waters-gap1-shoreline-hold-20260621-202031.png` and `DeepWatersDiagnostics\deep-waters-gap3-shoreline-hold-20260621-202053.png`.
+- Regression pass completed cleanly for `ledge`, `ledge2`, and `desert`.
+- `ledge` and `ledge2` did not reintroduce the giant artificial ramps.
+- `desert` forward probe ended on dry land in `DeepWatersDiagnostics\deep-waters-desert-desert_straight_lake_probe-end-20260621-202306.png`.

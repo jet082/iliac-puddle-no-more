@@ -72,11 +72,8 @@ namespace DeepWaters
         // Distance (meters) to the nearest CARVED SHORE EDGE — resolves small
         // islands the coast-distance field misses. Falls back to coast distance
         // on pre-v5 bakes (handled inside SampleEdgeDistanceMeters).
-        internal float GetDistanceToEdgeMeters(float worldX, float worldZ)
-        {
-			if (UsesLocalWaterFallback)
-				return LocalWaterFallbackDistanceMeters;
-
+		internal float GetDistanceToEdgeMeters(float worldX, float worldZ)
+		{
             if (!DeepWaterDistanceBake.IsLoaded)
                 return float.MaxValue;
 
@@ -85,6 +82,16 @@ namespace DeepWaters
             float fracX;
             float fracZ;
             GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+			if (UsesLocalWaterFallback)
+			{
+				float localDistance = DeepWaterDistanceBake.SampleLocalEdgeDistanceMeters(
+					mapPixelX, mapPixelY, fracX, fracZ);
+				if (localDistance < float.MaxValue)
+					return localDistance;
+
+				return LocalWaterFallbackDistanceMeters;
+			}
+
             return DeepWaterDistanceBake.SampleEdgeDistanceMeters(
                 mapPixelX, mapPixelY, fracX, fracZ);
         }

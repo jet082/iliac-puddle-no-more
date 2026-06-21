@@ -249,6 +249,8 @@ namespace DeepWaters.Editor
                       "%), fine=" + rawFineWater + "/" + (long)widthCellsFine * heightCellsFine + " (" +
                       (100.0 * rawFineWater / ((long)widthCellsFine * heightCellsFine)).ToString("F1") + "%).");
 
+			byte[] localFineMask = (byte[])packedFineMask.Clone();
+
             // 2) Ocean-connectivity BFS on the COARSE mask only, then prune
             //    the packed fine mask to coarse ocean-connected cells plus a
             //    one-cell shore neighborhood. This keeps the detailed shore
@@ -290,18 +292,22 @@ namespace DeepWaters.Editor
                 "Building shore-edge distance...", 0.62f);
             float[] edgeDistance = BuildEdgeDistance(packedFineMask,
                 widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
+			float[] localEdgeDistance = BuildEdgeDistance(localFineMask,
+				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
+			localFineMask = null;
 
             // 4) Quantize + pack.
             EditorUtility.DisplayProgressBar("Bake distance field",
                 "Quantizing to bytes...", 0.85f);
             byte[] distanceBytes = Quantize(distance, DistanceScaleMeters);
             byte[] edgeBytes = Quantize(edgeDistance, DistanceScaleMeters);
+			byte[] localEdgeBytes = Quantize(localEdgeDistance, DistanceScaleMeters);
             byte[] packedCoarseMask = PackWaterMask(coarseMask);
 
             // 5) Write file.
             EditorUtility.DisplayProgressBar("Bake distance field",
                 "Writing " + outputPath + "...", 0.95f);
-            WriteBakeFile(outputPath, distanceBytes, packedCoarseMask, packedFineMask, edgeBytes,
+            WriteBakeFile(outputPath, distanceBytes, packedCoarseMask, packedFineMask, edgeBytes, localEdgeBytes,
                 SubCellsPerPixel, SubCellsPerPixel,
                 fineSubCellsPerPixel,
                 mapPixelsX, mapPixelsY,
@@ -312,7 +318,8 @@ namespace DeepWaters.Editor
             Debug.Log("[DeepWaters.Bake] Wrote " + distanceBytes.Length + " distance bytes + " +
                       packedCoarseMask.Length + " coarse-mask bytes + " +
                       packedFineMask.Length + " fine-mask bytes + " +
-                       edgeBytes.Length + " shore-edge bytes to " + outputPath +
+                       edgeBytes.Length + " shore-edge bytes + " +
+					   localEdgeBytes.Length + " local-edge bytes to " + outputPath +
                        " (coarse cell " + cellWidth.ToString("F1") + " m, fine cell " +
                        (tileWorldSize / fineSubCellsPerPixel).ToString("F1") + " m).");
         }
@@ -410,6 +417,7 @@ namespace DeepWaters.Editor
             // Same pipeline as Bake(): ocean connectivity -> prune fine -> chamfer
             // distance -> shore-edge distance -> quantize -> write.
             EditorUtility.DisplayProgressBar("Bake from exact masks", "Ocean connectivity...", 0.30f);
+			byte[] localFineMask = (byte[])packedFineMask.Clone();
             bool[] coarseMask = BuildOceanConnectedWaterMask(rawCoarse, widthCells, heightCells);
             PruneFineMaskToCoarseOcean(packedFineMask, coarseMask,
                 widthCells, heightCells, widthCellsFine, heightCellsFine);
@@ -424,13 +432,17 @@ namespace DeepWaters.Editor
             EditorUtility.DisplayProgressBar("Bake from exact masks", "Shore-edge distance...", 0.75f);
             float[] edgeDistance = BuildEdgeDistance(packedFineMask,
                 widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
+			float[] localEdgeDistance = BuildEdgeDistance(localFineMask,
+				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
+			localFineMask = null;
 
             EditorUtility.DisplayProgressBar("Bake from exact masks", "Quantize + write...", 0.90f);
             byte[] distanceBytes = Quantize(distance, DistanceScaleMeters);
             byte[] edgeBytes = Quantize(edgeDistance, DistanceScaleMeters);
+			byte[] localEdgeBytes = Quantize(localEdgeDistance, DistanceScaleMeters);
             byte[] packedCoarseMask = PackWaterMask(coarseMask);
 
-            WriteBakeFile(OutputPath, distanceBytes, packedCoarseMask, packedFineMask, edgeBytes,
+            WriteBakeFile(OutputPath, distanceBytes, packedCoarseMask, packedFineMask, edgeBytes, localEdgeBytes,
                 SubCellsPerPixel, SubCellsPerPixel, fineSub, mapPixelsX, mapPixelsY, DistanceScaleMeters);
 
             EditorUtility.ClearProgressBar();
@@ -1635,6 +1647,7 @@ namespace DeepWaters.Editor
             byte[] coarseMaskBytes,
             byte[] fineMaskBytes,
             byte[] edgeBytes,
+			byte[] localEdgeBytes,
             int subCellsX, int subCellsY,
             int fineSubCellsPerPixel,
             int mapPixelsX, int mapPixelsY,
@@ -1655,6 +1668,7 @@ namespace DeepWaters.Editor
                 bw.Write(coarseMaskBytes);
                 bw.Write(fineMaskBytes);
                 bw.Write(edgeBytes);
+				bw.Write(localEdgeBytes);
             }
         }
     }
