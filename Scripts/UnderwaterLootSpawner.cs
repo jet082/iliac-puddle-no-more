@@ -70,6 +70,7 @@ namespace DeepWaters
 		private const float ClusterLootRadius = 11f;
 		private const float ClusterLootMinSpacing = 3.0f;
 		private const int ClusterLootSpotAttempts = 8;
+		private const float WreckMinimumDepthFraction = 0.5f;
 
         private static readonly TransientObjectTracker trackedObjects = new TransientObjectTracker();
 		private static readonly HashSet<long> recentSpawnCells = new HashSet<long>();
@@ -280,6 +281,8 @@ namespace DeepWaters
 			Transform parent;
 			long spawnCellKey;
 			if (!PickSpawnSpot(playerPos, minSpawnDistance, maxSpawnDistance, out centre, out parent, out spawnCellKey))
+				return false;
+			if (!IsDeepEnoughForWreck(centre.x, centre.z))
 				return false;
 
 			int debrisPlaced = SpawnClusterDebris(centre);
@@ -608,6 +611,16 @@ namespace DeepWaters
 			}
 
 			return false;
+		}
+
+		private static bool IsDeepEnoughForWreck(float worldX, float worldZ)
+		{
+			DeepWaterColumn column;
+			if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
+				return false;
+
+			float maxDepth = DeepWaters.Instance != null ? Mathf.Max(1f, DeepWaters.Instance.WaterDepth) : 200f;
+			return column.Depth >= maxDepth * WreckMinimumDepthFraction;
 		}
 
 		private static bool TryPickClusterLootSpot(Vector3 centre, List<Vector3> placedLootSpots, out Vector3 spot)

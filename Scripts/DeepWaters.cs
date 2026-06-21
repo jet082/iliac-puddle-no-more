@@ -272,7 +272,6 @@ namespace DeepWaters
 
         void Update()
         {
-			DeepWaterConsoleCommands.RegisterCommands();
             DeepWaterRuntime.Pump();
 			UnderwaterDecorations.ProcessWorkQueue();
 			UnderwaterEncounterPulse.Pump();

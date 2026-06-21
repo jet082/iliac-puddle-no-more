@@ -13,87 +13,11 @@ using UnityEngine;
 using DaggerfallWorkshop.Game;
 using DaggerfallWorkshop.Game.Entity;
 using DaggerfallWorkshop.Game.Serialization;
-using Wenzil.Console;
 
 namespace DeepWaters
 {
     public partial class DeepWaters
     {
-        // Registers the mod's debug console commands (open with the backquote key).
-        private static class DeepWaterConsoleCommands
-        {
-			private const string CurrentDepthName = "currentdepth";
-			private const string CurrentDepthDescription = "Prints how deep the player is below the ocean surface and the water-column depth at the player's position.";
-			private const string CurrentDepthUsage = "currentdepth";
-
-			private static bool currentDepthRegistered;
-			private static bool loggedRegistrationError;
-
-            internal static void RegisterCommands()
-            {
-				if (currentDepthRegistered)
-					return;
-
-                try
-                {
-					if (ConsoleCommandsDatabase.HasCommand(CurrentDepthName))
-					{
-						currentDepthRegistered = true;
-						return;
-					}
-
-					ConsoleCommandsDatabase.RegisterCommand(CurrentDepthName, CurrentDepthDescription, CurrentDepthUsage, ExecuteCurrentDepth);
-					currentDepthRegistered = true;
-					Debug.Log("[DeepWaters] Registered console command: " + CurrentDepthName);
-                }
-                catch (Exception ex)
-                {
-					if (!loggedRegistrationError && !(ex is NullReferenceException))
-					{
-						Debug.LogException(ex);
-						loggedRegistrationError = true;
-					}
-                }
-            }
-
-			private static string ExecuteCurrentDepth(params string[] args)
-			{
-				GameManager gameManager = GameManager.Instance;
-				if (gameManager == null || gameManager.PlayerObject == null)
-					return Report("No player.");
-
-				Vector3 playerPos = gameManager.PlayerObject.transform.position;
-				Vector3 probePos = playerPos;
-				string probeName = "player";
-				DeepWaterColumn column;
-				if (!DeepWaterWorld.TryGetWaterColumn(playerPos.x, playerPos.z, out column))
-				{
-					if (gameManager.MainCamera == null)
-						return Report("No Deep Waters ocean column at player.");
-
-					probePos = gameManager.MainCamera.transform.position;
-					probeName = "camera";
-					if (!DeepWaterWorld.TryGetWaterColumn(probePos.x, probePos.z, out column))
-						return Report("No Deep Waters ocean column at player or camera.");
-				}
-
-				float belowSurface = column.OceanWorldY - probePos.y;
-				string playerDepth = belowSurface >= 0f
-					? belowSurface.ToString("F1", CultureInfo.InvariantCulture) + "m below surface"
-					: (-belowSurface).ToString("F1", CultureInfo.InvariantCulture) + "m above surface";
-
-				return Report(probeName + ": " + playerDepth +
-					" | column: " + column.Depth.ToString("F1", CultureInfo.InvariantCulture) + "m deep");
-			}
-
-			private static string Report(string message)
-			{
-				Debug.Log("[DeepWaters.currentdepth] " + message);
-				DaggerfallUI.AddHUDText(message);
-				return message;
-			}
-        }
-
         private static void InstallSubsystems(GameObject go)
         {
             // Keep streaming hitches from turning into multi-step physics catch-up
