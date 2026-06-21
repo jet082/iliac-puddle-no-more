@@ -151,12 +151,12 @@ namespace DeepWaters
 		private static readonly HashSet<string> TargetedScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
-			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery"
+			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
-			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt"
+			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt", "distance fog test"
 		};
 
 		private static readonly HashSet<string> BiomeVisualProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

@@ -40,9 +40,10 @@ namespace DeepWaters
 		private static Texture sharedSurfaceTexture;
 		private static readonly Color SurfaceTint = new Color(0.519f, 0.527f, 0.467f, 1f);
 		private static readonly Color FallbackSurfaceColor = new Color(0.075f, 0.24f, 0.38f, 1f);
-		private const float TopSurfaceVisionMultiplier = 3.0f;
-		private const float TopSurfaceFogStrengthMultiplier = 0.35f;
-		private const float TopSurfaceFalloffMultiplier = 0.45f;
+		private const float TopSurfaceVisionMultiplier = 1.0f;
+		private const float TopSurfaceFogStrengthMultiplier = 1.0f;
+		private const float TopSurfaceFalloffMultiplier = 1.0f;
+		private const float MaximumTopSurfaceVisionDistance = 36f;
 
 		internal const float SurfaceTextureTiling = 128f;
 
@@ -157,14 +158,9 @@ namespace DeepWaters
 			if (material.HasProperty(WaterColumnFogStrengthProperty))
 				material.SetFloat(WaterColumnFogStrengthProperty, Mathf.Clamp01(GetWaterColumnFogStrength() * TopSurfaceFogStrengthMultiplier));
 			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
-				material.SetFloat(WaterSurfaceVisionDistanceProperty, DeepWaters.Instance.UnderwaterVisionDistance * TopSurfaceVisionMultiplier);
+				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier);
 			if (material.HasProperty(WaterSurfaceFalloffProperty))
 				material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff * TopSurfaceFalloffMultiplier));
-
-			if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
-				material.SetFloat(SurfaceOpaqueFadeStartProperty, DeepWaters.Instance.UnderwaterVisionDistance * 2.2f);
-			if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
-				material.SetFloat(SurfaceOpaqueFadeEndProperty, DeepWaters.Instance.UnderwaterVisionDistance * 4.5f);
 		}
 
 		private static void ConfigureUndersideMaterial(Material material)
@@ -232,18 +228,18 @@ namespace DeepWaters
 			// so looking down from the surface is no clearer than looking around
 			// underwater, and shortened by the distance falloff slider.
 			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
-				material.SetFloat(WaterSurfaceVisionDistanceProperty, DeepWaters.Instance.UnderwaterVisionDistance);
+				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistance());
 
 			if (material.HasProperty(WaterSurfaceFalloffProperty))
 				material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff));
 
 			// Opaque horizon curtain: the surface is fully opaque past this range,
 			// hiding the loaded-world edge behind an opaque sea.
-			float curtainVision = DeepWaters.Instance.UnderwaterVisionDistance;
+			float curtainVision = GetTopSurfaceVisionDistance();
 			if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
-				material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * 0.55f);
+				material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * 0.45f);
 			if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
-				material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * 1.45f);
+				material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * 2.15f);
 
 			if (material.HasProperty(HorizonColorProperty))
 				material.SetColor(HorizonColorProperty, DeepWaters.GetUnderwaterFogColor());
@@ -312,6 +308,11 @@ namespace DeepWaters
 		private static float GetWaterColumnFogStrength()
 		{
 			return Mathf.Clamp01(DeepWaters.Instance.UnderwaterFogStrength);
+		}
+
+		private static float GetTopSurfaceVisionDistance()
+		{
+			return Mathf.Min(DeepWaters.Instance.UnderwaterVisionDistance, MaximumTopSurfaceVisionDistance);
 		}
 	}
 

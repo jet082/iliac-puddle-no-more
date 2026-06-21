@@ -131,8 +131,9 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 float visionRef = max(1.0, _WaterSurfaceVisionDistance * lerp(1.6, 0.35, falloff));
 
                 float rawDepth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.screenPos.xy / i.screenPos.w);
+                bool missingDepth = IsNoDepth(rawDepth);
                 float waterPath;
-                if (IsNoDepth(rawDepth))
+                if (missingDepth)
                 {
                     waterPath = visionRef * 4.0;
                 }
@@ -165,9 +166,11 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 clip(finalAlpha - 0.001);
 
                 fixed4 col;
-                // Keep a little surface sheen even over deep water so the wave
-                // texture still reads instead of flattening to solid fog color.
-                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, max(bodyOpacity * 0.88, horizonFade * 0.92));
+                // Distance makes the surface opaque, not fog-colored. Fog still
+                // tints visible water-column depth, but the far opaque surface
+                // keeps the wave/surface color instead of becoming a dark slab.
+                float columnTint = bodyOpacity * 0.88 * (1.0 - horizonFade);
+                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, columnTint);
                 col.a = finalAlpha;
                 return col;
             }
