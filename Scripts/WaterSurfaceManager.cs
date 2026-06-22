@@ -49,6 +49,7 @@ namespace DeepWaters
 		private const float MaximumTopSurfaceVisionDistance = 36f;
 		private const float NearOpaqueTopSurfaceAlpha = 0.95f;
 		private const float OpaqueTopSurfaceVisionDistance = 10000f;
+		private const float NightTopSurfaceAlphaBoost = 0.18f;
 
 		internal const float SurfaceTextureTiling = 128f;
 
@@ -155,7 +156,7 @@ namespace DeepWaters
 			if (material.HasProperty(ColorProperty))
 			{
 				Color color = GetTimeAdjustedSurfaceTint();
-				color.a = DeepWaters.Instance.WaterSurfaceTopAlpha;
+				color.a = GetTimeAdjustedTopSurfaceAlpha();
 				material.SetColor(ColorProperty, color);
 			}
 
@@ -194,7 +195,7 @@ namespace DeepWaters
 			if (material.HasProperty(ColorProperty))
 			{
 				Color color = GetTimeAdjustedSurfaceTint();
-				color.a = DeepWaters.Instance.WaterSurfaceTopAlpha;
+				color.a = GetTimeAdjustedTopSurfaceAlpha();
 				material.SetColor(ColorProperty, color);
 			}
 
@@ -252,6 +253,11 @@ namespace DeepWaters
 		private static Color GetTimeAdjustedSurfaceTint()
 		{
 			return Color.Lerp(NightSurfaceTint, SurfaceTint, GetDaylightFactor());
+		}
+
+		private static float GetTimeAdjustedTopSurfaceAlpha()
+		{
+			return Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceTopAlpha + (1f - GetDaylightFactor()) * NightTopSurfaceAlphaBoost);
 		}
 
 		private static float GetDaylightFactor()
