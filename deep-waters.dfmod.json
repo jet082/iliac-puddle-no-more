@@ -1,10 +1,10 @@
 {
     "ModTitle": "Iliac Puddle No More",
-    "ModVersion": "0.55.0",
+    "ModVersion": "1.0.0",
     "ModAuthor": "jet082",
     "ContactInfo": "",
     "DFUnity_Version": "1.1.1",
-    "ModDescription": "Adds swimmable depth to ocean, lake, and river tiles in the Daggerfall Unity world map. Spawns underwater enemies. Argonians never drown.",
+    "ModDescription": "The Iliac Puddle is now the Iliac Bay",
     "GUID": "f1e8a1b3-8a4f-4f4e-bb6e-3d3a8a1b3f1e",
     "Files": [
         "Assets/Game/Mods/deep-waters/deep-waters.dfmod.json",

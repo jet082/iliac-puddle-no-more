@@ -273,6 +273,7 @@ namespace DeepWaters
         void Update()
         {
             DeepWaterRuntime.Pump();
+			SuppressVanillaWaterEncounters();
 			UnderwaterDecorations.ProcessWorkQueue();
 			UnderwaterEncounterPulse.Pump();
 			UnderwaterLootSpawner.Pump();
@@ -297,6 +298,22 @@ namespace DeepWaters
 			PlayerEntity entity = gameManager.PlayerEntity;
 			if (entity != null && entity.Race == Races.Argonian)
 				entity.IsWaterBreathing = true;
+		}
+
+		private static void SuppressVanillaWaterEncounters()
+		{
+			GameManager gameManager = GameManager.Instance;
+			if (gameManager == null ||
+				!gameManager.IsPlayingGame() ||
+				gameManager.PlayerEnterExit == null ||
+				gameManager.PlayerEnterExit.IsPlayerInside ||
+				gameManager.PlayerEntity == null)
+			{
+				return;
+			}
+
+			if (DeepWaterWorld.IsPlayerInOrAboveDeepWater(0.25f))
+				gameManager.PlayerEntity.PreventEnemySpawns = true;
 		}
     }
 
