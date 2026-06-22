@@ -23,6 +23,7 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
         _SurfaceOpaqueFadeStart ("Surface opaque fade start", Float) = 42.0
         _SurfaceOpaqueFadeEnd ("Surface opaque fade end", Float) = 160.0
         _DeepWatersPlayerPosition ("Player position", Vector) = (0, 0, 0, 1)
+        _DeepWatersDepthValid ("Camera depth texture valid", Float) = 1.0
 
         _ScrollX ("Wave scroll speed X", Float) = 0.0225
         _ScrollY ("Wave scroll speed Y", Float) = 0.0375
@@ -75,6 +76,7 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
             float _ScrollX;
             float _ScrollY;
             float _DeepWatersUnderwater;
+            float _DeepWatersDepthValid;
 
             struct appdata
             {
@@ -114,19 +116,19 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 clip(0.5 - _DeepWatersUnderwater);
                 clip(_WorldSpaceCameraPos.y - i.worldPos.y + 0.02);
 
-                float surfaceOpacity = saturate(_Color.a);
-
                 fixed4 wave = tex2D(_MainTex, i.uv);
                 fixed3 legacyRgb = wave.rgb * _Color.rgb;
                 fixed3 surfaceRgb = lerp(legacyRgb, _Color.rgb * 0.32, 0.22);
 
-                float surfaceDist = distance(i.worldPos.xz, _DeepWatersPlayerPosition.xz);
+                // How much water the view ray crosses before it reaches the scene
+                // behind the surface (the seafloor) — i.e. how much water you are
+                // looking through. No usable depth = open void beyond the world.
                 float rawDepth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.screenPos.xy / i.screenPos.w);
                 bool missingDepth = IsNoDepth(rawDepth);
                 float waterPath;
                 if (missingDepth)
                 {
-                    waterPath = surfaceDist;
+                    waterPath = 1e9;
                 }
                 else
                 {
@@ -135,18 +137,22 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                     waterPath = max(0.0, sceneDepthLinear - surfaceDepthLinear);
                 }
 
-                // Opaque horizon curtain. The surface goes FULLY opaque at
-                // distance, independent of the transparency setting, so open
-                // water forms a wall in front of the loaded-world edge — the
-                // outdoor equivalent of the dungeon walls that hide DFU's
-                // void. Without it the void is visible across open sea
-                // whenever the film is transparent.
-                float fadeDist = max(surfaceDist, waterPath);
-                float horizonFade = saturate(fadeDist / max(1.0, _SurfaceOpaqueFadeEnd));
-                if (missingDepth)
-                    horizonFade = 1.0;
-
-                float finalAlpha = lerp(surfaceOpacity, 1.0, horizonFade);
+                // Vertical visibility looking down is set EXCLUSIVELY by the
+                // underwater vision distance (Underwater Fog Distance): the
+                // surface reaches full opacity once the view crosses that much
+                // water, so the seafloor is visible from above out to the same
+                // range it is visible from below (void pixels = fully opaque,
+                // which hides the loaded-world edge). Underwater Fog Strength
+                // sets how harsh the ramp to opaque is: low = gradual fade,
+                // high = stays clear then closes off sharply near the limit.
+                float reach = max(1.0, _WaterSurfaceVisionDistance);
+                float t = saturate(waterPath / reach);
+                // LINEAR ramp from the player's set surface transparency
+                // (_Color.a, the "transparency from above" slider) up to fully
+                // opaque at the edge of the vision distance (Underwater Fog
+                // Distance). Void pixels -> waterPath huge -> t=1 -> opaque.
+                float filmAlpha = saturate(_Color.a);
+                float finalAlpha = lerp(filmAlpha, 1.0, t);
                 clip(finalAlpha - 0.001);
 
                 fixed4 col;

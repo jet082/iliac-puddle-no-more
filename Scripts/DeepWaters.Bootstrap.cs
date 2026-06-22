@@ -76,13 +76,13 @@ namespace DeepWaters
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
 			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test",
-			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "overdeepwater", "overdeepwater2"
+			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
 			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt", "distance fog test",
-			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "overdeepwater", "overdeepwater2"
+			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom"
 		};
 
 		private static readonly HashSet<string> BiomeVisualProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -425,6 +425,9 @@ namespace DeepWaters
                 string visualPhase = saveName.ToLowerInvariant() + "_shoreline_visual";
                 yield return RunStationaryPhase(saveName, visualPhase, TargetedVisualHoldSeconds);
                 yield return CaptureDiagnosticScreenshot(saveName, "shoreline-hold");
+                // Look down to evaluate vertical visibility through the surface
+                // (top/bottom seafloor view-distance parity).
+                yield return CapturePitchScreenshot(saveName, "look-down", 65f);
 				if (string.Equals(saveName, "desert", StringComparison.OrdinalIgnoreCase))
 				{
 					yield return CaptureOffsetYawScreenshot(saveName, "left-look", -90f);
@@ -688,10 +691,38 @@ namespace DeepWaters
             LogShoreProfileSnapshot(saveName, safeLabel);
             LogClassificationGrid(saveName, safeLabel);
             LogSpawnDiagnostics(saveName, safeLabel);
+            LogCameraRenderState(saveName, safeLabel);
             yield return new WaitForEndOfFrame();
             ScreenCapture.CaptureScreenshot(path);
             Debug.Log("[DeepWaters.Diagnostics] Screenshot: " + path);
             yield return new WaitForSecondsRealtime(0.5f);
+        }
+
+        // Diagnostic for the "top transparency breaks while piloting" report:
+        // Come Sail Away forces RenderingPath.Forward when sailing, which changes
+        // how _CameraDepthTexture is available to the transparent surface pass.
+        private void LogCameraRenderState(string saveName, string label)
+        {
+            GameManager gm = GameManager.Instance;
+            Camera cam = gm != null ? gm.MainCamera : null;
+            if (cam == null)
+                return;
+
+            float oceanY;
+            bool hasOcean = DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY);
+            var dw = DeepWaters.Instance;
+            DeepWaterColumn col;
+            float colDepth = DeepWaterWorld.TryGetWaterColumn(cam.transform.position.x, cam.transform.position.z, out col) ? col.Depth : -1f;
+            Debug.Log(string.Format(CultureInfo.InvariantCulture,
+                "[DeepWaters.Diagnostics] CamRender save={0} label={1} path={2} actual={3} camY={4:F2} oceanY={5:F2} colDepth={11:F1} | fogStr={6:F2} fogDist={7:F2} visionDist={8:F1} topAlpha={9:F2} botAlpha={10:F2}",
+                saveName, label, cam.renderingPath, cam.actualRenderingPath,
+                cam.transform.position.y, oceanY,
+                dw != null ? dw.UnderwaterFogStrength : -1f,
+                dw != null ? dw.UnderwaterFogDistance : -1f,
+                dw != null ? dw.UnderwaterVisionDistance : -1f,
+                dw != null ? dw.WaterSurfaceTopAlpha : -1f,
+                dw != null ? dw.WaterSurfaceBottomAlpha : -1f,
+                colDepth));
         }
 
 		private IEnumerator CaptureOffsetYawScreenshot(string saveName, string label, float yawOffset)
@@ -706,6 +737,20 @@ namespace DeepWaters
 			yield return null;
 			yield return CaptureDiagnosticScreenshot(saveName, label);
 			SetDiagnosticFacing(yaw, pitch);
+		}
+
+		private IEnumerator CapturePitchScreenshot(string saveName, string label, float pitch)
+		{
+			if (!GameManager.HasInstance || GameManager.Instance.PlayerMouseLook == null)
+				yield break;
+
+			PlayerMouseLook mouseLook = GameManager.Instance.PlayerMouseLook;
+			float yaw = mouseLook.Yaw;
+			float origPitch = mouseLook.Pitch;
+			SetDiagnosticFacing(yaw, pitch);
+			yield return null;
+			yield return CaptureDiagnosticScreenshot(saveName, label);
+			SetDiagnosticFacing(yaw, origPitch);
 		}
 
 		private static void SetDiagnosticFacing(float yaw, float pitch)

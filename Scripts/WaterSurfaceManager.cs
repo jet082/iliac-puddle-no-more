@@ -27,7 +27,6 @@ namespace DeepWaters
 		private static readonly int WaterColumnFogDepthProperty = Shader.PropertyToID("_WaterColumnFogDepth");
 		private static readonly int WaterColumnFogStrengthProperty = Shader.PropertyToID("_WaterColumnFogStrength");
 		private static readonly int WaterSurfaceVisionDistanceProperty = Shader.PropertyToID("_WaterSurfaceVisionDistance");
-		private static readonly int WaterSurfaceFalloffProperty = Shader.PropertyToID("_WaterSurfaceFalloff");
 		private static readonly int SurfaceOpaqueFadeStartProperty = Shader.PropertyToID("_SurfaceOpaqueFadeStart");
 		private static readonly int SurfaceOpaqueFadeEndProperty = Shader.PropertyToID("_SurfaceOpaqueFadeEnd");
 		private static readonly int PlayerPositionProperty = Shader.PropertyToID("_DeepWatersPlayerPosition");
@@ -42,9 +41,7 @@ namespace DeepWaters
 		private static readonly Color SurfaceTint = new Color(0.519f, 0.527f, 0.467f, 1f);
 		private static readonly Color NightSurfaceTint = new Color(0.055f, 0.105f, 0.12f, 1f);
 		private static readonly Color FallbackSurfaceColor = new Color(0.075f, 0.24f, 0.38f, 1f);
-		private const float TopSurfaceVisionMultiplier = 1.0f;
 		private const float TopSurfaceFogStrengthMultiplier = 1.0f;
-		private const float TopSurfaceFalloffMultiplier = 1.0f;
 		private const float TopSurfaceOpaqueEndVisionMultiplier = 0.55f;
 		private const float MaximumTopSurfaceVisionDistance = 36f;
 		private const float NearOpaqueTopSurfaceAlpha = 0.95f;
@@ -166,8 +163,6 @@ namespace DeepWaters
 				material.SetFloat(WaterColumnFogStrengthProperty, Mathf.Clamp01(GetWaterColumnFogStrength() * TopSurfaceFogStrengthMultiplier));
 			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
 				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistanceForMaterial());
-			if (material.HasProperty(WaterSurfaceFalloffProperty))
-				material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff * TopSurfaceFalloffMultiplier));
 
 			if (material.HasProperty(ZWriteProperty))
 				material.SetInt(ZWriteProperty, IsTopSurfaceNearOpaque() ? 1 : 0);
@@ -204,8 +199,6 @@ namespace DeepWaters
 
 			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
 				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistanceForMaterial());
-			if (material.HasProperty(WaterSurfaceFalloffProperty))
-				material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff * TopSurfaceFalloffMultiplier));
 			if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
 				material.SetFloat(SurfaceOpaqueFadeStartProperty, 0f);
 			if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
@@ -284,9 +277,6 @@ namespace DeepWaters
 			// underwater, and shortened by the distance falloff slider.
 			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
 				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistance());
-
-			if (material.HasProperty(WaterSurfaceFalloffProperty))
-				material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff));
 
 			// Opaque horizon curtain: the surface is fully opaque past this range,
 			// hiding the loaded-world edge behind an opaque sea.
@@ -377,7 +367,10 @@ namespace DeepWaters
 			if (IsTopSurfaceNearOpaque())
 				return OpaqueTopSurfaceVisionDistance;
 
-			return GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier;
+			// Top-down visibility is the SAME as the underwater vision distance
+			// (driven by Underwater Fog Distance), so you see the seafloor from
+			// above out to roughly the same range you see it from below.
+			return DeepWaters.Instance.UnderwaterVisionDistance;
 		}
 
 		internal static float GetTopSurfaceOpaqueFadeEnd()

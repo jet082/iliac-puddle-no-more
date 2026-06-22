@@ -52,9 +52,8 @@ namespace DeepWaters
 		internal bool TreasureCove { get; private set; }
 		private float WaterSurfaceTopTransparency { get; set; } = SliderMidpoint;
 		private float WaterSurfaceBottomTransparency { get; set; } = SliderMidpoint;
-		internal float WaterSurfaceDistanceFalloff { get; private set; } = SliderMidpoint;
 		internal float UnderwaterFogStrength { get; private set; } = SliderMidpoint;
-		private float UnderwaterFogDistance { get; set; } = SliderMidpoint;
+		internal float UnderwaterFogDistance { get; private set; } = SliderMidpoint;
 		private bool ArgonianInfiniteBreath { get; set; } = true;
 		internal float SwimSpeedMultiplier { get; private set; } = 1f;
 		internal bool EnableSwimStroke { get; private set; }
@@ -178,7 +177,6 @@ namespace DeepWaters
 			TreasureCove = GetBoolSetting(settings, "TreasureCove");
 			WaterSurfaceTopTransparency = GetFloatSetting(settings, "WaterSurfaceTopTransparency");
 			WaterSurfaceBottomTransparency = GetFloatSetting(settings, "WaterSurfaceBottomTransparency");
-			WaterSurfaceDistanceFalloff = GetFloatSetting(settings, "WaterSurfaceDistanceFalloff");
 			UnderwaterFogStrength = GetFloatSetting(settings, "UnderwaterFogStrength");
 			UnderwaterFogDistance = GetFloatSetting(settings, "UnderwaterFogDistance");
 			ArgonianInfiniteBreath = GetBoolSetting(settings, "ArgonianInfiniteBreath");

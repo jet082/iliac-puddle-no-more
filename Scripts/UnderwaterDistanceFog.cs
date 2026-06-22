@@ -36,6 +36,19 @@ namespace DeepWaters
             EnsureCameraHooks(gameManager.MainCamera);
             EnsureAllCameraHooks(gameManager.MainCamera);
 
+            // The water surfaces' depth-based rendering needs the deferred
+            // G-buffer depth. Come Sail Away forces the camera to forward while
+            // piloting, which empties _CameraDepthTexture and paints the top
+            // surface opaque. DFU runs deferred by default, so this only ever
+            // changes anything while another system has forced forward — reassert
+            // deferred whenever we render water outdoors so piloting looks the
+            // same as standing on the boat.
+            if (gameManager.MainCamera.renderingPath != RenderingPath.DeferredShading &&
+                ShouldRequireDepthTexture(gameManager))
+            {
+                gameManager.MainCamera.renderingPath = RenderingPath.DeferredShading;
+            }
+
             float oceanSurfaceY;
             bool underwaterPresentation = TryGetUnderwaterPresentation(gameManager, gameManager.MainCamera, out oceanSurfaceY);
             SetUnderwaterShaderGlobals(underwaterPresentation, oceanSurfaceY);
@@ -44,8 +57,15 @@ namespace DeepWaters
             if (ShouldRequireDepthTexture(gameManager))
                 gameManager.MainCamera.depthTextureMode |= DepthTextureMode.Depth;
 
+            // Keep the effect enabled and let OnRenderImage decide per-frame at
+            // RENDER time (it passes through cheaply when not underwater). Eye of
+            // the Beholder repositions THIS same MainCamera to a third-person
+            // offset in its own LateUpdate; gating on the camera position read
+            // here (before that move) would disable the effect and skip
+            // OnRenderImage entirely, so a camera dunked below the surface while
+            // the player stays above it would get the underside surface but no fog.
             if (hookedEffect != null)
-                hookedEffect.enabled = underwaterPresentation;
+                hookedEffect.enabled = true;
 
             // Keep the water-surface underside's horizon curtain converging to
             // the SAME far color as the fog volume, every frame (it tracks the
@@ -171,6 +191,20 @@ namespace DeepWaters
         {
             Shader.SetGlobalFloat(GlobalUnderwaterProperty, underwaterPresentation ? 1f : 0f);
             Shader.SetGlobalFloat(GlobalWaterSurfaceYProperty, oceanSurfaceY);
+        }
+
+        /// <summary>
+        /// Underwater-ness is per-camera: a detached/third-person camera can be
+        /// below the surface while the player (and main camera) stays above it.
+        /// Called from each camera's OnPreCull so the top/underside water
+        /// surfaces pick the correct side for the camera that is about to render,
+        /// instead of the once-per-frame main-camera value.
+        /// </summary>
+        internal static void ApplyUnderwaterGlobalsForCamera(GameManager gameManager, Camera camera)
+        {
+            float oceanSurfaceY;
+            bool underwater = TryGetUnderwaterPresentation(gameManager, camera, out oceanSurfaceY);
+            SetUnderwaterShaderGlobals(underwater, oceanSurfaceY);
         }
 
         private static bool TryGetLocalOceanSurfaceWorldY(GameManager gameManager, Camera camera, out float oceanSurfaceY)
@@ -547,12 +581,16 @@ namespace DeepWaters
                 targetCamera = GetComponent<Camera>();
 
             GameManager gameManager = GameManager.Instance;
-            if (targetCamera != null &&
-                gameManager != null &&
-                UnderwaterDistanceFog.ShouldRequireDepthTexture(gameManager))
-            {
+            if (targetCamera == null || gameManager == null)
+                return;
+
+            if (UnderwaterDistanceFog.ShouldRequireDepthTexture(gameManager))
                 targetCamera.depthTextureMode |= DepthTextureMode.Depth;
-            }
+
+            // Set the underwater surface-shader globals for THIS camera right
+            // before it culls/renders, so a camera below the waves shows the
+            // underside + fog even when the player is above them.
+            UnderwaterDistanceFog.ApplyUnderwaterGlobalsForCamera(gameManager, targetCamera);
         }
     }
 }

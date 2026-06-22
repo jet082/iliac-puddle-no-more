@@ -155,15 +155,6 @@
                     "Min": 0.0,
                     "Max": 1.0,
                     "Value": 0.5,
-                    "Name": "WaterSurfaceDistanceFalloff",
-                    "Description": "Depth viewing falloff (0->1 gradual->swift)",
-                    "$version": "v1",
-                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
-                },
-                {
-                    "Min": 0.0,
-                    "Max": 1.0,
-                    "Value": 0.5,
                     "Name": "UnderwaterFogStrength",
                     "Description": "Underwater fog strength",
                     "$version": "v1",

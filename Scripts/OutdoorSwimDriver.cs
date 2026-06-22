@@ -44,11 +44,14 @@ namespace DeepWaters
         // while it is within these clearances of the waterline — i.e. mostly
         // submerged. Being above water (boat deck, shore) is naturally NOT
         // swimming, which is what makes boats work with no special-casing.
-        // Match DFU's forged swim surface to the mod's exit threshold so shallow
-        // shore slopes don't flap between DFU-swim and walk every other frame.
+        // SwimExitClearance must stay just ABOVE SwimPhysicsSurfaceOffset: DFU's
+        // float ceiling is oceanY + offset - 0.32, so this gap (0.20m) is the
+        // stable margin that holds the surface float below the swim-exit. Tying
+        // them equal collapses the margin to ~0.02m and the player bobs at the
+        // surface (pops in/out of swim every other frame).
         private const float SwimEnterClearance = 0.10f;
         private const float SwimExitClearance = 0.75f;
-        private const float SwimPhysicsSurfaceOffset = SwimExitClearance;
+        private const float SwimPhysicsSurfaceOffset = 0.55f;
 
         // Presentation (underwater camera/fog) thresholds.
         private const float HeadDiveBelowSurface = 0.25f;
