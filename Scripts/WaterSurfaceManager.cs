@@ -203,6 +203,8 @@ namespace DeepWaters
 
 			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
 				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistanceForMaterial());
+			if (material.HasProperty(WaterSurfaceFalloffProperty))
+				material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff * TopSurfaceFalloffMultiplier));
 			if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
 				material.SetFloat(SurfaceOpaqueFadeStartProperty, 0f);
 			if (material.HasProperty(SurfaceOpaqueFadeEndProperty))

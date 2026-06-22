@@ -120,18 +120,6 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 fixed3 legacyRgb = wave.rgb * _Color.rgb;
                 fixed3 surfaceRgb = lerp(legacyRgb, _Color.rgb * 0.32, 0.22);
 
-                // Distance the downward view travels through the water column
-                // before it reaches the seabed. Prefer the camera depth texture;
-                // when nothing is rendered behind the surface (sky / culled
-                // distant seabed) treat the column as deep so it fogs out rather
-                // than reading as a thin clear film.
-                float fogStrength = saturate(_WaterColumnFogStrength);
-                float falloff = saturate(_WaterSurfaceFalloff);
-                // Reference distance the seabed fades over, anchored to the
-                // underwater vision distance so the bay is no clearer from above
-                // than from below. Falloff shortens it: 0 = gradual, 1 = swift.
-                float visionRef = max(1.0, _WaterSurfaceVisionDistance * lerp(1.6, 0.35, falloff));
-
                 float surfaceDist = distance(i.worldPos.xz, _DeepWatersPlayerPosition.xz);
                 float rawDepth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.screenPos.xy / i.screenPos.w);
                 bool missingDepth = IsNoDepth(rawDepth);
@@ -147,12 +135,6 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                     waterPath = max(0.0, sceneDepthLinear - surfaceDepthLinear);
                 }
 
-                // Beer-Lambert-style occlusion of the seabed by the water column.
-                // Reaches near-opaque well before the deepest water, so the floor
-                // is hidden at depth while shallows by the shore stay clear.
-                float occlusionRate = lerp(1.2, 3.0, fogStrength);
-                float bodyOpacity = saturate(1.0 - exp2(-(waterPath / visionRef) * occlusionRate));
-
                 // Opaque horizon curtain. The surface goes FULLY opaque at
                 // distance, independent of the transparency setting, so open
                 // water forms a wall in front of the loaded-world edge — the
@@ -161,6 +143,8 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 // whenever the film is transparent.
                 float fadeDist = max(surfaceDist, waterPath);
                 float horizonFade = saturate(fadeDist / max(1.0, _SurfaceOpaqueFadeEnd));
+                if (missingDepth)
+                    horizonFade = 1.0;
 
                 float finalAlpha = lerp(surfaceOpacity, 1.0, horizonFade);
                 clip(finalAlpha - 0.001);

@@ -989,6 +989,7 @@ namespace DeepWaters
 		private const float TerrainTextureStrength = 0.45f;
 		private const float DfuGroundTextureStrength = 0.25f;
 		private const float SwampGroundTextureStrength = 0.90f;
+		private const float NightAmbientBoost = 0.72f;
 
 		private static readonly int MainTexProperty = Shader.PropertyToID("_MainTex");
 		private static readonly int SandColorProperty = Shader.PropertyToID("_SandColor");
@@ -997,7 +998,18 @@ namespace DeepWaters
 		private static readonly int SwampColorProperty = Shader.PropertyToID("_SwampColor");
 		private static readonly int TextureWorldScaleProperty = Shader.PropertyToID("_TextureWorldScale");
 		private static readonly int TextureStrengthProperty = Shader.PropertyToID("_TextureStrength");
+		private static readonly int AmbientBoostProperty = Shader.PropertyToID("_AmbientBoost");
 		private static readonly Dictionary<int, Material> materials = new Dictionary<int, Material>();
+
+		internal static void UpdateLighting()
+		{
+			float ambientBoost = Mathf.Lerp(NightAmbientBoost, 1f, DeepWaters.GetDaylightFactor());
+			foreach (Material material in materials.Values)
+			{
+				if (material != null && material.HasProperty(AmbientBoostProperty))
+					material.SetFloat(AmbientBoostProperty, ambientBoost);
+			}
+		}
 
 		internal static Material GetMaterial(int worldClimate)
 		{
@@ -1026,6 +1038,8 @@ namespace DeepWaters
 				ApplyRegionalTexture(material, textureArchive, textureRecord, textureStrength, TerrainTextureWorldScale);
 				if (!dfuGroundTexture || worldClimate == (int)MapsFile.Climates.Swamp)
 					ApplyBiomePalette(material, worldClimate);
+				if (material.HasProperty(AmbientBoostProperty))
+					material.SetFloat(AmbientBoostProperty, Mathf.Lerp(NightAmbientBoost, 1f, DeepWaters.GetDaylightFactor()));
 				materials[key] = material;
 			}
 			catch (System.Exception ex)

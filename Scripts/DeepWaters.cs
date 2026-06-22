@@ -284,6 +284,7 @@ namespace DeepWaters
         void Update()
         {
             DeepWaterRuntime.Pump();
+			DeepWaterFloorMaterial.UpdateLighting();
 			SuppressVanillaWaterEncounters();
 			UnderwaterDecorations.ProcessWorkQueue();
 			UnderwaterEncounterPulse.Pump();
