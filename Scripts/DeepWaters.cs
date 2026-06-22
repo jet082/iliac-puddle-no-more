@@ -33,6 +33,7 @@ namespace DeepWaters
 		private const float MaxFogDistanceMultiplier = 6.0f;
 		private const float MinSwimSpeedMultiplier = 0.25f;
 		private const float MaxSwimSpeedMultiplier = 30.0f;
+		private static readonly Color NightUnderwaterFogTint = new Color(0.035f, 0.065f, 0.075f, 1f);
 
 		internal float WaterDepth { get; private set; } = 200f;
 		internal bool SpawnWaterSurfaces { get; private set; } = true;
@@ -60,7 +61,7 @@ namespace DeepWaters
 
 		internal float WaterSurfaceTopAlpha
 		{
-			get { return TransparencySliderToAlpha(WaterSurfaceTopTransparency); }
+			get { return TopTransparencySliderToAlpha(WaterSurfaceTopTransparency); }
 		}
 
 		internal float WaterSurfaceBottomAlpha
@@ -91,15 +92,29 @@ namespace DeepWaters
 
 		internal static Color GetUnderwaterFogColor()
 		{
+			Color fogColor = new Color32(14, 25, 21, 255);
 			GameManager gameManager = GameManager.Instance;
 			if (gameManager != null &&
 				gameManager.PlayerEnterExit != null &&
 				gameManager.PlayerEnterExit.UnderwaterFog != null)
 			{
-				return gameManager.PlayerEnterExit.UnderwaterFog.waterFogColor;
+				fogColor = gameManager.PlayerEnterExit.UnderwaterFog.waterFogColor;
 			}
 
-			return new Color32(14, 25, 21, 255);
+			Color nightTint = NightUnderwaterFogTint;
+			nightTint.a = fogColor.a;
+			return Color.Lerp(nightTint, fogColor, GetDaylightFactor());
+		}
+
+		internal static float GetDaylightFactor()
+		{
+			DaggerfallUnity dfUnity = DaggerfallUnity.Instance;
+			if (dfUnity != null && dfUnity.WorldTime != null && dfUnity.WorldTime.Now.IsNight)
+				return 0f;
+
+			GameManager gameManager = GameManager.Instance;
+			SunlightManager sunlightManager = gameManager != null ? gameManager.SunlightManager : null;
+			return sunlightManager != null ? Mathf.Clamp01(sunlightManager.DaylightScale) : 1f;
 		}
 
         [Invoke(StateManager.StateTypes.Start, 200)]
@@ -189,6 +204,12 @@ namespace DeepWaters
 			return slider <= 0.1f
 				? Mathf.Lerp(1f, 0.98f, slider / 0.1f)
 				: Mathf.Lerp(0.98f, 0f, (slider - 0.1f) / 0.9f);
+		}
+
+		private static float TopTransparencySliderToAlpha(float sliderValue)
+		{
+			float slider = Mathf.Clamp01(sliderValue);
+			return 1f - slider * slider;
 		}
 
 		private static float FogDistanceSliderToMultiplier(float sliderValue)

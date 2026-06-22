@@ -76,13 +76,13 @@ namespace DeepWaters
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
 			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test",
-			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night"
+			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
 			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt", "distance fog test",
-			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night"
+			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater"
 		};
 
 		private static readonly HashSet<string> BiomeVisualProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

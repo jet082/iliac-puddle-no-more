@@ -45,7 +45,8 @@ namespace DeepWaters
 		private const float TopSurfaceFogStrengthMultiplier = 1.0f;
 		private const float TopSurfaceFalloffMultiplier = 1.0f;
 		private const float MaximumTopSurfaceVisionDistance = 36f;
-		private const float NearOpaqueTopSurfaceAlpha = 0.975f;
+		private const float NearOpaqueTopSurfaceAlpha = 0.95f;
+		private const float TopSurfaceVisionBoostMultiplier = 6.0f;
 		private const float OpaqueTopSurfaceVisionDistance = 10000f;
 
 		internal const float SurfaceTextureTiling = 128f;
@@ -246,13 +247,7 @@ namespace DeepWaters
 
 		private static float GetDaylightFactor()
 		{
-			DaggerfallUnity dfUnity = DaggerfallUnity.Instance;
-			if (dfUnity != null && dfUnity.WorldTime != null && dfUnity.WorldTime.Now.IsNight)
-				return 0f;
-
-			GameManager gameManager = GameManager.Instance;
-			SunlightManager sunlightManager = gameManager != null ? gameManager.SunlightManager : null;
-			return sunlightManager != null ? Mathf.Clamp01(sunlightManager.DaylightScale) : 1f;
+			return DeepWaters.GetDaylightFactor();
 		}
 
 		private static void ApplySharedWaterProperties(Material material)
@@ -365,7 +360,10 @@ namespace DeepWaters
 			if (IsTopSurfaceNearOpaque())
 				return OpaqueTopSurfaceVisionDistance;
 
-			return GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier;
+			float normalVision = GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier;
+			float opacity = DeepWaters.Instance.WaterSurfaceTopAlpha;
+			float boost = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.55f, NearOpaqueTopSurfaceAlpha, opacity));
+			return Mathf.Lerp(normalVision, normalVision * TopSurfaceVisionBoostMultiplier, boost);
 		}
 
 		private static bool IsTopSurfaceNearOpaque()

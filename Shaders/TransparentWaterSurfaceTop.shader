@@ -159,10 +159,12 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 float viewDist = distance(i.worldPos, _WorldSpaceCameraPos);
                 float horizonFade = smoothstep(_SurfaceOpaqueFadeStart, max(_SurfaceOpaqueFadeStart + 1.0, _SurfaceOpaqueFadeEnd), viewDist);
 
-                // The surface film (configured top transparency) is the minimum
-                // opacity; the water column adds opacity on top as it deepens, so
-                // a clear film still hides a deep seabed.
-                float finalAlpha = saturate(max(max(surfaceOpacity, bodyOpacity), horizonFade));
+                // The surface film (configured top transparency) drives the
+                // visible opacity. Depth/horizon can thicken it a little, but
+                // not so much that every slider value collapses into the same
+                // look over deep water.
+                float depthOpacity = max(bodyOpacity, horizonFade);
+                float finalAlpha = saturate(surfaceOpacity + (1.0 - surfaceOpacity) * depthOpacity * 0.28);
                 clip(finalAlpha - 0.001);
 
                 fixed4 col;

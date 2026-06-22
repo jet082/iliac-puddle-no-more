@@ -311,6 +311,8 @@ namespace DeepWaters
         private static readonly Color DefaultAbsorption = new Color(1.80f, 1.25f, 1.05f, 1f);
         private static readonly Color DefaultScatter = new Color(0.090f, 0.165f, 0.155f, 1f);
         private static readonly Color DefaultDeepWaterColor = new Color(0.012f, 0.022f, 0.026f, 1f);
+        private static readonly Color NightScatter = new Color(0.020f, 0.040f, 0.045f, 1f);
+        private static readonly Color NightDeepWaterColor = new Color(0.003f, 0.006f, 0.009f, 1f);
 
         /// <summary>
         /// The exact ambient color the fog shader's far curtain converges to,
@@ -330,6 +332,10 @@ namespace DeepWaters
             float dfuLuma = dfuWater.r * 0.299f + dfuWater.g * 0.587f + dfuWater.b * 0.114f;
             Color dfuTeal = new Color(dfuLuma * 0.60f, dfuLuma * 0.95f, dfuLuma * 0.85f, 1f);
             Color scatter = Color.Lerp(DefaultScatter, dfuTeal, 0.25f);
+            Color deepWater = DefaultDeepWaterColor;
+            float daylight = DeepWaters.GetDaylightFactor();
+            scatter = Color.Lerp(NightScatter, scatter, daylight);
+            deepWater = Color.Lerp(NightDeepWaterColor, deepWater, daylight);
 
             // Mirror the shader's camera depth darkening.
             float cameraY = GameManager.Instance != null && GameManager.Instance.MainCamera != null
@@ -344,7 +350,7 @@ namespace DeepWaters
                                     Mathf.Max(0.001f, depthDarkeningEnd - DepthDarkeningStart));
             float depthDarkening = t * t * (3f - 2f * t);
 
-            return Color.Lerp(scatter, DefaultDeepWaterColor,
+            return Color.Lerp(scatter, deepWater,
                 Mathf.Clamp01(depthDarkening * 0.85f + fogStrength * 0.18f));
         }
 
@@ -481,9 +487,11 @@ namespace DeepWaters
             float dfuLuma = dfuWater.r * 0.299f + dfuWater.g * 0.587f + dfuWater.b * 0.114f;
             Color dfuTeal = new Color(dfuLuma * 0.60f, dfuLuma * 0.95f, dfuLuma * 0.85f, 1f);
             Color scatter = Color.Lerp(DefaultScatter, dfuTeal, 0.25f);
+            float daylight = DeepWaters.GetDaylightFactor();
+            scatter = Color.Lerp(NightScatter, scatter, daylight);
             mat.SetColor(ScatterColorProperty, scatter);
             mat.SetFloat(ScatterStrengthProperty, Mathf.Lerp(0.85f, 1.30f, fogStrength));
-            mat.SetColor(DeepWaterColorProperty, DefaultDeepWaterColor);
+            mat.SetColor(DeepWaterColorProperty, Color.Lerp(NightDeepWaterColor, DefaultDeepWaterColor, daylight));
         }
 
         // Send NON-NORMALIZED world-space rays such that
