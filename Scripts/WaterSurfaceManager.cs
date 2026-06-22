@@ -30,6 +30,7 @@ namespace DeepWaters
 		private static readonly int WaterSurfaceFalloffProperty = Shader.PropertyToID("_WaterSurfaceFalloff");
 		private static readonly int SurfaceOpaqueFadeStartProperty = Shader.PropertyToID("_SurfaceOpaqueFadeStart");
 		private static readonly int SurfaceOpaqueFadeEndProperty = Shader.PropertyToID("_SurfaceOpaqueFadeEnd");
+		private static readonly int PlayerPositionProperty = Shader.PropertyToID("_DeepWatersPlayerPosition");
 		private static readonly int HorizonColorProperty = Shader.PropertyToID("_HorizonColor");
 		private static readonly int SrcBlendProperty = Uniforms.SrcBlend;
 		private static readonly int DstBlendProperty = Uniforms.DstBlend;
@@ -44,6 +45,7 @@ namespace DeepWaters
 		private const float TopSurfaceVisionMultiplier = 1.0f;
 		private const float TopSurfaceFogStrengthMultiplier = 1.0f;
 		private const float TopSurfaceFalloffMultiplier = 1.0f;
+		private const float TopSurfaceOpaqueEndVisionMultiplier = 0.55f;
 		private const float MaximumTopSurfaceVisionDistance = 36f;
 		private const float NearOpaqueTopSurfaceAlpha = 0.95f;
 		private const float OpaqueTopSurfaceVisionDistance = 10000f;
@@ -201,6 +203,12 @@ namespace DeepWaters
 
 			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
 				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistanceForMaterial());
+			if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
+				material.SetFloat(SurfaceOpaqueFadeStartProperty, 0f);
+			if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
+				material.SetFloat(SurfaceOpaqueFadeEndProperty, GetTopSurfaceOpaqueFadeEnd());
+			if (material.HasProperty(PlayerPositionProperty))
+				material.SetVector(PlayerPositionProperty, GetPlayerPositionForShader());
 		}
 
 		private static void ApplyDynamicUndersideSettings(Material material)
@@ -274,13 +282,13 @@ namespace DeepWaters
 
 			// Opaque horizon curtain: the surface is fully opaque past this range,
 			// hiding the loaded-world edge behind an opaque sea.
-			float curtainVision = GetTopSurfaceVisionDistance();
-			float fogStrength = GetWaterColumnFogStrength();
-			float fogCurtain = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.25f, 0.5f, fogStrength));
+			float curtainVision = GetTopSurfaceOpaqueFadeEnd();
 			if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
-				material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * Mathf.Lerp(0.45f, 0.20f, fogCurtain));
+				material.SetFloat(SurfaceOpaqueFadeStartProperty, 0f);
 			if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
-				material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * Mathf.Lerp(2.15f, 1.00f, fogCurtain));
+				material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision);
+			if (material.HasProperty(PlayerPositionProperty))
+				material.SetVector(PlayerPositionProperty, GetPlayerPositionForShader());
 
 			if (material.HasProperty(HorizonColorProperty))
 				material.SetColor(HorizonColorProperty, DeepWaters.GetUnderwaterFogColor());
@@ -362,6 +370,23 @@ namespace DeepWaters
 				return OpaqueTopSurfaceVisionDistance;
 
 			return GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier;
+		}
+
+		private static float GetTopSurfaceOpaqueFadeEnd()
+		{
+			return Mathf.Max(1f, DeepWaters.Instance.UnderwaterVisionDistance * TopSurfaceOpaqueEndVisionMultiplier);
+		}
+
+		private static Vector4 GetPlayerPositionForShader()
+		{
+			Vector3 position;
+			if (!DeepWaterWorld.TryGetPlayerPosition(out position))
+			{
+				Camera camera = Camera.main;
+				position = camera != null ? camera.transform.position : Vector3.zero;
+			}
+
+			return new Vector4(position.x, position.y, position.z, 1f);
 		}
 
 		private static bool IsTopSurfaceNearOpaque()

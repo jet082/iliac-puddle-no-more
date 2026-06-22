@@ -22,6 +22,7 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
         _WaterSurfaceFalloff ("Surface distance falloff", Range(0, 1)) = 0.5
         _SurfaceOpaqueFadeStart ("Surface opaque fade start", Float) = 42.0
         _SurfaceOpaqueFadeEnd ("Surface opaque fade end", Float) = 160.0
+        _DeepWatersPlayerPosition ("Player position", Vector) = (0, 0, 0, 1)
 
         _ScrollX ("Wave scroll speed X", Float) = 0.0225
         _ScrollY ("Wave scroll speed Y", Float) = 0.0375
@@ -70,6 +71,7 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
             float _WaterSurfaceFalloff;
             float _SurfaceOpaqueFadeStart;
             float _SurfaceOpaqueFadeEnd;
+            float4 _DeepWatersPlayerPosition;
             float _ScrollX;
             float _ScrollY;
             float _DeepWatersUnderwater;
@@ -130,12 +132,13 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 // than from below. Falloff shortens it: 0 = gradual, 1 = swift.
                 float visionRef = max(1.0, _WaterSurfaceVisionDistance * lerp(1.6, 0.35, falloff));
 
+                float surfaceDist = distance(i.worldPos.xz, _DeepWatersPlayerPosition.xz);
                 float rawDepth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.screenPos.xy / i.screenPos.w);
                 bool missingDepth = IsNoDepth(rawDepth);
                 float waterPath;
                 if (missingDepth)
                 {
-                    waterPath = visionRef * 4.0;
+                    waterPath = surfaceDist;
                 }
                 else
                 {
@@ -156,27 +159,14 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 // outdoor equivalent of the dungeon walls that hide DFU's
                 // void. Without it the void is visible across open sea
                 // whenever the film is transparent.
-                float viewDist = distance(i.worldPos, _WorldSpaceCameraPos);
-                float horizonFade = smoothstep(_SurfaceOpaqueFadeStart, max(_SurfaceOpaqueFadeStart + 1.0, _SurfaceOpaqueFadeEnd), viewDist);
+                float fadeDist = max(surfaceDist, waterPath);
+                float horizonFade = saturate(fadeDist / max(1.0, _SurfaceOpaqueFadeEnd));
 
-                // The surface film (configured top transparency) drives the
-                // visible opacity. Depth/horizon thicken it with the falloff
-                // setting, but not so much that every slider value collapses
-                // into the same look over deep water.
-                float depthOpacity = max(bodyOpacity, horizonFade);
-                float distanceOpacityStrength = lerp(0.45, 0.90, falloff) * lerp(0.65, 1.0, fogStrength);
-                float cappedAlpha = saturate(surfaceOpacity + (1.0 - surfaceOpacity) * depthOpacity * distanceOpacityStrength);
-                float fogMatchedAlpha = saturate(max(surfaceOpacity, depthOpacity));
-                float fogMatchedWeight = smoothstep(0.25, 0.50, fogStrength);
-                float finalAlpha = lerp(cappedAlpha, fogMatchedAlpha, fogMatchedWeight);
+                float finalAlpha = lerp(surfaceOpacity, 1.0, horizonFade);
                 clip(finalAlpha - 0.001);
 
                 fixed4 col;
-                // Distance should make the surface opaque, not reveal a fog
-                // sheet from above. Only the actual visible water column tints
-                // toward fog; the far curtain remains surface-colored.
-                float columnTint = bodyOpacity * 0.88 * (1.0 - horizonFade);
-                col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, columnTint);
+                col.rgb = surfaceRgb;
                 col.a = finalAlpha;
                 return col;
             }
