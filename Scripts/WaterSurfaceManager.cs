@@ -45,6 +45,7 @@ namespace DeepWaters
 		private const float TopSurfaceFogStrengthMultiplier = 1.0f;
 		private const float TopSurfaceFalloffMultiplier = 1.0f;
 		private const float MaximumTopSurfaceVisionDistance = 36f;
+		private const float OpaqueTopSurfaceVisionDistance = 10000f;
 
 		internal const float SurfaceTextureTiling = 128f;
 
@@ -160,9 +161,12 @@ namespace DeepWaters
 			if (material.HasProperty(WaterColumnFogStrengthProperty))
 				material.SetFloat(WaterColumnFogStrengthProperty, Mathf.Clamp01(GetWaterColumnFogStrength() * TopSurfaceFogStrengthMultiplier));
 			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
-				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier);
+				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistanceForMaterial());
 			if (material.HasProperty(WaterSurfaceFalloffProperty))
 				material.SetFloat(WaterSurfaceFalloffProperty, Mathf.Clamp01(DeepWaters.Instance.WaterSurfaceDistanceFalloff * TopSurfaceFalloffMultiplier));
+
+			if (material.HasProperty(ZWriteProperty))
+				material.SetInt(ZWriteProperty, DeepWaters.Instance.WaterSurfaceTopAlpha >= 0.995f ? 1 : 0);
 		}
 
 		private static void ConfigureUndersideMaterial(Material material)
@@ -190,6 +194,12 @@ namespace DeepWaters
 				color.a = DeepWaters.Instance.WaterSurfaceTopAlpha;
 				material.SetColor(ColorProperty, color);
 			}
+
+			if (material.HasProperty(ZWriteProperty))
+				material.SetInt(ZWriteProperty, DeepWaters.Instance.WaterSurfaceTopAlpha >= 0.995f ? 1 : 0);
+
+			if (material.HasProperty(WaterSurfaceVisionDistanceProperty))
+				material.SetFloat(WaterSurfaceVisionDistanceProperty, GetTopSurfaceVisionDistanceForMaterial());
 		}
 
 		private static void ApplyDynamicUndersideSettings(Material material)
@@ -347,6 +357,14 @@ namespace DeepWaters
 		private static float GetTopSurfaceVisionDistance()
 		{
 			return Mathf.Min(DeepWaters.Instance.UnderwaterVisionDistance, MaximumTopSurfaceVisionDistance);
+		}
+
+		private static float GetTopSurfaceVisionDistanceForMaterial()
+		{
+			if (DeepWaters.Instance.WaterSurfaceTopAlpha >= 0.995f)
+				return OpaqueTopSurfaceVisionDistance;
+
+			return GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier;
 		}
 	}
 
