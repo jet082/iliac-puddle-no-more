@@ -160,17 +160,21 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 float horizonFade = smoothstep(_SurfaceOpaqueFadeStart, max(_SurfaceOpaqueFadeStart + 1.0, _SurfaceOpaqueFadeEnd), viewDist);
 
                 // The surface film (configured top transparency) drives the
-                // visible opacity. Depth/horizon can thicken it a little, but
-                // not so much that every slider value collapses into the same
-                // look over deep water.
+                // visible opacity. Depth/horizon thicken it with the falloff
+                // setting, but not so much that every slider value collapses
+                // into the same look over deep water.
                 float depthOpacity = max(bodyOpacity, horizonFade);
-                float finalAlpha = saturate(surfaceOpacity + (1.0 - surfaceOpacity) * depthOpacity * 0.28);
+                float distanceOpacityStrength = lerp(0.45, 0.90, falloff) * lerp(0.65, 1.0, fogStrength);
+                float cappedAlpha = saturate(surfaceOpacity + (1.0 - surfaceOpacity) * depthOpacity * distanceOpacityStrength);
+                float fogMatchedAlpha = saturate(max(surfaceOpacity, depthOpacity));
+                float fogMatchedWeight = smoothstep(0.25, 0.50, fogStrength);
+                float finalAlpha = lerp(cappedAlpha, fogMatchedAlpha, fogMatchedWeight);
                 clip(finalAlpha - 0.001);
 
                 fixed4 col;
-                // Distance makes the surface opaque, not fog-colored. Fog still
-                // tints visible water-column depth, but the far opaque surface
-                // keeps the wave/surface color instead of becoming a dark slab.
+                // Distance should make the surface opaque, not reveal a fog
+                // sheet from above. Only the actual visible water column tints
+                // toward fog; the far curtain remains surface-colored.
                 float columnTint = bodyOpacity * 0.88 * (1.0 - horizonFade);
                 col.rgb = lerp(surfaceRgb, _UnderwaterFogColor.rgb, columnTint);
                 col.a = finalAlpha;

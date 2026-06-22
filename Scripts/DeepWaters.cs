@@ -61,12 +61,12 @@ namespace DeepWaters
 
 		internal float WaterSurfaceTopAlpha
 		{
-			get { return TopTransparencySliderToAlpha(WaterSurfaceTopTransparency); }
+			get { return SurfaceTransparencySliderToAlpha(WaterSurfaceTopTransparency); }
 		}
 
 		internal float WaterSurfaceBottomAlpha
 		{
-			get { return TransparencySliderToAlpha(WaterSurfaceBottomTransparency); }
+			get { return SurfaceTransparencySliderToAlpha(WaterSurfaceBottomTransparency); }
 		}
 
 		internal float UnderwaterFogDensityMax
@@ -196,17 +196,7 @@ namespace DeepWaters
 			return Mathf.Clamp01(sliderValue) * (valueAtMidpoint / SliderMidpoint);
 		}
 
-		private static float TransparencySliderToAlpha(float sliderValue)
-		{
-			// Piecewise mapping: low settings stay nearly opaque, then opacity
-			// falls linearly to fully invisible at 1.0.
-			float slider = Mathf.Clamp01(sliderValue);
-			return slider <= 0.1f
-				? Mathf.Lerp(1f, 0.98f, slider / 0.1f)
-				: Mathf.Lerp(0.98f, 0f, (slider - 0.1f) / 0.9f);
-		}
-
-		private static float TopTransparencySliderToAlpha(float sliderValue)
+		private static float SurfaceTransparencySliderToAlpha(float sliderValue)
 		{
 			float slider = Mathf.Clamp01(sliderValue);
 			return 1f - slider * slider;

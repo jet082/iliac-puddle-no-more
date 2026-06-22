@@ -98,12 +98,12 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
 
                 float undersideOpacity = saturate(_UndersideAlpha);
 
-                // Opaque horizon curtain (see the top shader): from below, the
-                // distant underside goes fully opaque so the sky backdrop and
-                // the loaded-world edge can never be seen through the surface
-                // at range.
+                // Distance wins exactly like the top sheet's old good behavior:
+                // local transparency is honored nearby, and the horizon becomes
+                // a real opaque curtain instead of a soft tint wash.
                 float viewDist = distance(i.worldPos, _WorldSpaceCameraPos);
                 float horizonFade = smoothstep(_SurfaceOpaqueFadeStart, max(_SurfaceOpaqueFadeStart + 1.0, _SurfaceOpaqueFadeEnd), viewDist);
+                float fogStrength = saturate(_WaterColumnFogStrength);
                 undersideOpacity = saturate(max(undersideOpacity, horizonFade));
                 clip(undersideOpacity - 0.001);
 
@@ -117,7 +117,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
                 col.rgb = lerp(
                     surfaceRgb,
                     _UnderwaterFogColor.rgb,
-                    saturate(_WaterColumnFogStrength) * 0.35);
+                    fogStrength * 0.35);
                 col.a = undersideOpacity;
                 return col;
             }

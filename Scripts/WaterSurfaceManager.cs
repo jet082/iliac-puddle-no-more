@@ -46,7 +46,6 @@ namespace DeepWaters
 		private const float TopSurfaceFalloffMultiplier = 1.0f;
 		private const float MaximumTopSurfaceVisionDistance = 36f;
 		private const float NearOpaqueTopSurfaceAlpha = 0.95f;
-		private const float TopSurfaceVisionBoostMultiplier = 6.0f;
 		private const float OpaqueTopSurfaceVisionDistance = 10000f;
 
 		internal const float SurfaceTextureTiling = 128f;
@@ -215,12 +214,12 @@ namespace DeepWaters
 			float shallow = GetPlayerShallowWaterFactor();
 			float bottomAlpha = DeepWaters.Instance.WaterSurfaceBottomAlpha;
 			if (material.HasProperty(UndersideAlphaProperty))
-				material.SetFloat(UndersideAlphaProperty, Mathf.Lerp(bottomAlpha, bottomAlpha * 0.35f, shallow));
+				material.SetFloat(UndersideAlphaProperty, bottomAlpha);
 
 			// Near shore, a close opaque curtain reads as a hard dark strip at
 			// the waterline. Keep the void guard in deep water; push it out in
 			// shallow columns where terrain already closes the horizon.
-			float curtainVision = DeepWaters.Instance.UnderwaterVisionDistance;
+			float curtainVision = GetTopSurfaceVisionDistance();
 			if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
 				material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * Mathf.Lerp(1.7f, 4.0f, shallow));
 			if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
@@ -276,10 +275,12 @@ namespace DeepWaters
 			// Opaque horizon curtain: the surface is fully opaque past this range,
 			// hiding the loaded-world edge behind an opaque sea.
 			float curtainVision = GetTopSurfaceVisionDistance();
+			float fogStrength = GetWaterColumnFogStrength();
+			float fogCurtain = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.25f, 0.5f, fogStrength));
 			if (material.HasProperty(SurfaceOpaqueFadeStartProperty))
-				material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * 0.45f);
+				material.SetFloat(SurfaceOpaqueFadeStartProperty, curtainVision * Mathf.Lerp(0.45f, 0.20f, fogCurtain));
 			if (material.HasProperty(SurfaceOpaqueFadeEndProperty))
-				material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * 2.15f);
+				material.SetFloat(SurfaceOpaqueFadeEndProperty, curtainVision * Mathf.Lerp(2.15f, 1.00f, fogCurtain));
 
 			if (material.HasProperty(HorizonColorProperty))
 				material.SetColor(HorizonColorProperty, DeepWaters.GetUnderwaterFogColor());
@@ -360,10 +361,7 @@ namespace DeepWaters
 			if (IsTopSurfaceNearOpaque())
 				return OpaqueTopSurfaceVisionDistance;
 
-			float normalVision = GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier;
-			float opacity = DeepWaters.Instance.WaterSurfaceTopAlpha;
-			float boost = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.55f, NearOpaqueTopSurfaceAlpha, opacity));
-			return Mathf.Lerp(normalVision, normalVision * TopSurfaceVisionBoostMultiplier, boost);
+			return GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier;
 		}
 
 		private static bool IsTopSurfaceNearOpaque()
