@@ -372,9 +372,9 @@ namespace DeepWaters
 			return GetTopSurfaceVisionDistance() * TopSurfaceVisionMultiplier;
 		}
 
-		private static float GetTopSurfaceOpaqueFadeEnd()
+		internal static float GetTopSurfaceOpaqueFadeEnd()
 		{
-			return Mathf.Max(1f, DeepWaters.Instance.UnderwaterVisionDistance * TopSurfaceOpaqueEndVisionMultiplier);
+			return Mathf.Max(1f, DeepWaterWorld.UnderwaterVisionDistance * TopSurfaceOpaqueEndVisionMultiplier);
 		}
 
 		private static Vector4 GetPlayerPositionForShader()

@@ -55,6 +55,7 @@ namespace DeepWaters
         private PassiveFishSchool school;
         private float fleeDartHoldMin = DefaultFleeDartHoldMin;
         private float fleeDartHoldMax = DefaultFleeDartHoldMax;
+		private Renderer visibilityRenderer;
         private DeepWaterColumn cachedColumn;
         private float nextWaterColumnRefreshTime;
         private bool hasCachedColumn;
@@ -68,6 +69,7 @@ namespace DeepWaters
             school = fishSchool;
             fleeDartHoldMin = Mathf.Max(0.1f, dartHoldMin);
             fleeDartHoldMax = Mathf.Max(fleeDartHoldMin, dartHoldMax);
+			visibilityRenderer = GetComponent<Renderer>();
             if (school != null)
                 schoolOffset = transform.position - school.Center;
 
@@ -90,6 +92,7 @@ namespace DeepWaters
                 return;
 
             Vector3 playerPos = gameManager.PlayerObject.transform.position;
+			UpdateAboveSurfaceVisibility(gameManager, playerPos);
             Vector3 fromPlayer = transform.position - playerPos;
             float speed = BaseCruiseSpeed * cruiseSpeedMultiplier;
             float turnSharpness = CruiseTurnSharpness;
@@ -140,6 +143,27 @@ namespace DeepWaters
             ClampToWater();
             DeepWaterRendering.FaceMainCamera(transform);
         }
+
+		private void UpdateAboveSurfaceVisibility(GameManager gameManager, Vector3 playerPos)
+		{
+			if (visibilityRenderer == null)
+				visibilityRenderer = GetComponent<Renderer>();
+			if (visibilityRenderer == null || gameManager.MainCamera == null)
+				return;
+
+			float oceanY;
+			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) ||
+				gameManager.MainCamera.transform.position.y < oceanY - 0.05f)
+			{
+				visibilityRenderer.enabled = true;
+				return;
+			}
+
+			Vector3 flatDelta = transform.position - playerPos;
+			flatDelta.y = 0f;
+			float visibleDistance = WaterSurfaceResources.GetTopSurfaceOpaqueFadeEnd();
+			visibilityRenderer.enabled = flatDelta.sqrMagnitude <= visibleDistance * visibleDistance;
+		}
 
         // Probe forward in the swim direction. If we'd hit anything solid, hold
         // position this frame and reflect the swim/target direction off the
