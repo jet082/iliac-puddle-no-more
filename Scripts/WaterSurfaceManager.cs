@@ -117,6 +117,29 @@ namespace DeepWaters
 		{
 			ApplyDynamicTopSettings(sharedTopMaterial);
 			ApplyDynamicUndersideSettings(sharedUndersideMaterial);
+			ApplySceneTintGlobal();
+		}
+
+		private static readonly int SceneTintProperty = Shader.PropertyToID("_DeepWatersSceneTint");
+
+		// Tint the seafloor + decorations by the water surface color, but ONLY
+		// when the camera is above the surface (looking down through the water).
+		// rgb = the water tint, a = 1 enables it; underwater we send a = 0 so the
+		// seafloor/decorations render untinted (the underwater view is unchanged).
+		private static void ApplySceneTintGlobal()
+		{
+			Color tint = new Color(1f, 1f, 1f, 0f);
+			GameManager gameManager = GameManager.Instance;
+			Camera cam = gameManager != null ? gameManager.MainCamera : null;
+			float oceanY;
+			if (cam != null && DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) &&
+				cam.transform.position.y > oceanY)
+			{
+				tint = GetTimeAdjustedSurfaceTint();
+				tint.a = 1f;
+			}
+
+			Shader.SetGlobalColor(SceneTintProperty, tint);
 		}
 
 		private static Material CreateMaterial(string shaderName, string shaderAssetName, string materialName)

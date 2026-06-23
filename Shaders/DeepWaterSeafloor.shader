@@ -51,6 +51,10 @@ Shader "DeepWaters/Seafloor"
             float _ShelfMix;
             float _DepthGamma;
             float _AmbientBoost;
+            // Water tint applied to the seafloor when viewed from above the
+            // surface (rgb = the water surface tint, a = tint strength / gate).
+            // a == 0 (incl. unset) = no tint, so the underwater view is untouched.
+            float4 _DeepWatersSceneTint;
 
             struct appdata
             {
@@ -110,7 +114,12 @@ Shader "DeepWaters/Seafloor"
                 float textureShade = lerp(1.0, lerp(0.55, 1.45, terrainLum), textureStrength * 0.75);
                 baseColor = textureTint * textureShade;
 
-                fixed4 col = fixed4(baseColor * _AmbientBoost, 1.0);
+                // Tint the seafloor by the water color when seen from above the
+                // surface, so day water reads clear and night water genuinely
+                // dims (preserving contrast); untouched underwater.
+                fixed3 sceneTint = lerp(fixed3(1, 1, 1), _DeepWatersSceneTint.rgb, _DeepWatersSceneTint.a);
+
+                fixed4 col = fixed4(baseColor * _AmbientBoost * sceneTint, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, col);
                 return col;
             }

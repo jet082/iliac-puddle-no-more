@@ -38,6 +38,9 @@ Shader "DeepWaters/UnderwaterBillboardBatchUnlit"
             fixed4 _Color;
             float _Cutoff;
             float3 _UpVector;
+            // Water tint applied when viewed from above the surface (a = gate;
+            // a == 0/unset = no tint, so the underwater view is untouched).
+            float4 _DeepWatersSceneTint;
 
             struct appdata
             {
@@ -70,6 +73,9 @@ Shader "DeepWaters/UnderwaterBillboardBatchUnlit"
             {
                 fixed4 col = tex2D(_MainTex, i.uv) * _Color;
                 clip(col.a - _Cutoff);
+                // Tint by the water color when seen from above the surface so the
+                // (unlit) decorations dim at night like the rest of the seafloor.
+                col.rgb *= lerp(fixed3(1, 1, 1), _DeepWatersSceneTint.rgb, _DeepWatersSceneTint.a);
                 col.a = 1.0;
                 return col;
             }
