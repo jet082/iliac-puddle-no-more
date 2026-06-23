@@ -32,7 +32,7 @@ namespace DeepWaters
         // MaxLiveFish setting; density below it is set by the frequency setting.
         private const int FishAttemptsPerPixel = 90;
         private const float PassiveFishFrequencyAtMidpoint = 3.0f;
-		private const float MinimumFishColumnDepth = 4f;
+		private const float MinimumFishColumnDepth = 8f;
 		private const float FishSeafloorClearance = 1.2f;
 		private const float FishSurfaceClearance = 1.4f;
 		private const float SchoolMemberMinRadius = 1.2f;

@@ -40,6 +40,10 @@ namespace DeepWaters
 		private static Texture sharedSurfaceTexture;
 		private static readonly Color SurfaceTint = new Color(0.519f, 0.527f, 0.467f, 1f);
 		private static readonly Color NightSurfaceTint = new Color(0.055f, 0.105f, 0.12f, 1f);
+		// "Darker Surface Water" slider endpoints: 0 = barely-tinted (light), the
+		// 0.5 midpoint = SurfaceTint (the default look), 1 = darker.
+		private static readonly Color LightSurfaceTint = new Color(0.72f, 0.78f, 0.82f, 1f);
+		private static readonly Color DarkSurfaceTint = new Color(0.21f, 0.21f, 0.19f, 1f);
 		private static readonly Color FallbackSurfaceColor = new Color(0.075f, 0.24f, 0.38f, 1f);
 		private const float TopSurfaceFogStrengthMultiplier = 1.0f;
 		private const float TopSurfaceOpaqueEndVisionMultiplier = 0.55f;
@@ -243,9 +247,21 @@ namespace DeepWaters
 			return 1f - Mathf.InverseLerp(3f, 12f, column.Depth);
 		}
 
+		private static Color GetBaseSurfaceTint()
+		{
+			// "Darker Surface Water": 0 = no/light tint, 0.5 = default, 1 = darker.
+			float d = DeepWaters.Instance != null ? Mathf.Clamp01(DeepWaters.Instance.DarkerSurfaceWater) : 0.5f;
+			return d <= 0.5f
+				? Color.Lerp(LightSurfaceTint, SurfaceTint, d / 0.5f)
+				: Color.Lerp(SurfaceTint, DarkSurfaceTint, (d - 0.5f) / 0.5f);
+		}
+
 		private static Color GetTimeAdjustedSurfaceTint()
 		{
-			return Color.Lerp(NightSurfaceTint, SurfaceTint, GetDaylightFactor());
+			// Night tint is layered on top via the daylight lerp, so it is
+			// unaffected by the Darker Surface Water slider (which only shapes
+			// the daytime base tint).
+			return Color.Lerp(NightSurfaceTint, GetBaseSurfaceTint(), GetDaylightFactor());
 		}
 
 		private static float GetTimeAdjustedTopSurfaceAlpha()

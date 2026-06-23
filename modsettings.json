@@ -154,6 +154,15 @@
                 {
                     "Min": 0.0,
                     "Max": 1.0,
+                    "Value": 0.0,
+                    "Name": "DarkerSurfaceWater",
+                    "Description": "Darker surface water tint",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 0.0,
+                    "Max": 1.0,
                     "Value": 0.5,
                     "Name": "UnderwaterFogStrength",
                     "Description": "Underwater fog strength",

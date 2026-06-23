@@ -354,6 +354,7 @@ namespace DeepWaters
             dfuBridge.RestoreDungeonState(pex);
             dfuBridge.ApplyWaterAudioState(pex, NoWaterSentinel, PlayerMotor.OnExteriorWaterMethod.None, false);
             pex.UnderwaterFog?.UpdateFog(NoWaterSentinel);
+            RestoreSceneFogColor();
             currentlyForged = false;
             ResetHeadWaterState(false);
             // Crouch ("descend") presses while swimming can latch DFU's real
@@ -770,10 +771,19 @@ namespace DeepWaters
                 OutdoorRenderFogDensityCeiling);
         }
 
+        private static bool sceneFogColorOverridden;
+        private static Color savedSceneFogColor;
+
         private static void ApplyNeutralUnderwaterFogColor()
         {
             if (DeepWaters.Instance == null)
                 return;
+
+            if (!sceneFogColorOverridden)
+            {
+                savedSceneFogColor = RenderSettings.fogColor;
+                sceneFogColorOverridden = true;
+            }
 
             Color waterColor = DeepWaters.GetUnderwaterFogColor();
             float luma = waterColor.r * 0.299f + waterColor.g * 0.587f + waterColor.b * 0.114f;
@@ -782,9 +792,23 @@ namespace DeepWaters
             RenderSettings.fogColor = new Color(neutral, neutral, neutral, waterColor.a);
         }
 
+        // Restore the scene fog color the mod overrode for the underwater look.
+        // Without this the neutral underwater color lingers after surfacing until
+        // DFU/weather happens to rewrite it — the intermittent "fog color stays
+        // after a dunk" report.
+        private static void RestoreSceneFogColor()
+        {
+            if (!sceneFogColorOverridden)
+                return;
+
+            RenderSettings.fogColor = savedSceneFogColor;
+            sceneFogColorOverridden = false;
+        }
+
         private void RestoreAboveSurfacePresentation(PlayerEnterExit pex)
         {
             pex.UnderwaterFog?.UpdateFog(NoWaterSentinel);
+            RestoreSceneFogColor();
         }
 
         private static short PresentationWaterLevelForFog(float oceanSurfaceY)
