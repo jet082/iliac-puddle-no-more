@@ -74,6 +74,9 @@ namespace DeepWaters
         // on pre-v5 bakes (handled inside SampleEdgeDistanceMeters).
 		internal float GetDistanceToEdgeMeters(float worldX, float worldZ)
 		{
+			if (UsesLocalWaterFallback)
+				return LocalWaterFallbackDistanceMeters;
+
             if (!DeepWaterDistanceBake.IsLoaded)
                 return float.MaxValue;
 
@@ -82,16 +85,6 @@ namespace DeepWaters
             float fracX;
             float fracZ;
             GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
-			if (UsesLocalWaterFallback)
-			{
-				float localDistance = DeepWaterDistanceBake.SampleLocalEdgeDistanceMeters(
-					mapPixelX, mapPixelY, fracX, fracZ);
-				if (localDistance < float.MaxValue)
-					return localDistance;
-
-				return LocalWaterFallbackDistanceMeters;
-			}
-
             return DeepWaterDistanceBake.SampleEdgeDistanceMeters(
                 mapPixelX, mapPixelY, fracX, fracZ);
         }
