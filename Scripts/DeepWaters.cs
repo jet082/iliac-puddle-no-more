@@ -245,14 +245,14 @@ namespace DeepWaters
                 return;
             }
 
-            // Pick the bake that matches the active terrain heightmap. Stock
-            // DefaultTerrainSampler means no terrain overhaul (Interesting
-            // Terrains / WoD replace the sampler with their own type), so the
-            // vanilla bake lines the carve/shore data up with vanilla coasts.
-            string assetName = DeepWaterDistanceBake.BakeAssetName;
-            bool vanillaTerrain = DaggerfallUnity.Instance != null &&
-                                  DaggerfallUnity.Instance.TerrainSampler is DefaultTerrainSampler;
-            if (vanillaTerrain)
+			// Pick the bake that matches the active terrain heightmap. WoD can
+			// still expose DefaultTerrainSampler this early, so prefer the WoD
+			// bake whenever its mod is enabled.
+			string assetName = DeepWaterDistanceBake.BakeAssetName;
+			bool vanillaTerrain = !IsWorldOfDaggerfallEnabled() &&
+				DaggerfallUnity.Instance != null &&
+				DaggerfallUnity.Instance.TerrainSampler is DefaultTerrainSampler;
+			if (vanillaTerrain)
             {
                 if (Mod.HasAsset(DeepWaterDistanceBake.VanillaBakeAssetName))
                 {
@@ -280,6 +280,31 @@ namespace DeepWaters
             if (!DeepWaterDistanceBake.TryLoadBytes(bakeAsset.bytes))
                 Debug.LogError("[DeepWaters] Distance bake parse failed — seafloor will not build.");
         }
+
+		private static bool IsWorldOfDaggerfallEnabled()
+		{
+			ModManager manager = ModManager.Instance;
+			if (manager == null)
+				return false;
+
+			foreach (Mod mod in manager.Mods)
+			{
+				if (mod == null || !mod.Enabled)
+					continue;
+
+				if (ContainsWorldOfDaggerfall(mod.FileName) ||
+					ContainsWorldOfDaggerfall(mod.Title))
+					return true;
+			}
+
+			return false;
+		}
+
+		private static bool ContainsWorldOfDaggerfall(string value)
+		{
+			return !string.IsNullOrEmpty(value) &&
+				value.IndexOf("world of daggerfall", System.StringComparison.OrdinalIgnoreCase) >= 0;
+		}
 
         void Update()
         {

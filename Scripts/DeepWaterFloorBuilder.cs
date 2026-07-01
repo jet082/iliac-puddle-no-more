@@ -306,8 +306,7 @@ namespace DeepWaters
                     bool isWater = true;
                     if (isWater && useBakeMask)
                     {
-                        isWater = DeepWaterDistanceBake.IsCarvedWater(
-                            mapPixelX, mapPixelY, fracX, fracZ);
+                        isWater = tile.IsCarvedWater(mapPixelX, mapPixelY, fracX, fracZ);
                     }
 
                     if (!isWater) continue;

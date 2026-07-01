@@ -84,10 +84,17 @@ namespace DeepWaters
             int mapPixelY;
             float fracX;
             float fracZ;
-            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
-            return DeepWaterDistanceBake.SampleEdgeDistanceMeters(
-                mapPixelX, mapPixelY, fracX, fracZ);
-        }
+			GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+			if (ShouldUseLocalEdgeDistance(mapPixelX, mapPixelY, fracX, fracZ))
+			{
+				float localDistance = DeepWaterDistanceBake.SampleLocalEdgeDistanceMeters(
+					mapPixelX, mapPixelY, fracX, fracZ);
+				return localDistance < float.MaxValue ? localDistance : LocalWaterFallbackDistanceMeters;
+			}
+
+			return DeepWaterDistanceBake.SampleEdgeDistanceMeters(
+				mapPixelX, mapPixelY, fracX, fracZ);
+		}
 
         internal bool IsBakedWater(float worldX, float worldZ)
         {
@@ -108,17 +115,21 @@ namespace DeepWaters
         /// read the same global bake value, so they agree on every
         /// boundary cell's carve decision — no per-tile heightmap
         /// reclassification, no map-pixel-transition seams. On pre-v4
-        /// bakes (no fine mask), returns false; the caller is expected
-        /// to fall back to the heightmap any-corner check.
+        /// bakes (no fine mask), returns false; local water that the
+		/// pruned fine mask missed is recovered from the loaded tile.
         /// </summary>
-        internal bool IsCarvedWater(float worldX, float worldZ)
-        {
-            int mapPixelX;
-            int mapPixelY;
-            float fracX;
-            float fracZ;
-            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+		internal bool IsCarvedWater(float worldX, float worldZ)
+		{
+			int mapPixelX;
+			int mapPixelY;
+			float fracX;
+			float fracZ;
+			GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
+			return IsCarvedWater(mapPixelX, mapPixelY, fracX, fracZ);
+		}
 
+		internal bool IsCarvedWater(int mapPixelX, int mapPixelY, float fracX, float fracZ)
+		{
 			if (UsesLocalWaterFallback)
 			{
 				if (mapPixelX != MapPixelX || mapPixelY != MapPixelY)
@@ -127,11 +138,34 @@ namespace DeepWaters
 				return DeepWaterWaterClassification.IsLocalPointWater(mapData, fracX, fracZ);
 			}
 
-            if (!DeepWaterDistanceBake.IsLoaded || !DeepWaterDistanceBake.HasFineWaterMask)
-                return false;
+			if (!DeepWaterDistanceBake.IsLoaded || !DeepWaterDistanceBake.HasFineWaterMask)
+				return false;
 
-            return DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracX, fracZ);
-        }
+			if (DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracX, fracZ))
+				return true;
+
+			return IsLocalWaterMissedByFineBake(mapPixelX, mapPixelY, fracX, fracZ);
+		}
+
+		private bool IsLocalWaterMissedByFineBake(int mapPixelX, int mapPixelY, float fracX, float fracZ)
+		{
+			// Some shipped bakes are ocean-pruned; the loaded tile is authoritative for local water.
+			return mapPixelX == MapPixelX &&
+				mapPixelY == MapPixelY &&
+				DeepWaterDistanceBake.HasFineWaterMask &&
+				!DeepWaterDistanceBake.IsCarvedWater(mapPixelX, mapPixelY, fracX, fracZ) &&
+				DeepWaterWaterClassification.IsLocalPointWater(mapData, fracX, fracZ);
+		}
+
+		private bool ShouldUseLocalEdgeDistance(int mapPixelX, int mapPixelY, float fracX, float fracZ)
+		{
+			return mapPixelX == MapPixelX &&
+				mapPixelY == MapPixelY &&
+				DeepWaterDistanceBake.HasFineWaterMask &&
+				DeepWaterWaterClassification.IsLocalPointWater(mapData, fracX, fracZ) &&
+				(!DeepWaterDistanceBake.IsWaterAt(mapPixelX, mapPixelY, fracX, fracZ) ||
+					IsLocalWaterMissedByFineBake(mapPixelX, mapPixelY, fracX, fracZ));
+		}
 
         // Floating-origin-INDEPENDENT coordinate for the bathymetry noise.
         // Anchored to the global map-pixel grid, NOT the Unity origin (which

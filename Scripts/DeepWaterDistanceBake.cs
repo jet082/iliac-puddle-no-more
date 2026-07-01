@@ -295,9 +295,7 @@ namespace DeepWaters
 			if (!loaded || !hasEdgeField || edgeData == null)
 				return SampleDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
 
-			float coarseDistance = BilinearSampleMeters(edgeData, mapPixelX, mapPixelY, fracX, fracZ);
-			float fineDistance = SampleNearbyFineEdgeDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
-			return Mathf.Min(coarseDistance, fineDistance);
+			return BilinearSampleMeters(edgeData, mapPixelX, mapPixelY, fracX, fracZ);
 		}
 
 		public static float SampleLocalEdgeDistanceMeters(int mapPixelX, int mapPixelY, float fracX, float fracZ)

@@ -249,27 +249,26 @@ namespace DeepWaters.Editor
                       "%), fine=" + rawFineWater + "/" + (long)widthCellsFine * heightCellsFine + " (" +
                       (100.0 * rawFineWater / ((long)widthCellsFine * heightCellsFine)).ToString("F1") + "%).");
 
+			byte[] oceanFineMask = (byte[])packedFineMask.Clone();
 			byte[] localFineMask = (byte[])packedFineMask.Clone();
 
-            // 2) Ocean-connectivity BFS on the COARSE mask only, then prune
-            //    the packed fine mask to coarse ocean-connected cells plus a
-            //    one-cell shore neighborhood. This keeps the detailed shore
-            //    carve mask without paying for a 512M-cell fine-mask BFS.
+			// 2) Ocean-connectivity BFS on the COARSE mask only. The coarse
+			//    mask still drives ocean distance/depth, but the shipped fine
+			//    carve mask remains unpruned so local/live water can carve too.
             bool[] coarseMask = BuildOceanConnectedWaterMask(rawCoarseMask, widthCells, heightCells);
             rawCoarseMask = null;
             long connectedFine = PruneFineMaskToCoarseOcean(
-                packedFineMask,
+                oceanFineMask,
                 coarseMask,
                 widthCells,
                 heightCells,
                 widthCellsFine,
                 heightCellsFine);
-
             int connectedCoarse = 0;
             for (int i = 0; i < coarseMask.Length; i++) if (coarseMask[i]) connectedCoarse++;
             Debug.Log("[DeepWaters.Bake] Ocean-connected coarse=" + connectedCoarse +
                       " (" + (100.0 * connectedCoarse / coarseMask.Length).ToString("F1") +
-                      "%); pruned fine=" + connectedFine + " (" +
+                      "%); ocean-near fine=" + connectedFine + " (" +
                       (100.0 * connectedFine / ((long)widthCellsFine * heightCellsFine)).ToString("F1") + "%).");
 
             // 3) Global chamfer BFS on the COARSE mask only. Distance field
@@ -283,15 +282,15 @@ namespace DeepWaters.Editor
             float[] distance = SeedDistanceGrid(coarseMask);
             ChamferDistance(distance, widthCells, heightCells, cellWidth);
 
-            // 3b) Distance-to-carved-EDGE field (coarse, seeded from the FINE
-            //     mask so small islands the coarse mask misses still register as
-            //     shore). Drives the seabed shelf so the floor descends gradually
-            //     from EVERY edge (coast + islands), not just the coarse
-            //     coastline. Global, so adjacent tiles agree — no seams.
-            EditorUtility.DisplayProgressBar("Bake distance field",
-                "Building shore-edge distance...", 0.62f);
-            float[] edgeDistance = BuildEdgeDistance(packedFineMask,
-                widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
+			// 3b) Main ocean depth must use the ocean-pruned fine mask. The
+			//     unpruned mask is kept only for local/disconnected water; using
+			//     it for ocean edge distance makes every tiny local/noisy edge
+			//     collapse the bathymetry back toward zero.
+			EditorUtility.DisplayProgressBar("Bake distance field",
+				"Building shore-edge distance...", 0.62f);
+			float[] edgeDistance = BuildEdgeDistance(oceanFineMask,
+				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
+			oceanFineMask = null;
 			float[] localEdgeDistance = BuildEdgeDistance(localFineMask,
 				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
 			localFineMask = null;
@@ -299,8 +298,8 @@ namespace DeepWaters.Editor
             // 4) Quantize + pack.
             EditorUtility.DisplayProgressBar("Bake distance field",
                 "Quantizing to bytes...", 0.85f);
-            byte[] distanceBytes = Quantize(distance, DistanceScaleMeters);
-            byte[] edgeBytes = Quantize(edgeDistance, DistanceScaleMeters);
+			byte[] distanceBytes = Quantize(distance, DistanceScaleMeters);
+			byte[] edgeBytes = Quantize(edgeDistance, DistanceScaleMeters);
 			byte[] localEdgeBytes = Quantize(localEdgeDistance, DistanceScaleMeters);
             byte[] packedCoarseMask = PackWaterMask(coarseMask);
 
@@ -414,12 +413,13 @@ namespace DeepWaters.Editor
                           heightCellsFine + " (" + fineSub + "/pixel, water=" + fineWater + ").");
             }
 
-            // Same pipeline as Bake(): ocean connectivity -> prune fine -> chamfer
-            // distance -> shore-edge distance -> quantize -> write.
+            // Same pipeline as Bake(): coarse ocean connectivity -> chamfer
+            // distance -> unpruned shore-edge distance -> quantize -> write.
             EditorUtility.DisplayProgressBar("Bake from exact masks", "Ocean connectivity...", 0.30f);
+			byte[] oceanFineMask = (byte[])packedFineMask.Clone();
 			byte[] localFineMask = (byte[])packedFineMask.Clone();
             bool[] coarseMask = BuildOceanConnectedWaterMask(rawCoarse, widthCells, heightCells);
-            PruneFineMaskToCoarseOcean(packedFineMask, coarseMask,
+            PruneFineMaskToCoarseOcean(oceanFineMask, coarseMask,
                 widthCells, heightCells, widthCellsFine, heightCellsFine);
 
             float tileWorldSize = MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale;
@@ -429,9 +429,10 @@ namespace DeepWaters.Editor
             float[] distance = SeedDistanceGrid(coarseMask);
             ChamferDistance(distance, widthCells, heightCells, cellWidth);
 
-            EditorUtility.DisplayProgressBar("Bake from exact masks", "Shore-edge distance...", 0.75f);
-            float[] edgeDistance = BuildEdgeDistance(packedFineMask,
-                widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
+			EditorUtility.DisplayProgressBar("Bake from exact masks", "Shore-edge distance...", 0.75f);
+			float[] edgeDistance = BuildEdgeDistance(oceanFineMask,
+				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
+			oceanFineMask = null;
 			float[] localEdgeDistance = BuildEdgeDistance(localFineMask,
 				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
 			localFineMask = null;
