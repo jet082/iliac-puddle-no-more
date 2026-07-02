@@ -299,16 +299,15 @@ namespace DeepWaters
 						continue;
 					}
 
-					// Reject dry raised land, but keep live-water shore cells:
-					// WoD can promote water over non-flat terrain. The cap
-					// renderer clips those texels, so the floor must exist below.
+					// Reject dry raised land and non-flat shore cells. Live WoD
+					// water can mark raised shoreline as water, but carving floor
+					// there makes the cap and skirt disagree up close.
                     bool flatOceanCell =
                         heights[hy, hx]         <= oceanThreshold + oceanThresholdEps &&
                         heights[hy, hx + 1]     <= oceanThreshold + oceanThresholdEps &&
                         heights[hy + 1, hx]     <= oceanThreshold + oceanThresholdEps &&
                         heights[hy + 1, hx + 1] <= oceanThreshold + oceanThresholdEps;
-					bool liveWaterCell = (useBakeMask || tile.UsesLocalWaterFallback) && localWater;
-					if (!flatOceanCell && !pureBakedWater && !liveWaterCell)
+					if (!flatOceanCell && !pureBakedWater)
 						continue;
 
                     bool isWater = true;

@@ -196,7 +196,8 @@ namespace DeepWaters
             bool isSwimming = hasWaterContact && !standingOnShore && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput);
             bool isPresentationUnderwater = hasWaterContact && !standingOnShore && IsPresentationUnderwater(oceanSurfaceY);
 
-            if (!hasWaterContact &&
+            if (!descendInput &&
+                !hasWaterContact &&
                 (currentlyForged || pex.IsPlayerSwimming || Time.time < shoreAssistAfterWaterUntil) &&
                 TryRecoverToVanillaTerrain(oceanSurfaceY))
             {
@@ -220,7 +221,8 @@ namespace DeepWaters
             if (isSwimming)
                 DismountForSwimming();
 
-            if (!DeepWaterRuntime.IsLoadGraceActive &&
+            if (!descendInput &&
+                !DeepWaterRuntime.IsLoadGraceActive &&
                 (isSwimming || Time.time < shoreAssistAfterWaterUntil) &&
                 OutdoorShoreExitAssist.TryMoveToShore(pex, oceanSurfaceY, false, true))
             {
