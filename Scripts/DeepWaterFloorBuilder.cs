@@ -644,11 +644,6 @@ namespace DeepWaters
 			if (terrain == null || terrain.MapData.heightmapSamples == null || texelDim <= 0)
 				return true;
 
-			float centerX = (texelX + 0.5f) / texelDim;
-			float centerZ = (texelZ + 0.5f) / texelDim;
-			if (DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, centerX, centerZ))
-				return true;
-
 			DaggerfallUnity dfu = DaggerfallUnity.Instance;
 			if (dfu == null || dfu.TerrainSampler == null)
 				return true;

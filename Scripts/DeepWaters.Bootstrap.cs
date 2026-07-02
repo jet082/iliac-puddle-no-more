@@ -76,13 +76,13 @@ namespace DeepWaters
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
 			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test",
-			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "vanillabrokenshelf"
+			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "visualhole", "vanillabrokenshelf"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
 			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt", "distance fog test",
-			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "vanillabrokenshelf"
+			"ledge", "ledge2", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "visualhole", "vanillabrokenshelf"
 		};
 
 		private static readonly HashSet<string> BiomeVisualProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -92,7 +92,7 @@ namespace DeepWaters
 
 		private static readonly HashSet<string> MovementProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
-			"iii", "kkkk", "lll", "mmm", "qqq", "desert"
+			"iii", "kkkk", "lll", "mmm", "qqq", "desert", "vanillabrokenshelf"
 		};
 
 		private static readonly Dictionary<string, string> ForwardScenarioPhases =
@@ -438,6 +438,17 @@ namespace DeepWaters
 				}
 				if (string.Equals(saveName, "mystery", StringComparison.OrdinalIgnoreCase))
 					yield return CaptureOffsetYawScreenshot(saveName, "right-look", 90f);
+				if (string.Equals(saveName, "visualhole", StringComparison.OrdinalIgnoreCase))
+				{
+					yield return CaptureOffsetYawScreenshot(saveName, "left-look", -90f);
+					yield return CaptureOffsetYawScreenshot(saveName, "back-look", 180f);
+					yield return CaptureOffsetYawScreenshot(saveName, "right-look", 90f);
+				}
+				if (string.Equals(saveName, "vanillabrokenshelf", StringComparison.OrdinalIgnoreCase))
+				{
+					yield return RunVanillaReentryProbe(saveName);
+					yield return CaptureDiagnosticScreenshot(saveName, "vanilla-reentry-end");
+				}
                 yield break;
             }
 
@@ -470,6 +481,11 @@ namespace DeepWaters
             Vector3 direction = GetCameraForwardFlat();
             if (direction.sqrMagnitude < 0.001f)
                 direction = Vector3.forward;
+            yield return RunNaturalMotionPhase(saveName, phase, seconds, direction);
+        }
+
+        private IEnumerator RunNaturalMotionPhase(string saveName, string phase, float seconds, Vector3 direction)
+        {
             bool writeFrameMovement = MovementProbeSaves.Contains(saveName);
             if (writeFrameMovement)
                 ResetFrameMovementProbe();
@@ -500,6 +516,71 @@ namespace DeepWaters
                 yield return null;
             }
         }
+
+		private IEnumerator RunVanillaReentryProbe(string saveName)
+		{
+			VanillaReentryTargets targets;
+			if (TryFindVanillaReentryTargets(out targets))
+			{
+				yield return RunTeleportSettlePhase(saveName, "vanilla_forced_exit_dry", targets.DryPoint, 3f);
+				yield return CaptureDiagnosticScreenshot(saveName, "vanilla-forced-exit-dry");
+				if (!TryFindVanillaReentryWaterPoint(out targets.WaterPoint))
+					yield break;
+
+				yield return RunTeleportSettlePhase(saveName, "vanilla_forced_reenter_water", targets.WaterPoint, 2f);
+				yield return CaptureDiagnosticScreenshot(saveName, "vanilla-forced-reenter-water");
+				yield return RunRawMovePhase(saveName, "vanilla_try_dive_after_forced_exit", 6f, Vector3.down * MoveSpeed, true);
+				yield break;
+			}
+
+			Vector3 direction = GetCameraForwardFlat();
+			if (direction.sqrMagnitude < 0.001f)
+				direction = Vector3.forward;
+
+			float seconds = Mathf.Min(8f, Mathf.Max(4f, durationSeconds * 0.25f));
+			yield return RunNaturalMotionPhase(saveName, "vanilla_exit_forward", seconds, direction);
+			yield return CaptureDiagnosticScreenshot(saveName, "vanilla-exit-forward");
+			yield return RunNaturalMotionPhase(saveName, "vanilla_reenter_back", seconds, -direction);
+			yield return CaptureDiagnosticScreenshot(saveName, "vanilla-reenter-back");
+			yield return RunRawMovePhase(saveName, "vanilla_try_dive", 6f, Vector3.down * MoveSpeed, true);
+		}
+
+		private IEnumerator RunTeleportSettlePhase(string saveName, string phase, Vector3 position, float seconds)
+		{
+			ResetFrameMovementProbe();
+			SetPlayerPosition(position);
+
+			DFPosition current;
+			if (TryGetCurrentPixel(out current))
+				StartWindow(saveName, phase, "phase_start", current, hasLastPixel ? lastPixel : current);
+
+			float end = Time.realtimeSinceStartup + seconds;
+			while (Time.realtimeSinceStartup < end)
+			{
+				WriteMovementSnapshot(saveName, phase, "frame");
+				yield return null;
+			}
+		}
+
+		private IEnumerator RunRawMovePhase(string saveName, string phase, float seconds, Vector3 velocity, bool forceDescendInput = false)
+		{
+			ResetFrameMovementProbe();
+			OutdoorSwimDriver.DiagnosticForceDescendInput = forceDescendInput;
+
+			DFPosition current;
+			if (TryGetCurrentPixel(out current))
+				StartWindow(saveName, phase, "phase_start", current, hasLastPixel ? lastPixel : current);
+
+			float end = Time.realtimeSinceStartup + seconds;
+			while (Time.realtimeSinceStartup < end)
+			{
+				MovePlayerRaw(velocity);
+				WriteMovementSnapshot(saveName, phase, "frame");
+				yield return null;
+			}
+
+			OutdoorSwimDriver.DiagnosticForceDescendInput = false;
+		}
 
         private static Vector3 GetCameraForwardFlat()
         {
@@ -582,6 +663,160 @@ namespace DeepWaters
 
             Physics.SyncTransforms();
         }
+
+		private void MovePlayerRaw(Vector3 velocity)
+		{
+			GameManager gameManager = GameManager.Instance;
+			GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+			if (player == null)
+				return;
+
+			float dt = Mathf.Min(Time.deltaTime, 0.1f);
+			Vector3 delta = velocity * dt;
+			CharacterController controller = player.GetComponent<CharacterController>();
+			if (controller != null && controller.enabled)
+				controller.Move(delta);
+			else
+				player.transform.position += delta;
+
+			Physics.SyncTransforms();
+		}
+
+		private static void SetPlayerPosition(Vector3 position)
+		{
+			GameManager gameManager = GameManager.Instance;
+			GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+			if (player == null)
+				return;
+
+			CharacterController controller = player.GetComponent<CharacterController>();
+			bool controllerEnabled = controller != null && controller.enabled;
+			if (controllerEnabled)
+				controller.enabled = false;
+
+			player.transform.position = position;
+			Physics.SyncTransforms();
+
+			if (controllerEnabled)
+				controller.enabled = true;
+		}
+
+		private static bool TryFindVanillaReentryTargets(out VanillaReentryTargets targets)
+		{
+			targets = new VanillaReentryTargets();
+
+			GameManager gameManager = GameManager.Instance;
+			GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+			if (player == null)
+				return false;
+
+			float oceanY;
+			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+				return false;
+
+			Vector3 origin = player.transform.position;
+			float bestDry = float.PositiveInfinity;
+			List<DaggerfallTerrain> dfTerrains = new List<DaggerfallTerrain>(32);
+			List<Terrain> terrains = new List<Terrain>(32);
+			DeepWaterTerrainLookup.GetLoadedTerrains(dfTerrains, terrains);
+			float tileWorldSize = DeepWaterWorld.TileWorldSize;
+			if (tileWorldSize <= 0f)
+				return false;
+
+			for (int i = 0; i < dfTerrains.Count; i++)
+			{
+				DaggerfallTerrain dfTerrain = dfTerrains[i];
+				Terrain terrain = terrains[i];
+				if (dfTerrain == null || terrain == null || terrain.terrainData == null)
+					continue;
+
+				Vector3 terrainOrigin = dfTerrain.transform.position;
+				for (int z = 1; z < 16; z++)
+				{
+					for (int x = 1; x < 16; x++)
+					{
+						float fracX = x / 16f;
+						float fracZ = z / 16f;
+						float worldX = terrainOrigin.x + fracX * tileWorldSize;
+						float worldZ = terrainOrigin.z + fracZ * tileWorldSize;
+						float dist = (new Vector2(worldX - origin.x, worldZ - origin.z)).sqrMagnitude;
+						bool localWater = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ);
+						float terrainY = terrain.transform.position.y + terrain.SampleHeight(new Vector3(worldX, 0f, worldZ));
+
+						if (!localWater && terrainY > oceanY + 0.35f && dist < bestDry)
+						{
+							bestDry = dist;
+							targets.DryPoint = new Vector3(worldX, terrainY + 0.8f, worldZ);
+						}
+					}
+				}
+			}
+
+			if (bestDry == float.PositiveInfinity)
+				return false;
+
+			return bestDry < float.PositiveInfinity;
+		}
+
+		private static bool TryFindVanillaReentryWaterPoint(out Vector3 waterPoint)
+		{
+			waterPoint = Vector3.zero;
+
+			GameManager gameManager = GameManager.Instance;
+			GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+			if (player == null)
+				return false;
+
+			float oceanY;
+			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+				return false;
+
+			Vector3 origin = player.transform.position;
+			List<DaggerfallTerrain> dfTerrains = new List<DaggerfallTerrain>(32);
+			List<Terrain> terrains = new List<Terrain>(32);
+			DeepWaterTerrainLookup.GetLoadedTerrains(dfTerrains, terrains);
+			float tileWorldSize = DeepWaterWorld.TileWorldSize;
+			if (tileWorldSize <= 0f)
+				return false;
+
+			float bestWater = float.PositiveInfinity;
+			for (int i = 0; i < dfTerrains.Count; i++)
+			{
+				DaggerfallTerrain dfTerrain = dfTerrains[i];
+				Terrain terrain = terrains[i];
+				if (dfTerrain == null || terrain == null || terrain.terrainData == null)
+					continue;
+
+				DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
+				if (tile == null || !tile.IsOceanConnected)
+					continue;
+
+				Vector3 terrainOrigin = dfTerrain.transform.position;
+				for (int z = 1; z < 16; z++)
+				{
+					for (int x = 1; x < 16; x++)
+					{
+						float fracX = x / 16f;
+						float fracZ = z / 16f;
+						float worldX = terrainOrigin.x + fracX * tileWorldSize;
+						float worldZ = terrainOrigin.z + fracZ * tileWorldSize;
+						float dist = (new Vector2(worldX - origin.x, worldZ - origin.z)).sqrMagnitude;
+						DeepWaterColumn column;
+						if (DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) &&
+							tile.IsCarvedWater(worldX, worldZ) &&
+							DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column) &&
+							column.Depth >= 6f &&
+							dist < bestWater)
+						{
+							bestWater = dist;
+							waterPoint = new Vector3(worldX, oceanY - 0.8f, worldZ);
+						}
+					}
+				}
+			}
+
+			return bestWater < float.PositiveInfinity;
+		}
 
         private void CheckMapPixelTransition(string saveName, string phase)
         {
@@ -1642,6 +1877,12 @@ namespace DeepWaters
             public float Yaw;
             public float Pitch;
         }
+
+		private struct VanillaReentryTargets
+		{
+			public Vector3 DryPoint;
+			public Vector3 WaterPoint;
+		}
 
         private sealed class MetricWindow
         {
