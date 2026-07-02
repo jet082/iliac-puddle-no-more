@@ -43,9 +43,9 @@ at a time across editor updates, aggregates exact WATER tilemap cells
 into packed coarse/fine masks, and writes
 `Assets/Game/Mods/deep-waters/Diagnostics/WodExactWaterMasks.bytes`.
 It defaults to exporting one map row as a smoke test; set "Rows to
-export" to `0` for the full world. That file is not consumed by the
-final bake yet; it is the source mask export we can validate before
-wiring a final exact distance-field build.
+export" to `0` for the full world. Then run **Tools > Deep Waters >
+Bake Distance Field from WOD Exact Masks** to turn that source mask into
+`Resources/DistanceBake.bytes`.
 
 ## Format
 
@@ -70,8 +70,8 @@ Body:
 - Coarse ocean-connected water mask: packed bits at the distance-field
   resolution.
 - Fine carve mask: packed bits at `fineSubCellsPerPixel` resolution.
-  This mask is pruned to coarse ocean-connected water plus a one-coarse-
-  cell shoreline neighborhood, so inland water does not become ocean.
+  This mask is not pruned; it should match the live/GPU water mask so
+  carving and shore-edge depth agree for ocean water and local lakes.
 
 Current defaults are 8x8 distance cells per map pixel and 64x64 fine
 carve cells per map pixel. The resulting file is roughly 324 MB. Use

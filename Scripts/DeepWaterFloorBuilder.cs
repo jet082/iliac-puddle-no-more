@@ -288,20 +288,28 @@ namespace DeepWaters
                     bool pureBakedWater = !useBakeMask &&
                         DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&
                         DeepWaterDistanceBake.IsWaterAt(mapPixelX, mapPixelY, fracX, fracZ);
-                    bool localWater = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ);
-                    if ((useBakeMask || tile.UsesLocalWaterFallback) && !localWater)
-                        continue;
+					bool localWater = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ);
+					if (tile.UsesLocalWaterFallback)
+					{
+						if (!localWater)
+							continue;
+					}
+					else if (!useBakeMask && !localWater && !pureBakedWater)
+					{
+						continue;
+					}
 
-                    // Reject cells with any shore relief (see crash-fix note):
-                    // a holed patch with relief subdivides and crashes the render
-                    // thread. Flat ocean cells never subdivide.
+					// Reject dry raised land, but keep live-water shore cells:
+					// WoD can promote water over non-flat terrain. The cap
+					// renderer clips those texels, so the floor must exist below.
                     bool flatOceanCell =
                         heights[hy, hx]         <= oceanThreshold + oceanThresholdEps &&
                         heights[hy, hx + 1]     <= oceanThreshold + oceanThresholdEps &&
                         heights[hy + 1, hx]     <= oceanThreshold + oceanThresholdEps &&
                         heights[hy + 1, hx + 1] <= oceanThreshold + oceanThresholdEps;
-                    if (!flatOceanCell && !pureBakedWater)
-                        continue;
+					bool liveWaterCell = (useBakeMask || tile.UsesLocalWaterFallback) && localWater;
+					if (!flatOceanCell && !pureBakedWater && !liveWaterCell)
+						continue;
 
                     bool isWater = true;
                     if (isWater && useBakeMask)
@@ -634,6 +642,11 @@ namespace DeepWaters
 			int texelDim)
 		{
 			if (terrain == null || terrain.MapData.heightmapSamples == null || texelDim <= 0)
+				return true;
+
+			float centerX = (texelX + 0.5f) / texelDim;
+			float centerZ = (texelZ + 0.5f) / texelDim;
+			if (DeepWaterWaterClassification.IsLocalPointWater(terrain.MapData, centerX, centerZ))
 				return true;
 
 			DaggerfallUnity dfu = DaggerfallUnity.Instance;

@@ -55,7 +55,6 @@ namespace DeepWaters.Editor
         // for quicker diagnostic bakes.
         private const int SubCellsPerPixelFine = 64;
         private const int SubCellsPerPixelFineDiagnostic = 32;
-        private const int FineOceanConnectionCoarseRadius = 1;
         // MUST stay FALSE. Driving IT's GPU compute sampler from the bake removes
         // the D3D device (DXGI_DEVICE_REMOVED) on the FIRST dispatch — proven
         // twice, including with per-pixel readback drains + per-row GPU/resource
@@ -249,27 +248,19 @@ namespace DeepWaters.Editor
                       "%), fine=" + rawFineWater + "/" + (long)widthCellsFine * heightCellsFine + " (" +
                       (100.0 * rawFineWater / ((long)widthCellsFine * heightCellsFine)).ToString("F1") + "%).");
 
-			byte[] oceanFineMask = (byte[])packedFineMask.Clone();
 			byte[] localFineMask = (byte[])packedFineMask.Clone();
 
 			// 2) Ocean-connectivity BFS on the COARSE mask only. The coarse
-			//    mask still drives ocean distance/depth, but the shipped fine
-			//    carve mask remains unpruned so local/live water can carve too.
-            bool[] coarseMask = BuildOceanConnectedWaterMask(rawCoarseMask, widthCells, heightCells);
-            rawCoarseMask = null;
-            long connectedFine = PruneFineMaskToCoarseOcean(
-                oceanFineMask,
-                coarseMask,
-                widthCells,
-                heightCells,
-                widthCellsFine,
-                heightCellsFine);
-            int connectedCoarse = 0;
-            for (int i = 0; i < coarseMask.Length; i++) if (coarseMask[i]) connectedCoarse++;
-            Debug.Log("[DeepWaters.Bake] Ocean-connected coarse=" + connectedCoarse +
-                      " (" + (100.0 * connectedCoarse / coarseMask.Length).ToString("F1") +
-                      "%); ocean-near fine=" + connectedFine + " (" +
-                      (100.0 * connectedFine / ((long)widthCellsFine * heightCellsFine)).ToString("F1") + "%).");
+			//    mask still drives ocean distance/depth, but fine shoreline
+			//    distance stays unpruned so it matches the live/GPU water mask.
+			bool[] coarseMask = BuildOceanConnectedWaterMask(rawCoarseMask, widthCells, heightCells);
+			rawCoarseMask = null;
+			int connectedCoarse = 0;
+			for (int i = 0; i < coarseMask.Length; i++) if (coarseMask[i]) connectedCoarse++;
+			Debug.Log("[DeepWaters.Bake] Ocean-connected coarse=" + connectedCoarse +
+			          " (" + (100.0 * connectedCoarse / coarseMask.Length).ToString("F1") +
+			          "%); fine edge-mask kept unpruned=" + rawFineWater + " (" +
+			          (100.0 * rawFineWater / ((long)widthCellsFine * heightCellsFine)).ToString("F1") + "%).");
 
             // 3) Global chamfer BFS on the COARSE mask only. Distance field
             //    stays at 8x8 — it just feeds smooth depth interpolation,
@@ -282,15 +273,12 @@ namespace DeepWaters.Editor
             float[] distance = SeedDistanceGrid(coarseMask);
             ChamferDistance(distance, widthCells, heightCells, cellWidth);
 
-			// 3b) Main ocean depth must use the ocean-pruned fine mask. The
-			//     unpruned mask is kept only for local/disconnected water; using
-			//     it for ocean edge distance makes every tiny local/noisy edge
-			//     collapse the bathymetry back toward zero.
+			// 3b) Build shore-edge distance from the same unpruned fine mask
+			//     the runtime uses for carving, so depth and holes agree.
 			EditorUtility.DisplayProgressBar("Bake distance field",
 				"Building shore-edge distance...", 0.62f);
-			float[] edgeDistance = BuildEdgeDistance(oceanFineMask,
+			float[] edgeDistance = BuildEdgeDistance(packedFineMask,
 				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
-			oceanFineMask = null;
 			float[] localEdgeDistance = BuildEdgeDistance(localFineMask,
 				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
 			localFineMask = null;
@@ -416,11 +404,8 @@ namespace DeepWaters.Editor
             // Same pipeline as Bake(): coarse ocean connectivity -> chamfer
             // distance -> unpruned shore-edge distance -> quantize -> write.
             EditorUtility.DisplayProgressBar("Bake from exact masks", "Ocean connectivity...", 0.30f);
-			byte[] oceanFineMask = (byte[])packedFineMask.Clone();
 			byte[] localFineMask = (byte[])packedFineMask.Clone();
             bool[] coarseMask = BuildOceanConnectedWaterMask(rawCoarse, widthCells, heightCells);
-            PruneFineMaskToCoarseOcean(oceanFineMask, coarseMask,
-                widthCells, heightCells, widthCellsFine, heightCellsFine);
 
             float tileWorldSize = MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale;
             float cellWidth = tileWorldSize / SubCellsPerPixel;
@@ -430,9 +415,8 @@ namespace DeepWaters.Editor
             ChamferDistance(distance, widthCells, heightCells, cellWidth);
 
 			EditorUtility.DisplayProgressBar("Bake from exact masks", "Shore-edge distance...", 0.75f);
-			float[] edgeDistance = BuildEdgeDistance(oceanFineMask,
+			float[] edgeDistance = BuildEdgeDistance(packedFineMask,
 				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
-			oceanFineMask = null;
 			float[] localEdgeDistance = BuildEdgeDistance(localFineMask,
 				widthCells, heightCells, widthCellsFine, heightCellsFine, cellWidth);
 			localFineMask = null;
@@ -1516,74 +1500,6 @@ namespace DeepWaters.Editor
             return packed;
         }
 
-        private static long PruneFineMaskToCoarseOcean(
-            byte[] packedFineMask,
-            bool[] coarseOceanMask,
-            int coarseWidth,
-            int coarseHeight,
-            int fineWidth,
-            int fineHeight)
-        {
-            int ratioX = Mathf.Max(1, fineWidth / coarseWidth);
-            int ratioY = Mathf.Max(1, fineHeight / coarseHeight);
-            long fineCells = (long)fineWidth * fineHeight;
-            long kept = 0;
-
-            EditorUtility.DisplayProgressBar("Bake distance field",
-                "Pruning fine shoreline mask to ocean-connected water...", 0.38f);
-
-            for (long index = 0; index < fineCells; index++)
-            {
-                if (!GetPackedBit(packedFineMask, index))
-                    continue;
-
-                int x = (int)(index % fineWidth);
-                int y = (int)(index / fineWidth);
-                int coarseX = Mathf.Clamp(x / ratioX, 0, coarseWidth - 1);
-                int coarseY = Mathf.Clamp(y / ratioY, 0, coarseHeight - 1);
-                if (!CoarseOceanNear(coarseOceanMask, coarseWidth, coarseHeight, coarseX, coarseY))
-                    ClearPackedBit(packedFineMask, index);
-                else
-                    kept++;
-
-                if ((index & 0xfffff) == 0)
-                {
-                    EditorUtility.DisplayProgressBar("Bake distance field",
-                        "Pruning fine shoreline mask " + index + "/" + fineCells,
-                        0.35f + 0.03f * (float)(index / (double)fineCells));
-                }
-            }
-
-            return kept;
-        }
-
-        private static bool CoarseOceanNear(
-            bool[] coarseOceanMask,
-            int width,
-            int height,
-            int x,
-            int y)
-        {
-            int r = FineOceanConnectionCoarseRadius;
-            for (int cy = y - r; cy <= y + r; cy++)
-            {
-                if (cy < 0 || cy >= height)
-                    continue;
-
-                int row = cy * width;
-                for (int cx = x - r; cx <= x + r; cx++)
-                {
-                    if (cx < 0 || cx >= width)
-                        continue;
-
-                    if (coarseOceanMask[row + cx])
-                        return true;
-                }
-            }
-
-            return false;
-        }
-
         private static bool GetPackedBit(byte[] packed, long bitIndex)
         {
             int byteIndex = (int)(bitIndex >> 3);
@@ -1594,12 +1510,6 @@ namespace DeepWaters.Editor
         {
             int byteIndex = (int)(bitIndex >> 3);
             packed[byteIndex] |= (byte)(1 << (int)(bitIndex & 7));
-        }
-
-        private static void ClearPackedBit(byte[] packed, long bitIndex)
-        {
-            int byteIndex = (int)(bitIndex >> 3);
-            packed[byteIndex] &= (byte)~(1 << (int)(bitIndex & 7));
         }
 
         // Distance-to-carved-edge (coarse). A coarse cell is "interior water"

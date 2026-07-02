@@ -37,7 +37,6 @@ namespace DeepWaters
         private const float SkirtMaxWidthMeters = 40.0f;
         private const float BoundarySkirtMinWidthMeters = 2.0f;
         private const float BoundarySkirtMaxWidthMeters = 8.0f;
-        private const float BoundaryMixedShoreWallMaxDistanceMeters = 48f;
         private const float ShoreTerrainFitMeters = 180f;
         private const float ShoreTerrainFitClearance = 0.05f;
         private const float FloorSurfaceClearanceMeters = 0.05f; // keep near-shore floor barely under the water surface
@@ -472,14 +471,7 @@ namespace DeepWaters
             // map-pixel perimeter walls into whichever tile built first.
             if (DeepWaterDistanceBake.HasFineWaterMask)
             {
-                if (!tileData.IsCarvedWater(sampleX, sampleZ))
-                    return false;
-
-                return !ShouldKeepBoundaryWallAgainstMixedShore(
-                    sampleX,
-                    sampleZ,
-                    terrainOrigin,
-                    tileWorldSize);
+				return tileData.IsCarvedWater(sampleX, sampleZ);
             }
 
             // Pre-v4 fallback: heightmap shared-corner prediction (the
@@ -531,72 +523,6 @@ namespace DeepWaters
 
             return tileData.IsBakedWater(sampleX, sampleZ) &&
                    tileData.GetDistanceToCoastMeters(sampleX, sampleZ) >= DeepWaterFloorBuilder.HoleBufferMeters;
-        }
-
-        private bool ShouldKeepBoundaryWallAgainstMixedShore(
-            float sampleX,
-            float sampleZ,
-            Vector3 terrainOrigin,
-            float tileWorldSize)
-        {
-            if (dfTerrain == null || tileWorldSize <= 0f)
-                return false;
-
-            int mapPixelX;
-            int mapPixelY;
-            float fracX;
-            float fracZ;
-            ResolveGlobalMapFractions(sampleX, sampleZ, terrainOrigin, tileWorldSize, out mapPixelX, out mapPixelY, out fracX, out fracZ);
-
-            if (!DeepWaterDistanceBake.MapPixelHasLandCells(mapPixelX, mapPixelY))
-                return false;
-
-            float edgeDistance = DeepWaterDistanceBake.SampleEdgeDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
-            if (edgeDistance > BoundaryMixedShoreWallMaxDistanceMeters)
-                return false;
-
-            DaggerfallTerrain sampleDfTerrain;
-            Terrain sampleTerrain;
-            if (DeepWaterTerrainLookup.TryGetByWorldPosition(sampleX, sampleZ, out sampleDfTerrain, out sampleTerrain) &&
-                sampleDfTerrain != null)
-            {
-                float sampleFracX = (sampleX - sampleDfTerrain.transform.position.x) / tileWorldSize;
-                float sampleFracZ = (sampleZ - sampleDfTerrain.transform.position.z) / tileWorldSize;
-                if (sampleFracX >= 0f && sampleFracX <= 1f &&
-                    sampleFracZ >= 0f && sampleFracZ <= 1f &&
-                    DeepWaterWaterClassification.IsLocalPointWater(sampleDfTerrain.MapData, sampleFracX, sampleFracZ))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private void ResolveGlobalMapFractions(
-            float worldX,
-            float worldZ,
-            Vector3 terrainOrigin,
-            float tileWorldSize,
-            out int mapPixelX,
-            out int mapPixelY,
-            out float fracX,
-            out float fracZ)
-        {
-            float localFracX = (worldX - terrainOrigin.x) / tileWorldSize;
-            float localFracZ = (worldZ - terrainOrigin.z) / tileWorldSize;
-
-            float globalX = BuiltMapPixelX + localFracX;
-            float globalSouthY = BuiltMapPixelY + (1f - localFracZ);
-
-            mapPixelX = Mathf.FloorToInt(globalX);
-            mapPixelY = Mathf.FloorToInt(globalSouthY);
-            fracX = globalX - mapPixelX;
-            float southFrac = globalSouthY - mapPixelY;
-            fracZ = 1f - southFrac;
-
-            NormalizeMapFractionX(ref mapPixelX, ref fracX);
-            NormalizeMapFractionY(ref mapPixelY, ref fracZ);
         }
 
         private static void NormalizeMapFractionX(ref int mapPixel, ref float frac)
@@ -669,11 +595,14 @@ namespace DeepWaters
             float localX = (vx / (float)cols) * tileWorldSize;
             float localZ = (vz / (float)rows) * tileWorldSize;
 
-            // Boundary skirts stay pinned to vanilla terrain so map-pixel edges
-            // do not become ledges; internal shore skirts can close the waterline.
+			// Local fallback lakes need a connector to the waterline. Baked
+			// shorelines already have terrain there, so pin them to it instead
+			// of drawing artificial ledges up to the surface.
             float vanillaTopY = SampleVanillaLocalY(vx / (float)cols, vz / (float)rows, oceanLocalY, oceanThreshold);
             vanillaTopY = Mathf.Max(vanillaTopY, SampleNearbyVanillaLocalY(localX, localZ, vanillaTopY, terrainOrigin));
-            float topY = boundaryEdge ? Mathf.Min(skirtTopY, vanillaTopY) : skirtTopY;
+			float topY = !boundaryEdge && tileData != null && tileData.UsesLocalWaterFallback ?
+				skirtTopY :
+				Mathf.Min(skirtTopY, vanillaTopY);
 
             Vector2 inward;
             inwardNormals.TryGetValue(key, out inward);
@@ -828,6 +757,10 @@ namespace DeepWaters
             float fracZ = localZ / tileWorldSize;
             float terrainLocalY = SampleVanillaLocalY(fracX, fracZ, oceanLocalY, oceanThreshold);
             terrainLocalY = Mathf.Max(terrainLocalY, SampleNearbyVanillaLocalY(localX, localZ, terrainLocalY, terrainOrigin));
+			if ((tileData == null || !tileData.UsesLocalWaterFallback) &&
+				terrainLocalY >= oceanLocalY - ShoreTerrainFitClearance)
+				return localY;
+
             float shoreLocalY = Mathf.Min(oceanLocalY - ShoreTerrainFitClearance, terrainLocalY - ShoreTerrainFitClearance);
             shoreLocalY = Mathf.Max(localY, shoreLocalY);
 

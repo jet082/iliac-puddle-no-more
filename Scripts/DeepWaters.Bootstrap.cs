@@ -424,10 +424,10 @@ namespace DeepWaters
             {
                 string visualPhase = saveName.ToLowerInvariant() + "_shoreline_visual";
                 yield return RunStationaryPhase(saveName, visualPhase, TargetedVisualHoldSeconds);
-                yield return CaptureDiagnosticScreenshot(saveName, "shoreline-hold");
-                // Look down to evaluate vertical visibility through the surface
-                // (top/bottom seafloor view-distance parity).
-                yield return CapturePitchScreenshot(saveName, "look-down", 65f);
+				yield return CaptureDiagnosticScreenshot(saveName, "shoreline-hold");
+				// Look down to evaluate vertical visibility through the surface
+				// (top/bottom seafloor view-distance parity).
+				yield return CapturePitchScreenshot(saveName, "look-down", 65f);
 				if (string.Equals(saveName, "desert", StringComparison.OrdinalIgnoreCase))
 				{
 					yield return CaptureOffsetYawScreenshot(saveName, "left-look", -90f);
