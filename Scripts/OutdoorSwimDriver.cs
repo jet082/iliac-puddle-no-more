@@ -21,8 +21,8 @@ namespace DeepWaters
     /// OnExteriorWater, re-forging it for the rest of the frame).
     ///
     /// Ownership model (the part that keeps the surface stable — don't fight DFU):
-    ///  - DFU owns the swim flags. PlayerEnterExit recomputes IsPlayerSwimming and
-    ///    LevitateMotor.IsSwimming every frame from the forged blockWaterLevel.
+    ///  - DFU computes the swim flags, then the mod reasserts them for outdoor
+    ///    surface-swim cases where DFU's dungeon waterline check would clear them.
     ///  - DFU owns movement. LevitateMotor moves the swimmer, including its native
     ///    surface ascent cap, which sits just below PlayerEnterExit's swim
     ///    threshold so gravity never flaps at the waterline.
@@ -95,6 +95,7 @@ namespace DeepWaters
         private const float ColliderGateRefreshIntervalSeconds = 0.15f;
         private const float ColliderGateEjectGuardMargin = 0.5f;
         private const float ColliderGateEjectGuardPaddingMeters = 96f;
+		private const float ColliderGateMinimumDepthMeters = 3.5f;
 
         // Boats.
         private const string BoatEffectBundleName = "ImOnABoat";
@@ -120,6 +121,7 @@ namespace DeepWaters
         internal static int DiagnosticDisabledWaterColliderCount { get; private set; }
         internal static int DiagnosticDesiredWaterColliderCount { get; private set; }
         internal static bool DiagnosticForceDescendInput { get; set; }
+		internal static bool DiagnosticForceAscendInput { get; set; }
 
         internal static OutdoorSwimDriver Install(GameObject host)
         {
@@ -189,11 +191,12 @@ namespace DeepWaters
             }
 
             bool descendInput = HasDescendInput();
+            bool ascendInput = HasAscendInput();
             float oceanSurfaceY = ComputeOceanSurfaceY();
             UpdateWaterTerrainColliderGate(oceanSurfaceY, descendInput);
             bool standingOnShore = !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
             bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
-            bool isSwimming = hasWaterContact && !standingOnShore && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput);
+            bool isSwimming = hasWaterContact && !standingOnShore && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
             bool isPresentationUnderwater = hasWaterContact && !standingOnShore && IsPresentationUnderwater(oceanSurfaceY);
 
             if (!descendInput &&
@@ -222,6 +225,7 @@ namespace DeepWaters
                 DismountForSwimming();
 
             if (!descendInput &&
+				IsPlayerNearSurfaceForShoreAssist(oceanSurfaceY) &&
                 !DeepWaterRuntime.IsLoadGraceActive &&
                 (isSwimming || Time.time < shoreAssistAfterWaterUntil) &&
                 OutdoorShoreExitAssist.TryMoveToShore(pex, oceanSurfaceY, false, true))
@@ -276,9 +280,10 @@ namespace DeepWaters
 
             float oceanSurfaceY = ComputeOceanSurfaceY();
             bool descendInput = HasDescendInput();
+            bool ascendInput = HasAscendInput();
             bool standingOnShore = !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
             bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
-            bool isSwimming = hasWaterContact && !standingOnShore && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput);
+            bool isSwimming = hasWaterContact && !standingOnShore && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
             bool isPresentationUnderwater = hasWaterContact && !standingOnShore && IsPresentationUnderwater(oceanSurfaceY);
 
             if (!isSwimming && !isPresentationUnderwater)
@@ -311,6 +316,7 @@ namespace DeepWaters
                 return;
 
             bool descendInput = HasDescendInput();
+            bool ascendInput = HasAscendInput();
             float oceanSurfaceY = ComputeOceanSurfaceY();
             UpdateWaterTerrainColliderGate(oceanSurfaceY, descendInput);
             bool standingOnShore = !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
@@ -325,7 +331,7 @@ namespace DeepWaters
             dfuBridge.RestoreDungeonState(pex);
 
             bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
-            bool isSwimming = hasWaterContact && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput);
+            bool isSwimming = hasWaterContact && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
             bool presentationUnderwater = hasWaterContact && IsPresentationUnderwater(oceanSurfaceY);
 
             ApplyDfuWaterAudioState(pex, oceanSurfaceY, isSwimming);
@@ -333,6 +339,7 @@ namespace DeepWaters
             pex.UnderwaterFog?.UpdateFog(presentationUnderwater ? PresentationWaterLevelForFog(oceanSurfaceY) : NoWaterSentinel);
             if (presentationUnderwater)
                 ApplyNeutralUnderwaterFogColor();
+			ClampSurfaceAscent(oceanSurfaceY, isSwimming, ascendInput);
             KeepSurfaceCameraUnsunk(presentationUnderwater, oceanSurfaceY);
         }
 
@@ -352,13 +359,27 @@ namespace DeepWaters
                 WorldYToBlockWaterLevel(oceanSurfaceY + SwimPhysicsSurfaceOffset),
                 isSwimming ? PlayerMotor.OnExteriorWaterMethod.Swimming : PlayerMotor.OnExteriorWaterMethod.None,
                 IsPlayerHeadUnderwater(oceanSurfaceY));
+			ApplyDfuSwimFlags(pex, isSwimming);
         }
+
+		private static void ApplyDfuSwimFlags(PlayerEnterExit pex, bool isSwimming)
+		{
+			if (pex != null)
+				pex.IsPlayerSwimming = isSwimming;
+
+			GameManager gameManager = GameManager.Instance;
+			GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+			LevitateMotor levitateMotor = player != null ? player.GetComponent<LevitateMotor>() : null;
+			if (levitateMotor != null)
+				levitateMotor.IsSwimming = isSwimming;
+		}
 
         private void Restore()
         {
             var pex = GameManager.Instance.PlayerEnterExit;
             dfuBridge.RestoreDungeonState(pex);
             dfuBridge.ApplyWaterAudioState(pex, NoWaterSentinel, PlayerMotor.OnExteriorWaterMethod.None, false);
+			ApplyDfuSwimFlags(pex, false);
             pex.UnderwaterFog?.UpdateFog(NoWaterSentinel);
             RestoreSceneFogColor();
             currentlyForged = false;
@@ -408,8 +429,8 @@ namespace DeepWaters
             else
             {
                 PlayerEnterExit pex = gameManager.PlayerEnterExit;
-                pex.IsPlayerSwimming = false;
                 dfuBridge.ApplyWaterAudioState(pex, NoWaterSentinel, PlayerMotor.OnExteriorWaterMethod.None, false);
+				ApplyDfuSwimFlags(pex, false);
             }
 
             RequestStandAfterWaterExit();
@@ -475,6 +496,26 @@ namespace DeepWaters
             }
         }
 
+		private static void ClampSurfaceAscent(float oceanSurfaceY, bool isSwimming, bool ascendInput)
+		{
+			if (!isSwimming || !ascendInput)
+				return;
+
+			GameManager gameManager = GameManager.Instance;
+			GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+			if (player == null || (gameManager.PlayerMotor != null && gameManager.PlayerMotor.IsLevitating))
+				return;
+
+			float waterY = oceanSurfaceY + SwimPhysicsSurfaceOffset;
+			float maxPlayerY = waterY - (50 * MeshReader.GlobalScale) + 0.93f;
+			Vector3 position = player.transform.position;
+			if (position.y <= maxPlayerY)
+				return;
+
+			player.transform.position = new Vector3(position.x, maxPlayerY, position.z);
+			Physics.SyncTransforms();
+		}
+
         #endregion
 
         #region Swim state
@@ -489,15 +530,22 @@ namespace DeepWaters
             return PlayerSwimCheckY(player.transform.position.y) < oceanSurfaceY + clearance;
         }
 
-        private bool HasRecentCenterWaterContact(float oceanSurfaceY, bool ignoreShoreGround = false)
+		private static bool IsPlayerNearSurfaceForShoreAssist(float oceanSurfaceY)
+		{
+			var player = GameManager.Instance?.PlayerObject;
+			return player != null &&
+				   PlayerSwimCheckY(player.transform.position.y) >= oceanSurfaceY - SwimExitClearance;
+		}
+
+        private bool HasRecentCenterWaterContact(float oceanSurfaceY, bool descendInput = false)
         {
-            if (!ignoreShoreGround && IsStandingOnShoreGround(oceanSurfaceY))
+            if (!descendInput && IsStandingOnShoreGround(oceanSurfaceY))
             {
                 waterContactUntil = 0f;
                 return false;
             }
 
-            if (HasCenterWaterContact())
+            if (HasCenterWaterContact(oceanSurfaceY, descendInput))
             {
                 waterContactUntil = Time.time + WaterContactGraceSeconds;
                 return true;
@@ -506,7 +554,7 @@ namespace DeepWaters
             return Time.time < waterContactUntil;
         }
 
-        private static bool HasCenterWaterContact()
+        private static bool HasCenterWaterContact(float oceanSurfaceY, bool descendInput)
         {
             GameObject player = GameManager.Instance?.PlayerObject;
             if (player == null)
@@ -514,11 +562,16 @@ namespace DeepWaters
 
             Vector3 position = player.transform.position;
             DeepWaterColumn column;
-            float carvedSeafloorY;
-            return IsSwimmableWaterMask(position.x, position.z) &&
-                   DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column) &&
-                   column.Depth >= WaterContactMinimumDepth &&
-                   DeepWaterWorld.TryGetCarvedSeafloorWorldY(position.x, position.z, out carvedSeafloorY);
+            float seafloorY;
+            if (!IsSwimmableWaterMask(position.x, position.z) ||
+                !DeepWaterWorld.TryGetWaterColumn(position.x, position.z, out column) ||
+				!TryGetSwimmableSeafloorWorldY(position.x, position.z, out seafloorY))
+            {
+                return false;
+            }
+
+			float minimumDepth = descendInput ? ColliderGateMinimumDepthMeters : WaterContactMinimumDepth;
+			return oceanSurfaceY - seafloorY >= minimumDepth;
         }
 
         private static bool HasDescendInput()
@@ -530,6 +583,22 @@ namespace DeepWaters
             return input != null &&
                    (input.HasAction(InputManager.Actions.Crouch) ||
                     input.HasAction(InputManager.Actions.FloatDown));
+        }
+
+        private static bool HasAscendInput()
+        {
+			if (DiagnosticForceAscendInput)
+				return true;
+
+            InputManager input = InputManager.Instance;
+            return input != null &&
+                   (input.HasAction(InputManager.Actions.Jump) ||
+                    input.HasAction(InputManager.Actions.FloatUp));
+        }
+
+        private bool ShouldHoldSurfaceSwim(bool ascendInput)
+        {
+			return ascendInput;
         }
 
         private static bool IsSwimmableWaterMask(float worldX, float worldZ)
@@ -751,16 +820,37 @@ namespace DeepWaters
             if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
                 return false;
 
-            float carvedSeafloorY;
-            if (!DeepWaterWorld.TryGetCarvedSeafloorWorldY(worldX, worldZ, out carvedSeafloorY))
+            float seafloorY;
+            if (!TryGetSwimmableSeafloorWorldY(worldX, worldZ, out seafloorY))
                 return false;
 
-            column.SeafloorWorldY = carvedSeafloorY;
+            column.SeafloorWorldY = seafloorY;
             if (column.Parent != null)
-                column.SeafloorLocalY = carvedSeafloorY - column.Parent.position.y;
+                column.SeafloorLocalY = seafloorY - column.Parent.position.y;
 
             return column.Depth >= WaterContactMinimumDepth;
         }
+
+		internal static bool TryGetSwimmableSeafloorWorldY(float worldX, float worldZ, out float seafloorWorldY)
+		{
+			if (DeepWaterWorld.TryGetCarvedSeafloorWorldY(worldX, worldZ, out seafloorWorldY))
+				return true;
+
+			if (!IsSwimmableWaterMask(worldX, worldZ))
+			{
+				seafloorWorldY = 0f;
+				return false;
+			}
+
+			DeepWaterColumn column;
+			if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
+			{
+				seafloorWorldY = 0f;
+				return false;
+			}
+
+			return DeepWaterWorld.TryGetRenderedSeafloorWorldY(column, worldX, worldZ, out seafloorWorldY);
+		}
 
         #endregion
 
@@ -903,9 +993,9 @@ namespace DeepWaters
             if (levitateMotor == null)
                 return;
 
-            bool spike = isSwimming &&
-                         !levitateMotor.IsLevitating &&
-                         Time.deltaTime > MaxSwimFrameDeltaSeconds;
+			bool spike = isSwimming &&
+						 !levitateMotor.IsLevitating &&
+						 Time.deltaTime > MaxSwimFrameDeltaSeconds;
             if (spike)
             {
                 if (levitateMotor.enabled)
@@ -955,8 +1045,8 @@ namespace DeepWaters
             PlayerEnterExit pex = gameManager.PlayerEnterExit;
             if (pex != null)
             {
-                pex.IsPlayerSwimming = false;
                 dfuBridge.ApplyWaterAudioState(pex, NoWaterSentinel, PlayerMotor.OnExteriorWaterMethod.None, false);
+				ApplyDfuSwimFlags(pex, false);
             }
 
             GameObject player = gameManager.PlayerObject;
@@ -1018,6 +1108,8 @@ namespace DeepWaters
                 return;
             }
 
+			bool nearSurface = IsPlayerNearSurfaceForShoreAssist(oceanSurfaceY);
+
             if (ShouldThrottleColliderGateRefresh())
                 return;
 
@@ -1041,8 +1133,11 @@ namespace DeepWaters
             // is beneath.
             float carvedSeafloorY;
             if (!IsSwimmableWaterMask(position.x, position.z) ||
-                !DeepWaterWorld.TryGetCarvedSeafloorWorldY(position.x, position.z, out carvedSeafloorY))
+                !TryGetSwimmableSeafloorWorldY(position.x, position.z, out carvedSeafloorY))
             {
+				if (!nearSurface && (waterColliderGateActive || Time.time < waterContactUntil))
+					return;
+
                 if (TryRecoverFromSolidShore(oceanSurfaceY, position))
                     return;
 
@@ -1050,7 +1145,13 @@ namespace DeepWaters
                 return;
             }
 
-            if (!descendInput && IsNearColliderGateShore(position, oceanSurfaceY))
+			if (oceanSurfaceY - carvedSeafloorY < ColliderGateMinimumDepthMeters)
+			{
+				RestoreWaterTerrainCollider(force: true);
+				return;
+			}
+
+            if (!descendInput && nearSurface && IsNearColliderGateShore(position, oceanSurfaceY))
             {
                 RestoreWaterTerrainCollider();
                 return;
@@ -1668,7 +1769,7 @@ namespace DeepWaters
             // the real mesh quad (vs "bake says water") is what tells swimmable
             // water apart from solid shore.
             float seafloorWorldY;
-            if (DeepWaterWorld.TryGetCarvedSeafloorWorldY(position.x, position.z, out seafloorWorldY))
+            if (OutdoorSwimDriver.TryGetSwimmableSeafloorWorldY(position.x, position.z, out seafloorWorldY))
             {
                 ClampPlayerAboveY(player, position, seafloorWorldY + SeafloorSwimFloorClearance);
                 return;

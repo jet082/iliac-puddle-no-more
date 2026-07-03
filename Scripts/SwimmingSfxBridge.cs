@@ -193,7 +193,14 @@ namespace DeepWaters
 		private void RestoreWeatherParticles()
 		{
 			GameManager gameManager = GameManager.Instance;
-			PlayerWeather weather = gameManager != null && gameManager.PlayerObject != null ? gameManager.PlayerObject.GetComponent<PlayerWeather>() : null;
+			if (gameManager == null || !gameManager.IsPlayingGame())
+			{
+				suppressingWeather = false;
+				return;
+			}
+
+			GameObject player = GameObject.FindGameObjectWithTag("Player");
+			PlayerWeather weather = player != null ? player.GetComponent<PlayerWeather>() : null;
 			if (suppressingWeather && weather != null)
 				ApplyCurrentWeatherParticles(weather, gameManager);
 

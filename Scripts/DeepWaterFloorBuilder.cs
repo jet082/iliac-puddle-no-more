@@ -289,15 +289,11 @@ namespace DeepWaters
                         DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&
                         DeepWaterDistanceBake.IsWaterAt(mapPixelX, mapPixelY, fracX, fracZ);
 					bool localWater = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ);
-					if (tile.UsesLocalWaterFallback)
-					{
-						if (!localWater)
-							continue;
-					}
-					else if (!useBakeMask && !localWater && !pureBakedWater)
-					{
+					if ((useBakeMask || tile.UsesLocalWaterFallback) && !localWater)
 						continue;
-					}
+
+					if (!useBakeMask && !localWater && !pureBakedWater)
+						continue;
 
 					// Reject dry raised land and non-flat shore cells. Live WoD
 					// water can mark raised shoreline as water, but carving floor
