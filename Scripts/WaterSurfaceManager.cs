@@ -1049,7 +1049,7 @@ namespace DeepWaters
             triangles.Add(start);
             triangles.Add(start + 3);
             triangles.Add(start + 2);
-        }
+		}
 
         private static void ReplaceSurfaceMesh(MeshFilter topFilter, MeshFilter undersideFilter, Mesh newMesh)
         {

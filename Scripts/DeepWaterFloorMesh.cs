@@ -37,7 +37,6 @@ namespace DeepWaters
         private const float SkirtMaxWidthMeters = 40.0f;
         private const float BoundarySkirtMinWidthMeters = 2.0f;
         private const float BoundarySkirtMaxWidthMeters = 8.0f;
-        private const float BoundaryMixedShoreWallMaxDistanceMeters = 48f;
         private const float ShoreTerrainFitMeters = 180f;
         private const float ShoreTerrainFitClearance = 0.05f;
         private const float FloorSurfaceClearanceMeters = 0.05f; // keep near-shore floor barely under the water surface
@@ -346,8 +345,9 @@ namespace DeepWaters
             if (rows <= 0 || cols <= 0)
                 return;
 
-            // 1. Collect perimeter edges: a water cell facing land inside the
-            //    tile, or facing a not-carved neighbour across a tile boundary.
+            // 1. Collect boundary perimeter edges only. Internal land already
+            //    has DFU terrain to meet; adding a skirt there creates visible
+            //    diagonal waterline walls in shallow coastal saves.
             //    Vertex coords run [0..cols] x [0..rows]; the A->B order is the
             //    same the old per-edge walls used, so the edge normal points
             //    toward the water (carved) side.
@@ -361,13 +361,8 @@ namespace DeepWaters
             {
                 for (int x = 0; x < cols; x++)
                 {
-                    if (holes[z, x])
-                        continue;
-
-                    if (x > 0 && holes[z, x - 1]) { edges.Add(new SkirtEdge(x, z, x, z + 1, false)); }
-                    if (x < cols - 1 && holes[z, x + 1]) { edges.Add(new SkirtEdge(x + 1, z + 1, x + 1, z, false)); }
-                    if (z > 0 && holes[z - 1, x]) { edges.Add(new SkirtEdge(x + 1, z, x, z, false)); }
-                    if (z < rows - 1 && holes[z + 1, x]) { edges.Add(new SkirtEdge(x, z + 1, x + 1, z + 1, false)); }
+					if (holes[z, x])
+						continue;
 
                     if (x == 0 && !IsBakedHoleAcrossBoundary(x, z, -1, 0, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x, z, x, z + 1, true)); }
                     if (x == cols - 1 && !IsBakedHoleAcrossBoundary(x, z, 1, 0, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x + 1, z + 1, x + 1, z, true)); }
@@ -440,8 +435,8 @@ namespace DeepWaters
                 // Reverse winding so the skirt is solid + visible from both sides.
                 triangles.Add(tA); triangles.Add(bB); triangles.Add(tB);
                 triangles.Add(tA); triangles.Add(bA); triangles.Add(bB);
-            }
-        }
+			}
+		}
 
         private bool IsBakedHoleAcrossBoundary(
             int x,
@@ -472,14 +467,7 @@ namespace DeepWaters
             // map-pixel perimeter walls into whichever tile built first.
             if (DeepWaterDistanceBake.HasFineWaterMask)
             {
-                if (!tileData.IsCarvedWater(sampleX, sampleZ))
-                    return false;
-
-                return !ShouldKeepBoundaryWallAgainstMixedShore(
-                    sampleX,
-                    sampleZ,
-                    terrainOrigin,
-                    tileWorldSize);
+                return tileData.IsCarvedWater(sampleX, sampleZ);
             }
 
             // Pre-v4 fallback: heightmap shared-corner prediction (the
@@ -531,110 +519,6 @@ namespace DeepWaters
 
             return tileData.IsBakedWater(sampleX, sampleZ) &&
                    tileData.GetDistanceToCoastMeters(sampleX, sampleZ) >= DeepWaterFloorBuilder.HoleBufferMeters;
-        }
-
-        private bool ShouldKeepBoundaryWallAgainstMixedShore(
-            float sampleX,
-            float sampleZ,
-            Vector3 terrainOrigin,
-            float tileWorldSize)
-        {
-            if (dfTerrain == null || tileWorldSize <= 0f)
-                return false;
-
-            int mapPixelX;
-            int mapPixelY;
-            float fracX;
-            float fracZ;
-            ResolveGlobalMapFractions(sampleX, sampleZ, terrainOrigin, tileWorldSize, out mapPixelX, out mapPixelY, out fracX, out fracZ);
-
-            if (!DeepWaterDistanceBake.MapPixelHasLandCells(mapPixelX, mapPixelY))
-                return false;
-
-            float edgeDistance = DeepWaterDistanceBake.SampleEdgeDistanceMeters(mapPixelX, mapPixelY, fracX, fracZ);
-            if (edgeDistance > BoundaryMixedShoreWallMaxDistanceMeters)
-                return false;
-
-            DaggerfallTerrain sampleDfTerrain;
-            Terrain sampleTerrain;
-            if (DeepWaterTerrainLookup.TryGetByWorldPosition(sampleX, sampleZ, out sampleDfTerrain, out sampleTerrain) &&
-                sampleDfTerrain != null)
-            {
-                float sampleFracX = (sampleX - sampleDfTerrain.transform.position.x) / tileWorldSize;
-                float sampleFracZ = (sampleZ - sampleDfTerrain.transform.position.z) / tileWorldSize;
-                if (sampleFracX >= 0f && sampleFracX <= 1f &&
-                    sampleFracZ >= 0f && sampleFracZ <= 1f &&
-                    DeepWaterWaterClassification.IsLocalPointWater(sampleDfTerrain.MapData, sampleFracX, sampleFracZ))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-		private void ResolveGlobalMapFractions(
-			float worldX,
-			float worldZ,
-			Vector3 terrainOrigin,
-			float tileWorldSize,
-			out int mapPixelX,
-			out int mapPixelY,
-			out float fracX,
-			out float fracZ)
-		{
-			float localFracX = (worldX - terrainOrigin.x) / tileWorldSize;
-			float localFracZ = (worldZ - terrainOrigin.z) / tileWorldSize;
-
-			float globalX = BuiltMapPixelX + localFracX;
-			float globalSouthY = BuiltMapPixelY + (1f - localFracZ);
-
-			mapPixelX = Mathf.FloorToInt(globalX);
-			mapPixelY = Mathf.FloorToInt(globalSouthY);
-			fracX = globalX - mapPixelX;
-			float southFrac = globalSouthY - mapPixelY;
-			fracZ = 1f - southFrac;
-
-			NormalizeMapFractionX(ref mapPixelX, ref fracX);
-			NormalizeMapFractionY(ref mapPixelY, ref fracZ);
-		}
-
-        private static void NormalizeMapFractionX(ref int mapPixel, ref float frac)
-        {
-            if (mapPixel < 0)
-            {
-                mapPixel = 0;
-                frac = 0f;
-                return;
-            }
-
-            if (mapPixel >= MapsFile.MaxMapPixelX)
-            {
-                mapPixel = MapsFile.MaxMapPixelX - 1;
-                frac = 1f;
-                return;
-            }
-
-            frac = Mathf.Clamp01(frac);
-        }
-
-        private static void NormalizeMapFractionY(ref int mapPixel, ref float fracZ)
-        {
-            if (mapPixel < 0)
-            {
-                mapPixel = 0;
-                fracZ = 1f;
-                return;
-            }
-
-            if (mapPixel >= MapsFile.MaxMapPixelY)
-            {
-                mapPixel = MapsFile.MaxMapPixelY - 1;
-                fracZ = 0f;
-                return;
-            }
-
-            fracZ = Mathf.Clamp01(fracZ);
         }
 
         // Build (once) the shared top + bottom skirt vertices for one perimeter

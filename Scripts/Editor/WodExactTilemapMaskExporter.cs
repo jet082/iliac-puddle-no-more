@@ -23,14 +23,19 @@ namespace DeepWaters.Editor
     /// </summary>
     public class WodExactTilemapMaskExporter : EditorWindow
     {
-        private const string OutputPath =
+        private const string WodOutputPath =
             "Assets/Game/Mods/deep-waters/Diagnostics/WodExactWaterMasks.bytes";
+		private const string VanillaOutputPath =
+			"Assets/Game/Mods/deep-waters/Diagnostics/VanillaExactWaterMasks.bytes";
         private const uint Magic = 0x44574558; // "DWEX"
         private const ushort Version = 1;
         private const int CoarseSubCellsPerPixel = 8;
         private const int DefaultFineSubCellsPerPixel = 32;
         private const int MaxFineSubCellsPerPixel = 64;
 
+		private enum ExportTarget { Wod, Vanilla }
+
+		private ExportTarget target = ExportTarget.Wod;
         private int fineSubCellsPerPixel = DefaultFineSubCellsPerPixel;
         private int tilesPerUpdate = 1;
         private int rowsToExport = 1;
@@ -51,9 +56,22 @@ namespace DeepWaters.Editor
 
         private DaggerfallUnity dfu;
         private ITerrainSampler sampler;
+		private DefaultTerrainTexturing vanillaTexturing;
+		private float vanillaSeaThreshold;
+		private float vanillaVisualThreshold;
         private object cacheInstance;
         private MethodInfo cacheGetMethod;
         private MethodInfo cacheClearMethod;
+
+		private string OutputPath
+		{
+			get { return target == ExportTarget.Vanilla ? VanillaOutputPath : WodOutputPath; }
+		}
+
+		private string TargetLabel
+		{
+			get { return target == ExportTarget.Vanilla ? "vanilla" : "WOD"; }
+		}
 
         private int TargetRows
         {
@@ -68,16 +86,25 @@ namespace DeepWaters.Editor
         [MenuItem("Tools/Deep Waters/Diagnostics/WOD Exact Tilemap Mask Exporter")]
         public static void ShowWindow()
         {
-            GetWindow<WodExactTilemapMaskExporter>("WOD Exact Export");
+            var window = GetWindow<WodExactTilemapMaskExporter>("Exact Mask Export");
+			window.target = ExportTarget.Wod;
         }
+
+		[MenuItem("Tools/Deep Waters/Diagnostics/Vanilla Exact Tilemap Mask Exporter")]
+		public static void ShowVanillaWindow()
+		{
+			var window = GetWindow<WodExactTilemapMaskExporter>("Exact Mask Export");
+			window.target = ExportTarget.Vanilla;
+		}
 
         private void OnGUI()
         {
-            EditorGUILayout.LabelField("WOD Exact Tilemap Mask Exporter", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Exact Tilemap Mask Exporter", EditorStyles.boldLabel);
             EditorGUILayout.Space();
 
             using (new EditorGUI.DisabledScope(running))
             {
+				target = (ExportTarget)EditorGUILayout.EnumPopup("Target", target);
                 fineSubCellsPerPixel = EditorGUILayout.IntSlider(
                     "Fine sub-cells", fineSubCellsPerPixel, 8, MaxFineSubCellsPerPixel);
                 tilesPerUpdate = EditorGUILayout.IntSlider("Tiles per editor update", tilesPerUpdate, 1, 16);
@@ -116,8 +143,8 @@ namespace DeepWaters.Editor
 
             EditorGUILayout.Space();
             EditorGUILayout.HelpBox(
-                "This exporter drives WOD's GPU sampler one tile at a time and yields between editor updates. " +
-                "It writes packed masks only; the final distance bake consumer is the next step.",
+                "This exporter writes packed masks only; the final distance bake consumer is the next step. " +
+				"WOD drives its GPU sampler, while vanilla forces DFU's stock sampler plus terrain texturing jobs.",
                 MessageType.Info);
         }
 
@@ -140,7 +167,7 @@ namespace DeepWaters.Editor
                 failures = 0;
                 lastFailure = string.Empty;
                 EditorApplication.update += TickExport;
-                Debug.Log("[DeepWaters.WODExactExport] Started exact WOD tilemap export: coarse " +
+                Debug.Log("[DeepWaters.ExactExport] Started exact " + TargetLabel + " tilemap export: coarse " +
                           widthCellsCoarse + "x" + heightCellsCoarse + ", fine " +
                           widthCellsFine + "x" + heightCellsFine + " (" +
                           fineSubCellsPerPixel + "x" + fineSubCellsPerPixel +
@@ -152,8 +179,8 @@ namespace DeepWaters.Editor
                 running = false;
                 EditorApplication.update -= TickExport;
                 EditorUtility.ClearProgressBar();
-                Debug.LogError("[DeepWaters.WODExactExport] Start failed: " + ex.Message + "\n" + ex.StackTrace);
-                EditorUtility.DisplayDialog("WOD exact export failed", ex.Message, "OK");
+                Debug.LogError("[DeepWaters.ExactExport] Start failed: " + ex.Message + "\n" + ex.StackTrace);
+                EditorUtility.DisplayDialog("Exact export failed", ex.Message, "OK");
             }
         }
 
@@ -163,13 +190,28 @@ namespace DeepWaters.Editor
             if (dfu == null || dfu.ContentReader == null)
                 throw new Exception("DaggerfallUnity is not initialized.");
 
-            sampler = dfu.TerrainSampler;
-            if (sampler == null || sampler.GetType().FullName != "Monobelisk.InterestingTerrainSampler")
-                throw new Exception("Runtime sampler is not Monobelisk.InterestingTerrainSampler.");
+			vanillaTexturing = null;
+			cacheInstance = null;
+			cacheGetMethod = null;
+			cacheClearMethod = null;
 
-            ResolveMonobeliskCache(out cacheInstance, out cacheGetMethod, out cacheClearMethod);
-            if (cacheInstance == null || cacheGetMethod == null)
-                throw new Exception("Could not resolve Monobelisk.InterestingTerrains.tileDataCache.Get(int, int).");
+			if (target == ExportTarget.Vanilla)
+			{
+				sampler = new DefaultTerrainSampler();
+				vanillaTexturing = new DefaultTerrainTexturing();
+				vanillaSeaThreshold = (sampler.OceanElevation + 0.5f) / sampler.MaxTerrainHeight;
+				vanillaVisualThreshold = sampler.BeachElevation / sampler.MaxTerrainHeight;
+			}
+			else
+			{
+				sampler = dfu.TerrainSampler;
+				if (sampler == null || sampler.GetType().FullName != "Monobelisk.InterestingTerrainSampler")
+					throw new Exception("Runtime sampler is not Monobelisk.InterestingTerrainSampler.");
+
+				ResolveMonobeliskCache(out cacheInstance, out cacheGetMethod, out cacheClearMethod);
+				if (cacheInstance == null || cacheGetMethod == null)
+					throw new Exception("Could not resolve Monobelisk.InterestingTerrains.tileDataCache.Get(int, int).");
+			}
 
             hDim = sampler.HeightmapDimension;
             widthCellsCoarse = MapsFile.MaxMapPixelX * CoarseSubCellsPerPixel;
@@ -207,11 +249,11 @@ namespace DeepWaters.Editor
                 {
                     EditorUtility.UnloadUnusedAssetsImmediate();
                     GC.Collect();
-                    Debug.Log("[DeepWaters.WODExactExport] Exported through row " +
+                    Debug.Log("[DeepWaters.ExactExport] Exported through row " +
                               currentY + "/" + TargetRows + ".");
                 }
 
-                EditorUtility.DisplayProgressBar("WOD exact mask export",
+                EditorUtility.DisplayProgressBar(TargetLabel + " exact mask export",
                     "Exporting tile (" + currentX + "," + currentY + ")",
                     currentY / (float)Mathf.Max(1, TargetRows));
                 Repaint();
@@ -229,15 +271,25 @@ namespace DeepWaters.Editor
 
         private void ProcessCurrentTile()
         {
-            byte[] tileData = GenerateTileData(currentX, currentY);
-            if (tileData == null || tileData.Length < hDim * hDim)
-                throw new Exception("WOD tileData was missing or too small.");
+			if (target == ExportTarget.Vanilla)
+			{
+				float[] heights;
+				byte[] tilemap;
+				GenerateVanillaTileData(currentX, currentY, out heights, out tilemap);
+				AggregateVanillaCoarse(heights, tilemap);
+				AggregateVanillaFine(heights, tilemap);
+				return;
+			}
+
+            byte[] tileData = GenerateWodTileData(currentX, currentY);
+			if (tileData == null || tileData.Length < hDim * hDim)
+				throw new Exception("WOD tileData was missing or too small.");
 
             AggregateCoarse(tileData);
             AggregateFine(tileData);
         }
 
-        private byte[] GenerateTileData(int mapPixelX, int mapPixelY)
+        private byte[] GenerateWodTileData(int mapPixelX, int mapPixelY)
         {
             MapPixelData mapData = TerrainHelper.GetMapPixelData(
                 dfu.ContentReader, mapPixelX, mapPixelY);
@@ -267,6 +319,60 @@ namespace DeepWaters.Editor
                     mapData.heightmapData.Dispose();
             }
         }
+
+		private void GenerateVanillaTileData(int mapPixelX, int mapPixelY, out float[] heights, out byte[] tilemap)
+		{
+			int tilemapDim = MapsFile.WorldMapTileDim;
+			MapPixelData mapData = TerrainHelper.GetMapPixelData(
+				dfu.ContentReader, mapPixelX, mapPixelY);
+			mapData.heightmapData = new NativeArray<float>(hDim * hDim, Allocator.TempJob);
+			mapData.tilemapData = new NativeArray<byte>(tilemapDim * tilemapDim, Allocator.TempJob);
+			mapData.avgMaxHeight = new NativeArray<float>(new float[] { 0f, float.MinValue }, Allocator.TempJob);
+			mapData.nativeArrayList = new List<IDisposable>();
+
+			try
+			{
+				JobHandle heightHandle = sampler.ScheduleGenerateSamplesJob(ref mapData);
+				JobHandle terrainHandle = heightHandle;
+				if (mapData.hasLocation)
+				{
+					JobHandle avgHandle = TerrainHelper.ScheduleCalcAvgMaxHeightJob(ref mapData, heightHandle);
+					JobHandle.ScheduleBatchedJobs();
+					TerrainHelper.SetLocationTiles(ref mapData);
+					terrainHandle = sampler.IsLocationTerrainBlended()
+						? avgHandle
+						: TerrainHelper.ScheduleBlendLocationTerrainJob(ref mapData, avgHandle);
+				}
+
+				JobHandle tileHandle = vanillaTexturing.ScheduleAssignTilesJob(sampler, ref mapData, terrainHandle);
+				tileHandle.Complete();
+
+				heights = new float[hDim * hDim];
+				mapData.heightmapData.CopyTo(heights);
+				tilemap = new byte[tilemapDim * tilemapDim];
+				mapData.tilemapData.CopyTo(tilemap);
+				for (int i = 0; i < tilemap.Length; i++)
+					if (tilemap[i] == byte.MaxValue)
+						tilemap[i] = 0;
+			}
+			finally
+			{
+				if (mapData.nativeArrayList != null)
+				{
+					foreach (IDisposable nativeArray in mapData.nativeArrayList)
+					{
+						if (nativeArray != null)
+							nativeArray.Dispose();
+					}
+				}
+				if (mapData.heightmapData.IsCreated)
+					mapData.heightmapData.Dispose();
+				if (mapData.tilemapData.IsCreated)
+					mapData.tilemapData.Dispose();
+				if (mapData.avgMaxHeight.IsCreated)
+					mapData.avgMaxHeight.Dispose();
+			}
+		}
 
         private void AggregateCoarse(byte[] tileData)
         {
@@ -304,6 +410,43 @@ namespace DeepWaters.Editor
                 }
             }
         }
+
+		private void AggregateVanillaCoarse(float[] heights, byte[] tilemap)
+		{
+			for (int subY = 0; subY < CoarseSubCellsPerPixel; subY++)
+			{
+				for (int subX = 0; subX < CoarseSubCellsPerPixel; subX++)
+				{
+					int total;
+					int water;
+					CountVanillaWaterSamples(heights, tilemap, subX, subY, CoarseSubCellsPerPixel, out total, out water);
+					if (total <= 0 || water * 2 < total)
+						continue;
+
+					long bit = ((long)currentY * CoarseSubCellsPerPixel + subY) * widthCellsCoarse +
+						currentX * CoarseSubCellsPerPixel + subX;
+					SetPackedBit(coarseMaskBits, bit);
+					coarseWaterCells++;
+				}
+			}
+		}
+
+		private void AggregateVanillaFine(float[] heights, byte[] tilemap)
+		{
+			for (int subY = 0; subY < fineSubCellsPerPixel; subY++)
+			{
+				for (int subX = 0; subX < fineSubCellsPerPixel; subX++)
+				{
+					if (!HasAnyVanillaWaterSample(heights, tilemap, subX, subY, fineSubCellsPerPixel))
+						continue;
+
+					long bit = ((long)currentY * fineSubCellsPerPixel + subY) * widthCellsFine +
+						currentX * fineSubCellsPerPixel + subX;
+					SetPackedBit(fineMaskBits, bit);
+					fineWaterCells++;
+				}
+			}
+		}
 
         private void CountWaterSamples(
             byte[] tileData,
@@ -358,6 +501,80 @@ namespace DeepWaters.Editor
             return false;
         }
 
+		private void CountVanillaWaterSamples(
+			float[] heights,
+			byte[] tilemap,
+			int subX,
+			int subY,
+			int subCellsPerPixel,
+			out int total,
+			out int water)
+		{
+			int rowStart;
+			int rowEnd;
+			int colStart;
+			int colEnd;
+			GetHeightmapSampleRange(subX, subY, subCellsPerPixel,
+				out rowStart, out rowEnd, out colStart, out colEnd);
+
+			total = 0;
+			water = 0;
+			for (int hy = rowStart; hy <= rowEnd; hy++)
+			{
+				for (int hx = colStart; hx <= colEnd; hx++)
+				{
+					if (IsVanillaWaterSample(heights, tilemap, hy, hx))
+						water++;
+					total++;
+				}
+			}
+		}
+
+		private bool HasAnyVanillaWaterSample(float[] heights, byte[] tilemap, int subX, int subY, int subCellsPerPixel)
+		{
+			int rowStart;
+			int rowEnd;
+			int colStart;
+			int colEnd;
+			GetHeightmapSampleRange(subX, subY, subCellsPerPixel,
+				out rowStart, out rowEnd, out colStart, out colEnd);
+
+			for (int hy = rowStart; hy <= rowEnd; hy++)
+			{
+				for (int hx = colStart; hx <= colEnd; hx++)
+				{
+					if (IsVanillaWaterSample(heights, tilemap, hy, hx))
+						return true;
+				}
+			}
+
+			return false;
+		}
+
+		private bool IsVanillaWaterSample(float[] heights, byte[] tilemap, int hy, int hx)
+		{
+			float height = heights[hy + hx * hDim];
+			if (height <= vanillaSeaThreshold)
+				return true;
+
+			int tilemapDim = MapsFile.WorldMapTileDim;
+			int ty = Mathf.Clamp(hy * tilemapDim / Mathf.Max(1, hDim), 0, tilemapDim - 1);
+			int tx = Mathf.Clamp(hx * tilemapDim / Mathf.Max(1, hDim), 0, tilemapDim - 1);
+			byte tile = tilemap[ty + tx * tilemapDim];
+			if (!TileValueContainsWater(tile))
+				return false;
+
+			return height <= vanillaVisualThreshold;
+		}
+
+		private static bool TileValueContainsWater(byte tile)
+		{
+			int index = tile & 0x3f;
+			return index == 0 ||
+				(index >= 5 && index <= 7) ||
+				index == 48;
+		}
+
         private void GetHeightmapSampleRange(
             int subX,
             int subY,
@@ -393,8 +610,11 @@ namespace DeepWaters.Editor
             WriteExportFile();
             StopExport("Complete.", false);
             AssetDatabase.Refresh();
-            EditorUtility.DisplayDialog("WOD exact export complete",
-                "Wrote " + OutputPath + ".", "OK");
+			string nextCommand = target == ExportTarget.Vanilla
+				? "Tools > Deep Waters > Bake Distance Field from Vanilla Exact Masks"
+				: "Tools > Deep Waters > Bake Distance Field from WOD Exact Masks";
+            EditorUtility.DisplayDialog("Exact export complete",
+				"Wrote " + OutputPath + ".\n\nNow run " + nextCommand + ".", "OK");
         }
 
         private void StopExport(string reason, bool logAsError)
@@ -408,7 +628,7 @@ namespace DeepWaters.Editor
                 catch { }
             }
 
-            string message = "[DeepWaters.WODExactExport] " + reason;
+            string message = "[DeepWaters.ExactExport] " + reason;
             if (logAsError)
                 Debug.LogError(message);
             else

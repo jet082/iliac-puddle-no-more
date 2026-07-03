@@ -76,13 +76,13 @@ namespace DeepWaters
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
 			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test",
-			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf"
+			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "brokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
 			"eee", "ggg", "hhh", "jjj", "nnn", "ooo", "rrr", "sss", "ttt", "distance fog test",
-			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf"
+			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "brokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf"
 		};
 
 		private static readonly HashSet<string> BiomeVisualProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -1374,7 +1374,7 @@ namespace DeepWaters
             string path = Path.Combine(dir, "deep-waters-diagnostics-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".csv");
             writer = new StreamWriter(path, false, Encoding.UTF8);
             writer.AutoFlush = true;
-            writer.WriteLine("utc,save,phase,event,currentPixel,formerPixel,seconds,fps,decorationsCurrent,decorationsFormer,enemiesCurrent,enemiesFormer,fishCurrent,fishFormer,lootCurrent,lootFormer,rubbleCurrent,rubbleFormer,contentEligibleCurrent,contentEligibleFormer,loadGateActive,loadGateCount,loadGateAge,terrainUpdateActive,loadGraceActive,heavyWorkBlocked,heavyWorkResumeIn,postRefreshPending,decorQueue,decorQueuedTerrains,locationSkippedLast,locationDeferred,playerX,playerY,playerZ,oceanY,columnPresent,columnDepth,renderedSeafloorY,carvedPresent,carvedSeafloorY,downHitY,downHitNormalY,downHitShore,downHitDeepFloor,downHitTerrain,downHitName,playerSwimming,controllerGrounded,cameraYaw,cameraPitch,cameraTransformYaw,cameraForwardX,cameraForwardZ,playerTransformYaw,worldCompX,worldCompY,worldCompZ,gpsWorldX,gpsWorldZ,terrainPixel,localFracX,localFracZ,tileValue,tileIndex,heightSample,localPointWater,bakedWater,carvedWater,rawFineWater,localMissedByFineBake,oceanConnected,horizontalSpeed,verticalSpeed,waterGateActive,waterGateDisabled,waterGateDesired,forwardHitDistance,forwardHitY,forwardHitDeepFloor,forwardHitTerrain,forwardHitName,bodyHitDistance,bodyHitY,bodyHitDeepFloor,bodyHitTerrain,bodyHitName");
+            writer.WriteLine("utc,save,phase,event,currentPixel,formerPixel,seconds,fps,decorationsCurrent,decorationsFormer,enemiesCurrent,enemiesFormer,fishCurrent,fishFormer,lootCurrent,lootFormer,rubbleCurrent,rubbleFormer,contentEligibleCurrent,contentEligibleFormer,loadGateActive,loadGateCount,loadGateAge,terrainUpdateActive,loadGraceActive,heavyWorkBlocked,heavyWorkResumeIn,postRefreshPending,decorQueue,decorQueuedTerrains,locationSkippedLast,locationDeferred,playerX,playerY,playerZ,oceanY,columnPresent,columnDepth,renderedSeafloorY,carvedPresent,carvedSeafloorY,downHitY,downHitNormalY,downHitShore,downHitDeepFloor,downHitTerrain,downHitName,playerSwimming,controllerGrounded,cameraYaw,cameraPitch,cameraTransformYaw,cameraForwardX,cameraForwardZ,playerTransformYaw,worldCompX,worldCompY,worldCompZ,gpsWorldX,gpsWorldZ,terrainPixel,localFracX,localFracZ,tileValue,tileIndex,heightSample,localPointWater,bakedWater,carvedWater,rawFineWater,localMissedByFineBake,oceanConnected,horizontalSpeed,verticalSpeed,swimClampSource,swimClampDelta,waterGateActive,waterGateDisabled,waterGateDesired,forwardHitDistance,forwardHitY,forwardHitDeepFloor,forwardHitTerrain,forwardHitName,bodyHitDistance,bodyHitY,bodyHitDeepFloor,bodyHitTerrain,bodyHitName");
         }
 
         private void WriteWindow(MetricWindow window, float seconds, float fps, Counts current, Counts former, RuntimeState runtime)
@@ -1464,6 +1464,8 @@ namespace DeepWaters
                 probe.OceanConnected ? "1" : "0",
                 FloatCell(horizontalSpeed),
                 FloatCell(verticalSpeed),
+				Csv(OutdoorSwimMovementController.DiagnosticClampSource),
+				FloatCell(OutdoorSwimMovementController.DiagnosticClampDelta),
                 OutdoorSwimDriver.DiagnosticWaterColliderGateActive ? "1" : "0",
                 OutdoorSwimDriver.DiagnosticDisabledWaterColliderCount.ToString(CultureInfo.InvariantCulture),
                 OutdoorSwimDriver.DiagnosticDesiredWaterColliderCount.ToString(CultureInfo.InvariantCulture),

@@ -313,6 +313,8 @@ namespace DeepWaters.Editor
 
         private const string ExactMaskInputPath =
             "Assets/Game/Mods/deep-waters/Diagnostics/WodExactWaterMasks.bytes";
+		private const string VanillaExactMaskInputPath =
+			"Assets/Game/Mods/deep-waters/Diagnostics/VanillaExactWaterMasks.bytes";
 
         // Build the shipped DistanceBake.bytes from the WOD Exact Tilemap Mask
         // Exporter's output. That exporter (Diagnostics menu) paces WOD's GPU
@@ -327,7 +329,7 @@ namespace DeepWaters.Editor
         {
             try
             {
-                BakeFromExactMasks();
+				BakeFromExactMasks(ExactMaskInputPath, OutputPath, "WOD");
             }
             catch (System.Exception ex)
             {
@@ -337,21 +339,35 @@ namespace DeepWaters.Editor
             }
         }
 
-        private static void BakeFromExactMasks()
+		[MenuItem("Tools/Deep Waters/Bake Distance Field from Vanilla Exact Masks")]
+		public static void BakeFromVanillaExactMasksMenuItem()
+		{
+			try
+			{
+				BakeFromExactMasks(VanillaExactMaskInputPath, VanillaOutputPath, "vanilla exact");
+			}
+			catch (System.Exception ex)
+			{
+				EditorUtility.ClearProgressBar();
+				Debug.LogError("[DeepWaters.Bake] Build from vanilla exact masks failed: " + ex.Message + "\n" + ex.StackTrace);
+				EditorUtility.DisplayDialog("Bake from vanilla exact masks failed", ex.Message, "OK");
+			}
+		}
+
+		private static void BakeFromExactMasks(string inputPath, string outputPath, string label)
         {
             string absolute = System.IO.Path.Combine(
-                System.IO.Directory.GetCurrentDirectory(), ExactMaskInputPath);
+				System.IO.Directory.GetCurrentDirectory(), inputPath);
             if (!System.IO.File.Exists(absolute))
-                throw new System.Exception("Exact mask file not found at " + ExactMaskInputPath +
-                    ". Run Tools > Deep Waters > Diagnostics > WOD Exact Tilemap Mask Exporter " +
-                    "with 'Rows to export' = 0 (full world) first.");
+				throw new System.Exception("Exact mask file not found at " + inputPath +
+					". Run the matching Deep Waters exact mask exporter first.");
 
             int mapPixelsX = MapsFile.MaxMapPixelX;
             int mapPixelsY = MapsFile.MaxMapPixelY;
             int widthCells = mapPixelsX * SubCellsPerPixel;
             int heightCells = mapPixelsY * SubCellsPerPixel;
 
-            EditorUtility.DisplayProgressBar("Bake from exact masks", "Reading exact WOD masks...", 0.05f);
+			EditorUtility.DisplayProgressBar("Bake from exact masks", "Reading " + label + " masks...", 0.05f);
 
             int fineSub;
             int widthCellsFine;
@@ -363,7 +379,7 @@ namespace DeepWaters.Editor
             {
                 // Matches WodExactTilemapMaskExporter.WriteExportFile byte-for-byte.
                 if (br.ReadUInt32() != 0x44574558)   // "DWEX"
-                    throw new System.Exception("Not a WOD exact mask file (magic mismatch).");
+					throw new System.Exception("Not a Deep Waters exact mask file (magic mismatch).");
                 br.ReadUInt16();                      // version
                 int coarseSub = br.ReadUInt16();
                 fineSub = br.ReadUInt16();
@@ -396,7 +412,7 @@ namespace DeepWaters.Editor
                 for (int i = 0; i < rawCoarse.Length; i++)
                     rawCoarse[i] = GetPackedBit(coarseBits, i);
 
-                Debug.Log("[DeepWaters.Bake] Loaded EXACT WOD masks: coarse " + widthCells + "x" +
+				Debug.Log("[DeepWaters.Bake] Loaded EXACT " + label + " masks: coarse " + widthCells + "x" +
                           heightCells + " (water=" + coarseWater + "), fine " + widthCellsFine + "x" +
                           heightCellsFine + " (" + fineSub + "/pixel, water=" + fineWater + ").");
             }
@@ -427,15 +443,15 @@ namespace DeepWaters.Editor
 			byte[] localEdgeBytes = Quantize(localEdgeDistance, DistanceScaleMeters);
             byte[] packedCoarseMask = PackWaterMask(coarseMask);
 
-            WriteBakeFile(OutputPath, distanceBytes, packedCoarseMask, packedFineMask, edgeBytes, localEdgeBytes,
+			WriteBakeFile(outputPath, distanceBytes, packedCoarseMask, packedFineMask, edgeBytes, localEdgeBytes,
                 SubCellsPerPixel, SubCellsPerPixel, fineSub, mapPixelsX, mapPixelsY, DistanceScaleMeters);
 
             EditorUtility.ClearProgressBar();
             AssetDatabase.Refresh();
-            Debug.Log("[DeepWaters.Bake] Wrote " + OutputPath + " from EXACT WOD masks (fine " +
+			Debug.Log("[DeepWaters.Bake] Wrote " + outputPath + " from EXACT " + label + " masks (fine " +
                       fineSub + "/pixel). Rebuild the .dfmod to ship it.");
             EditorUtility.DisplayDialog("Bake from exact masks complete",
-                "Wrote DistanceBake.bytes from the exact WOD tilemap masks (fine " + fineSub +
+				"Wrote " + outputPath + " from the exact " + label + " masks (fine " + fineSub +
                 "/pixel). Rebuild the .dfmod to ship it.", "OK");
         }
 
