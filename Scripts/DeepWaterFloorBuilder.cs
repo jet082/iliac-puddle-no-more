@@ -254,13 +254,7 @@ namespace DeepWaters
             // lookup (the carve decision doesn't need it — distance is
             // only used for the seafloor mesh depth profile, sampled at
             // vertex time).
-            //
-            // Pre-v4 fallback: the original heightmap any-corner check.
-            // Matches WaterSurfaceManager.HasWaterTile's water plane
-            // criterion exactly. Boundary cells where 3 of 4 corners sit
-            // on the beach gradient still get carved if 1 corner reaches
-            // the clamp.
-            bool useBakeMask = DeepWaterDistanceBake.HasFineWaterMask && !tile.UsesLocalWaterFallback;
+            bool useBakeMask = !tile.UsesLocalWaterFallback;
             int mapPixelX = dfTerrain.MapPixelX;
             int mapPixelY = dfTerrain.MapPixelY;
             float invHoleRes = 1f / holeRes;
@@ -285,14 +279,13 @@ namespace DeepWaters
                 {
                     holes[hy, hx] = true;
                     float fracX = (hx + 0.5f) * invHoleRes;
+                    // Lakes-only rescue: on local-fallback tiles the coarse
+                    // bake can still mark painted pure-water cells the pruned
+                    // fine mask missed; those skip the flat-cell test below.
                     bool pureBakedWater = !useBakeMask &&
                         DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&
                         DeepWaterDistanceBake.IsWaterAt(mapPixelX, mapPixelY, fracX, fracZ);
-					bool localWater = DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ);
-					if ((useBakeMask || tile.UsesLocalWaterFallback) && !localWater)
-						continue;
-
-					if (!useBakeMask && !localWater && !pureBakedWater)
+					if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ))
 						continue;
 
 					// Reject dry raised land and non-flat shore cells. Live WoD

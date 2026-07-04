@@ -33,8 +33,6 @@ namespace DeepWaters
         // Continuous shore skirt. Keep it short and deterministic so stream
         // builds don't spend extra time on wide/noisy perimeter geometry.
         private const float SkirtSlopeTangent = 0.6f;
-        private const float SkirtMinWidthMeters = 12.0f;
-        private const float SkirtMaxWidthMeters = 40.0f;
         private const float BoundarySkirtMinWidthMeters = 2.0f;
         private const float BoundarySkirtMaxWidthMeters = 8.0f;
         private const float ShoreTerrainFitMeters = 180f;
@@ -109,7 +107,7 @@ namespace DeepWaters
 
             int n = VertexGridSize;
             int vertexCount = n * n;
-            var vertices = new List<Vector3>(vertexCount + EstimateWallVertexCapacity(holes));
+            var vertices = new List<Vector3>(vertexCount);
             var colors = new List<Color>(vertices.Capacity);
             var uvs = new List<Vector2>(vertices.Capacity);
 
@@ -176,7 +174,7 @@ namespace DeepWaters
             }
 
             int quadCount = (n - 1) * (n - 1);
-            var triangles = new List<int>(quadCount * 6 + EstimateWallTriangleCapacity(holes));
+            var triangles = new List<int>(quadCount * 6);
             for (int z = 0; z < n - 1; z++)
             {
                 for (int x = 0; x < n - 1; x++)
@@ -364,10 +362,10 @@ namespace DeepWaters
 					if (holes[z, x])
 						continue;
 
-                    if (x == 0 && !IsBakedHoleAcrossBoundary(x, z, -1, 0, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x, z, x, z + 1, true)); }
-                    if (x == cols - 1 && !IsBakedHoleAcrossBoundary(x, z, 1, 0, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x + 1, z + 1, x + 1, z, true)); }
-                    if (z == 0 && !IsBakedHoleAcrossBoundary(x, z, 0, -1, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x + 1, z, x, z, true)); }
-                    if (z == rows - 1 && !IsBakedHoleAcrossBoundary(x, z, 0, 1, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x, z + 1, x + 1, z + 1, true)); }
+                    if (x == 0 && !IsBakedHoleAcrossBoundary(x, z, -1, 0, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x, z, x, z + 1)); }
+                    if (x == cols - 1 && !IsBakedHoleAcrossBoundary(x, z, 1, 0, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x + 1, z + 1, x + 1, z)); }
+                    if (z == 0 && !IsBakedHoleAcrossBoundary(x, z, 0, -1, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x + 1, z, x, z)); }
+                    if (z == rows - 1 && !IsBakedHoleAcrossBoundary(x, z, 0, 1, cols, rows, terrainOrigin, tileWorldSize)) { edges.Add(new SkirtEdge(x, z + 1, x + 1, z + 1)); }
                 }
             }
 
@@ -407,9 +405,9 @@ namespace DeepWaters
             {
                 SkirtEdge e = edges[i];
                 EnsureSkirtVertex(e.ax, e.az, stride, cols, rows, inwardNormals, topIndex, bottomIndex,
-                    vertices, colors, uvs, oceanLocalY, skirtTopY, oceanThreshold, terrainOrigin, tileWorldSize, e.boundary);
+                    vertices, colors, uvs, oceanLocalY, skirtTopY, oceanThreshold, terrainOrigin, tileWorldSize);
                 EnsureSkirtVertex(e.bx, e.bz, stride, cols, rows, inwardNormals, topIndex, bottomIndex,
-                    vertices, colors, uvs, oceanLocalY, skirtTopY, oceanThreshold, terrainOrigin, tileWorldSize, e.boundary);
+                    vertices, colors, uvs, oceanLocalY, skirtTopY, oceanThreshold, terrainOrigin, tileWorldSize);
             }
 
             // 4. Two-sided quad per edge, reusing the shared vertex indices so
@@ -459,66 +457,13 @@ namespace DeepWaters
 			if (tileData.UsesLocalWaterFallback)
 				return true;
 
-            // Phase B path (v4 bake with fine mask): the neighbor carves
-            // when the global bake says the cross-boundary sample is carved
-            // water. Do not depend on the neighboring DaggerfallTerrain being
-            // promoted or having DeepWaterTileData initialized yet: streaming
-            // order made that test fail transiently, permanently baking giant
-            // map-pixel perimeter walls into whichever tile built first.
-            if (DeepWaterDistanceBake.HasFineWaterMask)
-            {
-                return tileData.IsCarvedWater(sampleX, sampleZ);
-            }
-
-            // Pre-v4 fallback: heightmap shared-corner prediction (the
-            // v0.52.1 fix), then bake-classification fallback. Kept for
-            // backward compatibility with legacy bakes.
-            if (dfTerrain != null)
-            {
-                float[,] heights = dfTerrain.MapData.heightmapSamples;
-                if (heights != null)
-                {
-                    int hRows = heights.GetLength(0);
-                    int hCols = heights.GetLength(1);
-
-                    int c1Row, c1Col, c2Row, c2Col;
-                    if (dx == -1)
-                    {
-                        c1Row = z;     c1Col = 0;
-                        c2Row = z + 1; c2Col = 0;
-                    }
-                    else if (dx == 1)
-                    {
-                        c1Row = z;     c1Col = x + 1;
-                        c2Row = z + 1; c2Col = x + 1;
-                    }
-                    else if (dz == -1)
-                    {
-                        c1Row = 0; c1Col = x;
-                        c2Row = 0; c2Col = x + 1;
-                    }
-                    else // dz == 1
-                    {
-                        c1Row = z + 1; c1Col = x;
-                        c2Row = z + 1; c2Col = x + 1;
-                    }
-
-                    if (c1Row >= 0 && c1Row < hRows && c1Col >= 0 && c1Col < hCols &&
-                        c2Row >= 0 && c2Row < hRows && c2Col >= 0 && c2Col < hCols)
-                    {
-                        var sampler = DaggerfallUnity.Instance.TerrainSampler;
-                        float oceanThreshold = sampler.OceanElevation / sampler.MaxTerrainHeight;
-                        float waterThreshold = oceanThreshold + 1e-5f;
-
-                        if (heights[c1Row, c1Col] <= waterThreshold ||
-                            heights[c2Row, c2Col] <= waterThreshold)
-                            return true;
-                    }
-                }
-            }
-
-            return tileData.IsBakedWater(sampleX, sampleZ) &&
-                   tileData.GetDistanceToCoastMeters(sampleX, sampleZ) >= DeepWaterFloorBuilder.HoleBufferMeters;
+            // The neighbor carves when the global bake says the cross-boundary
+            // sample is carved water. Do not depend on the neighboring
+            // DaggerfallTerrain being promoted or having DeepWaterTileData
+            // initialized yet: streaming order made that test fail transiently,
+            // permanently baking giant map-pixel perimeter walls into whichever
+            // tile built first.
+            return tileData.IsCarvedWater(sampleX, sampleZ);
         }
 
         // Build (once) the shared top + bottom skirt vertices for one perimeter
@@ -543,8 +488,7 @@ namespace DeepWaters
             float skirtTopY,
             float oceanThreshold,
             Vector3 terrainOrigin,
-            float tileWorldSize,
-            bool boundaryEdge)
+            float tileWorldSize)
         {
             int key = vz * stride + vx;
             if (topIndex.ContainsKey(key))
@@ -553,11 +497,11 @@ namespace DeepWaters
             float localX = (vx / (float)cols) * tileWorldSize;
             float localZ = (vz / (float)rows) * tileWorldSize;
 
-			// Internal shore skirts close the visible waterline; boundary skirts
-			// stay pinned to terrain so adjacent tiles do not grow ledges.
+			// Skirt tops stay pinned to vanilla terrain so adjacent tiles do
+			// not grow ledges.
             float vanillaTopY = SampleVanillaLocalY(vx / (float)cols, vz / (float)rows, oceanLocalY, oceanThreshold);
             vanillaTopY = Mathf.Max(vanillaTopY, SampleNearbyVanillaLocalY(localX, localZ, vanillaTopY, terrainOrigin));
-			float topY = boundaryEdge ? Mathf.Min(skirtTopY, vanillaTopY) : skirtTopY;
+			float topY = Mathf.Min(skirtTopY, vanillaTopY);
 
             Vector2 inward;
             inwardNormals.TryGetValue(key, out inward);
@@ -577,8 +521,8 @@ namespace DeepWaters
                 seafloorTop = meshTop;
             float drop = Mathf.Max(0f, topY - seafloorTop);
 
-            float minWidth = boundaryEdge ? BoundarySkirtMinWidthMeters : SkirtMinWidthMeters;
-            float maxWidth = boundaryEdge ? BoundarySkirtMaxWidthMeters : SkirtMaxWidthMeters;
+            float minWidth = BoundarySkirtMinWidthMeters;
+            float maxWidth = BoundarySkirtMaxWidthMeters;
             float skirtWidth = Mathf.Clamp(drop / SkirtSlopeTangent, minWidth, maxWidth);
 
             float bottomLocalX = Mathf.Clamp(localX + inward.x * skirtWidth, 0f, tileWorldSize);
@@ -725,15 +669,13 @@ namespace DeepWaters
             internal int az;
             internal int bx;
             internal int bz;
-            internal bool boundary;
 
-            internal SkirtEdge(int ax, int az, int bx, int bz, bool boundary)
+            internal SkirtEdge(int ax, int az, int bx, int bz)
             {
                 this.ax = ax;
                 this.az = az;
                 this.bx = bx;
                 this.bz = bz;
-                this.boundary = boundary;
             }
         }
 
@@ -774,41 +716,6 @@ namespace DeepWaters
             float depthBand = Mathf.Sqrt(DeepBathymetry.DepthBand01(depth));
             float distanceBand = Mathf.Clamp01(distanceToCoast / DeepBathymetry.ShelfBreakDistance);
             return new Color(depthBand, climateBand, distanceBand, Mathf.Clamp01(textureStrength));
-        }
-
-        private static int EstimateWallVertexCapacity(bool[,] holes)
-        {
-            return EstimateWallEdgeCount(holes) * 4;
-        }
-
-        private static int EstimateWallTriangleCapacity(bool[,] holes)
-        {
-            return EstimateWallEdgeCount(holes) * 6;
-        }
-
-        private static int EstimateWallEdgeCount(bool[,] holes)
-        {
-            if (holes == null)
-                return 0;
-
-            int rows = holes.GetLength(0);
-            int cols = holes.GetLength(1);
-            int edges = 0;
-            for (int z = 0; z < rows; z++)
-            {
-                for (int x = 0; x < cols; x++)
-                {
-                    if (holes[z, x])
-                        continue;
-
-                    if (x > 0 && holes[z, x - 1]) edges++;
-                    if (x < cols - 1 && holes[z, x + 1]) edges++;
-                    if (z > 0 && holes[z - 1, x]) edges++;
-                    if (z < rows - 1 && holes[z + 1, x]) edges++;
-                }
-            }
-
-            return edges;
         }
 
         void OnDestroy()

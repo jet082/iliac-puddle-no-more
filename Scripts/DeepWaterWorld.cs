@@ -338,23 +338,11 @@ namespace DeepWaters
             if (tile == null || !tile.IsOceanConnected || !tile.HasDistanceField)
                 return false;
 
-            if (DeepWaterDistanceBake.HasFineWaterMask)
-            {
-                if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ))
-                    return false;
+            if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ))
+                return false;
 
-                if (!tile.IsCarvedWater(worldX, worldZ))
-                    return false;
-            }
-            else
-            {
-                bool pureBakedWater =
-                    DeepWaterWaterClassification.IsLocalPointPureWaterTile(dfTerrain.MapData, fracX, fracZ) &&
-                    tile.IsBakedWater(worldX, worldZ);
-                if (!DeepWaterWaterClassification.IsLocalPointWater(dfTerrain.MapData, fracX, fracZ) &&
-                    !pureBakedWater)
-                    return false;
-            }
+            if (!tile.IsCarvedWater(worldX, worldZ))
+                return false;
 
             float[,] heights = dfTerrain.MapData.heightmapSamples;
             int hDim0 = heights.GetLength(0);
@@ -402,6 +390,25 @@ namespace DeepWaters
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// True when this tile's seafloor mesh is BUILT for its current map
+        /// pixel. After that, the MESH (not the bake mask) is the authority on
+        /// where swimmable volume exists: the carve rejects mask-water cells
+        /// whose heightmap has shore relief, and treating those as water
+        /// produces phantom columns over voids (the shore fall-through hole).
+        /// </summary>
+        internal static bool HasBuiltFloorMesh(DeepWaterColumn column)
+        {
+            if (column.Parent == null || column.DaggerfallTerrain == null)
+                return false;
+
+            DeepWaterFloorMesh floorMesh = GetCachedFloorMesh(column.Parent);
+            return floorMesh != null &&
+                   floorMesh.BuildVersion > 0 &&
+                   floorMesh.BuiltMapPixelX == column.DaggerfallTerrain.MapPixelX &&
+                   floorMesh.BuiltMapPixelY == column.DaggerfallTerrain.MapPixelY;
         }
 
         private static DeepWaterFloorMesh GetCachedFloorMesh(Transform parent)

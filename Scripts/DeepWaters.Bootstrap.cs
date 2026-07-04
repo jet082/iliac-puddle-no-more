@@ -76,7 +76,7 @@ namespace DeepWaters
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
 			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test",
-			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "brokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck"
+			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "brokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck", "fallthrough", "fallenin"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -92,7 +92,7 @@ namespace DeepWaters
 
 		private static readonly HashSet<string> MovementProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
-			"iii", "kkkk", "lll", "mmm", "qqq", "desert", "open ocean 2", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck"
+			"iii", "kkkk", "lll", "mmm", "qqq", "desert", "open ocean 2", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck", "fallthrough", "fallenin"
 		};
 
 		private static readonly Dictionary<string, string> ForwardScenarioPhases =
@@ -108,7 +108,9 @@ namespace DeepWaters
 				{ "desert", "desert_straight_lake_probe" },
 				{ "brokencolliders2", "brokencolliders2_straight_collider_probe" },
 				{ "brokencolliders 2", "brokencolliders2_straight_collider_probe" },
-				{ "imstuck", "imstuck_straight_shore_probe" }
+				{ "imstuck", "imstuck_straight_shore_probe" },
+				{ "fallthrough", "fallthrough_straight_shore_probe" },
+				{ "fallenin", "fallenin_hole_probe" }
 			};
 
         private readonly List<MetricWindow> windows = new List<MetricWindow>();
@@ -1007,7 +1009,7 @@ namespace DeepWaters
                 return;
 
             float oceanY;
-            bool hasOcean = DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY);
+            DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY);
             var dw = DeepWaters.Instance;
             DeepWaterColumn col;
             float colDepth = DeepWaterWorld.TryGetWaterColumn(cam.transform.position.x, cam.transform.position.z, out col) ? col.Depth : -1f;

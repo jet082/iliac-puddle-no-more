@@ -295,6 +295,12 @@ namespace DeepWaters
             if (parent == null || positions == null || positions.Count == 0 || info == null || info.Material == null)
                 return;
 
+            // NOTE: DFU's own custom-material batch (SetMaterial(Material) +
+            // AddItem(rect, size, scale, pos)) looks like the native way to do
+            // this, but it is BROKEN upstream: CreateMeshForCustomMaterial()
+            // passes the never-populated cachedMaterial.atlasRects/atlasIndices
+            // into its job and throws on Apply(). Its only in-tree callers are
+            // commented out. Keep building the batch mesh by hand.
             Mesh mesh = BuildMaterialBillboardBatchMesh(positions, info);
             if (mesh == null)
                 return;
@@ -549,6 +555,14 @@ namespace DeepWaters
             targetMaterial.SetTextureOffset(propertyId, sourceMaterial.GetTextureOffset(propertyId));
         }
 
+        // Replacement packs (DREAM et al.) ship some rarely-seen flats with
+        // OPAQUE near-black padding instead of alpha: vanilla only ever shows
+        // them in dark dungeon water, so the padding passes unnoticed there,
+        // but this mod's bright unlit cutout shader renders it as a black box.
+        // There is no DFU-side facility to sanitize replacement alpha, so we
+        // clean edge-connected black padding once per texture (cached copy);
+        // a naive shader-side black-key would also punch holes in genuinely
+        // dark sprite interiors, which is why this is a connectivity pass.
         private static Texture GetEdgeCleanedTexture(Texture source)
         {
             Texture cached;

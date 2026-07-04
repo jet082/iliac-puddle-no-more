@@ -30,17 +30,13 @@ namespace DeepWaters
     public static class DeepWaterDistanceBake
     {
         // File header magic + version. Bump version if the layout changes.
-        // v4 added a second, finer water mask (64x64 per pixel by default,
-        // any-water criterion) used by the bake-driven cell-level carving
-        // in DeepWaterFloorBuilder. Distance + coarse mask stay at their
-        // original 8x8 resolution.
+        // Only the current version loads: the mod ships its own bakes and the
+        // editor baker always writes CurrentVersion, so there is no pre-v6
+        // file to tolerate. Layout: distance grid + coarse water mask (8x8
+        // per pixel), fine water mask (64x64 per pixel, any-water criterion,
+        // drives cell-level carving), carved-edge distance field, and the
+        // local-water edge distance field for inland lakes.
         private const uint MagicBytes = 0x44574442;   // 'DWDB'
-        private const ushort MinimumSupportedVersion = 1;
-		// v5 appends a coarse distance-to-carved-EDGE field after the fine mask.
-		// Runtime shelf depth still uses this field for bda0e6e-style shoreline
-		// behavior; raw coast distance makes broad bays grow false ledges.
-		// v6 appends the same edge-distance field built from the unpruned local
-		// water mask, so inland lakes can use baked bathymetry without runtime probes.
 		private const ushort CurrentVersion = 6;
 
         // Asset names (without extension) inside the mod's Resources folder.
@@ -68,8 +64,6 @@ namespace DeepWaters
         private static bool hasFineWaterMask;
 		private static bool hasEdgeField;
 		private static bool hasLocalEdgeField;
-        private static ushort loadedVersion;
-        private const int FineEdgeSearchRadiusCells = 8;
 
         public static bool IsLoaded { get { return loaded; } }
         public static bool HasFineWaterMask { get { return hasFineWaterMask; } }
@@ -102,11 +96,11 @@ namespace DeepWaters
                 }
 
                 ushort version = br.ReadUInt16();
-                if (version < MinimumSupportedVersion || version > CurrentVersion)
+                if (version != CurrentVersion)
                 {
                     Debug.LogError("[DeepWaters.Bake] Bake file version " + version +
-                                   " unsupported (this build supports " +
-                                   MinimumSupportedVersion + "-" + CurrentVersion + ").");
+                                   " unsupported (this build requires v" + CurrentVersion +
+                                   " - re-run Tools > Deep Waters > Bake Distance Field).");
                     return false;
                 }
 
@@ -133,95 +127,66 @@ namespace DeepWaters
                 byte[] cells = new byte[expectedDataBytes];
                 br.Read(cells, 0, cells.Length);
 
-                byte[] mask = null;
-                bool loadedWaterMask = false;
-                long expectedMaskBytes = 0;
-                if (version >= 2)
+                long expectedMaskBytes = (expectedDataBytes + 7) / 8;
+                if (fileBytes.Length - HeaderByteSize - expectedDataBytes < expectedMaskBytes)
                 {
-                    expectedMaskBytes = (expectedDataBytes + 7) / 8;
-                    if (fileBytes.Length - HeaderByteSize - expectedDataBytes < expectedMaskBytes)
-                    {
-                        Debug.LogError("[DeepWaters.Bake] Bake water mask truncated. Header says " +
-                                       expectedMaskBytes + " mask bytes but file only has " +
-                                       (fileBytes.Length - HeaderByteSize - expectedDataBytes) + ".");
-                        return false;
-                    }
-
-                    mask = new byte[expectedMaskBytes];
-                    br.Read(mask, 0, mask.Length);
-                    loadedWaterMask = true;
+                    Debug.LogError("[DeepWaters.Bake] Bake water mask truncated. Header says " +
+                                   expectedMaskBytes + " mask bytes but file only has " +
+                                   (fileBytes.Length - HeaderByteSize - expectedDataBytes) + ".");
+                    return false;
                 }
 
-                // v4: fine water mask follows the coarse mask. Resolution is
-                // mapPixels × fineSubCells per axis. Falls back to "no fine
-                // mask" on older versions so the runtime can stay on the
-                // heightmap any-corner carving path until the user re-bakes.
-                byte[] fineMask = null;
-                bool loadedFineMask = false;
-                int wCellsFine = 0;
-                int hCellsFine = 0;
-                int fineSubCells = 0;
-                if (version >= 4 && fineSubCellsRaw > 0)
-                {
-                    fineSubCells = fineSubCellsRaw;
-                    wCellsFine = pX * fineSubCells;
-                    hCellsFine = pY * fineSubCells;
-                    long expectedFineCells = (long)wCellsFine * hCellsFine;
-                    long expectedFineMaskBytes = (expectedFineCells + 7) / 8;
-                    long remaining = fileBytes.Length - HeaderByteSize - expectedDataBytes - expectedMaskBytes;
-                    if (remaining < expectedFineMaskBytes)
-                    {
-                        Debug.LogError("[DeepWaters.Bake] Fine water mask truncated. Header says " +
-                                       expectedFineMaskBytes + " bytes (resolution " +
-                                       wCellsFine + "x" + hCellsFine + ", " + fineSubCells +
-                                       " sub-cells per pixel) but only " + remaining + " bytes remain.");
-                        return false;
-                    }
+                byte[] mask = new byte[expectedMaskBytes];
+                br.Read(mask, 0, mask.Length);
 
-                    fineMask = new byte[expectedFineMaskBytes];
-                    br.Read(fineMask, 0, fineMask.Length);
-                    loadedFineMask = true;
+                // Fine water mask follows the coarse mask. Resolution is
+                // mapPixels × fineSubCells per axis.
+                if (fineSubCellsRaw <= 0)
+                {
+                    Debug.LogError("[DeepWaters.Bake] Bake file has no fine water mask.");
+                    return false;
                 }
 
-                // v5: coarse distance-to-carved-edge field, appended after the
-                // fine mask (same resolution + scale as the distance-to-coast
-                // grid). Older bakes have none — the runtime then falls back to
-                // distance-to-coast for the shelf.
-                byte[] edgeCells = null;
-                bool loadedEdge = false;
-                if (version >= 5)
+                int fineSubCells = fineSubCellsRaw;
+                int wCellsFine = pX * fineSubCells;
+                int hCellsFine = pY * fineSubCells;
+                long expectedFineMaskBytes = ((long)wCellsFine * hCellsFine + 7) / 8;
+                long remaining = fileBytes.Length - HeaderByteSize - expectedDataBytes - expectedMaskBytes;
+                if (remaining < expectedFineMaskBytes)
                 {
-                    long fineMaskBytes = loadedFineMask ? ((long)wCellsFine * hCellsFine + 7) / 8 : 0;
-                    long remainingEdge = fileBytes.Length - HeaderByteSize - expectedDataBytes - expectedMaskBytes - fineMaskBytes;
-                    if (remainingEdge < expectedDataBytes)
-                    {
-                        Debug.LogError("[DeepWaters.Bake] Edge-distance field truncated. Header implies " +
-                                       expectedDataBytes + " edge bytes but only " + remainingEdge + " remain.");
-                        return false;
-                    }
-                    edgeCells = new byte[expectedDataBytes];
-                    br.Read(edgeCells, 0, edgeCells.Length);
-                    loadedEdge = true;
+                    Debug.LogError("[DeepWaters.Bake] Fine water mask truncated. Header says " +
+                                   expectedFineMaskBytes + " bytes (resolution " +
+                                   wCellsFine + "x" + hCellsFine + ", " + fineSubCells +
+                                   " sub-cells per pixel) but only " + remaining + " bytes remain.");
+                    return false;
                 }
 
-				// v6: coarse distance-to-local-water-edge field, appended after
+                byte[] fineMask = new byte[expectedFineMaskBytes];
+                br.Read(fineMask, 0, fineMask.Length);
+
+                // Coarse distance-to-carved-edge field, appended after the
+                // fine mask (same resolution + scale as the distance-to-coast grid).
+                long remainingEdge = remaining - expectedFineMaskBytes;
+                if (remainingEdge < expectedDataBytes)
+                {
+                    Debug.LogError("[DeepWaters.Bake] Edge-distance field truncated. Header implies " +
+                                   expectedDataBytes + " edge bytes but only " + remainingEdge + " remain.");
+                    return false;
+                }
+                byte[] edgeCells = new byte[expectedDataBytes];
+                br.Read(edgeCells, 0, edgeCells.Length);
+
+				// Coarse distance-to-local-water-edge field, appended after
 				// the ocean-connected edge field. Used only by local fallback water.
-				byte[] localEdgeCells = null;
-				bool loadedLocalEdge = false;
-				if (version >= 6)
+				long remainingLocalEdge = remainingEdge - expectedDataBytes;
+				if (remainingLocalEdge < expectedDataBytes)
 				{
-					long fineMaskBytes = loadedFineMask ? ((long)wCellsFine * hCellsFine + 7) / 8 : 0;
-					long remainingLocalEdge = fileBytes.Length - HeaderByteSize - expectedDataBytes - expectedMaskBytes - fineMaskBytes - expectedDataBytes;
-					if (remainingLocalEdge < expectedDataBytes)
-					{
-						Debug.LogError("[DeepWaters.Bake] Local edge-distance field truncated. Header implies " +
-							expectedDataBytes + " local-edge bytes but only " + remainingLocalEdge + " remain.");
-						return false;
-					}
-					localEdgeCells = new byte[expectedDataBytes];
-					br.Read(localEdgeCells, 0, localEdgeCells.Length);
-					loadedLocalEdge = true;
+					Debug.LogError("[DeepWaters.Bake] Local edge-distance field truncated. Header implies " +
+						expectedDataBytes + " local-edge bytes but only " + remainingLocalEdge + " remain.");
+					return false;
 				}
+				byte[] localEdgeCells = new byte[expectedDataBytes];
+				br.Read(localEdgeCells, 0, localEdgeCells.Length);
 
                 widthCells = wCells;
                 heightCells = hCells;
@@ -236,11 +201,10 @@ namespace DeepWaters
                 fineWaterMaskBits = fineMask;
                 edgeData = edgeCells;
 				localEdgeData = localEdgeCells;
-                hasWaterMask = loadedWaterMask;
-                hasFineWaterMask = loadedFineMask;
-                hasEdgeField = loadedEdge;
-				hasLocalEdgeField = loadedLocalEdge;
-                loadedVersion = version;
+                hasWaterMask = true;
+                hasFineWaterMask = true;
+                hasEdgeField = true;
+				hasLocalEdgeField = true;
                 loaded = true;
             }
 
@@ -263,12 +227,6 @@ namespace DeepWaters
                                  "If WOD/Interesting Terrain is active, re-run Tools > Deep Waters > " +
                                  "Bake Distance Field with the patched WOD height-buffer path; a vanilla " +
                                  "sampler pass over WOD's altered height bytes can produce a nearly-dry bake.");
-            if (!hasWaterMask)
-                Debug.LogWarning("[DeepWaters.Bake] Loaded legacy distance bake without a water mask. Re-run Tools > Deep Waters > Bake Distance Field to get conservative shoreline carving.");
-            if (loadedVersion < 3)
-                Debug.LogWarning("[DeepWaters.Bake] Loaded legacy distance bake with old north/south sampling. Re-run Tools > Deep Waters > Bake Distance Field to fix map-pixel Y seams.");
-            if (loadedVersion < 4)
-                Debug.LogWarning("[DeepWaters.Bake] Loaded pre-v4 distance bake — bake-driven cell carving is NOT available. Re-run Tools > Deep Waters > Bake Distance Field to enable seamless cross-pixel carving (the Phase B fix).");
             return true;
         }
 
@@ -306,48 +264,12 @@ namespace DeepWaters
 			return BilinearSampleMeters(localEdgeData, mapPixelX, mapPixelY, fracX, fracZ);
 		}
 
-        private static float SampleNearbyFineEdgeDistanceMeters(int mapPixelX, int mapPixelY, float fracX, float fracZ)
-        {
-            if (!hasFineWaterMask || fineWaterMaskBits == null || subCellsPerPixelFine <= 0)
-                return float.MaxValue;
-
-            float gx = mapPixelX * subCellsPerPixelFine + Mathf.Clamp01(fracX) * subCellsPerPixelFine - 0.5f;
-            float gy = mapPixelY * subCellsPerPixelFine + BakedSouthFraction(fracZ) * subCellsPerPixelFine - 0.5f;
-            int x = Mathf.Clamp(Mathf.RoundToInt(gx), 0, widthCellsFine - 1);
-            int y = Mathf.Clamp(Mathf.RoundToInt(gy), 0, heightCellsFine - 1);
-
-            if (!FineCellHasWater(x, y))
-                return 0f;
-
-            int radius = Mathf.Min(FineEdgeSearchRadiusCells, Mathf.Max(widthCellsFine, heightCellsFine));
-            for (int r = 1; r <= radius; r++)
-            {
-                for (int dy = -r; dy <= r; dy++)
-                {
-                    int y0 = y + dy;
-                    if (!FineCellHasWater(x - r, y0) || !FineCellHasWater(x + r, y0))
-                        return FineCellDistanceMeters(r);
-                }
-
-                for (int dx = -r + 1; dx <= r - 1; dx++)
-                {
-                    int x0 = x + dx;
-                    if (!FineCellHasWater(x0, y - r) || !FineCellHasWater(x0, y + r))
-                        return FineCellDistanceMeters(r);
-                }
-            }
-
-            return float.MaxValue;
-        }
-
         // Convert tile-local fractions to global sub-cell coordinates.
-        // DFU local Z grows north, while map pixel Y grows south. The
-        // baked grid stores rows in map-pixel order (north-to-south), so
-        // v3 bakes flip fracZ here. Older bakes used the unflipped value
-        // and are retained only for compatibility while warning loudly.
-        // The half-cell offset puts global integer indices at sub-cell
-        // CENTERS, so the interpolation between neighbors is symmetric
-        // around the cell midpoint and matches the bake-time placement.
+        // DFU local Z grows north, while map pixel Y grows south; the baked
+        // grid stores rows in map-pixel order (north-to-south), so fracZ
+        // flips here. The half-cell offset puts global integer indices at
+        // sub-cell CENTERS, so the interpolation between neighbors is
+        // symmetric around the cell midpoint and matches bake-time placement.
         private static float BilinearSampleMeters(byte[] grid, int mapPixelX, int mapPixelY, float fracX, float fracZ)
         {
             float gx = mapPixelX * subCellsPerPixelX + Mathf.Clamp01(fracX) * subCellsPerPixelX - 0.5f;
@@ -512,8 +434,7 @@ namespace DeepWaters
 
         private static float BakedSouthFraction(float fracZ)
         {
-            float clamped = Mathf.Clamp01(fracZ);
-            return loadedVersion >= 3 ? 1f - clamped : clamped;
+            return 1f - Mathf.Clamp01(fracZ);
         }
 
         private static bool CellHasWater(int x, int y)
@@ -526,22 +447,6 @@ namespace DeepWaters
                 return (waterMaskBits[index >> 3] & (1 << (index & 7))) != 0;
 
             return data != null && data[index] > 0;
-        }
-
-        private static bool FineCellHasWater(int x, int y)
-        {
-            if (x < 0 || y < 0 || x >= widthCellsFine || y >= heightCellsFine)
-                return false;
-
-            int index = y * widthCellsFine + x;
-            return fineWaterMaskBits != null &&
-                   (fineWaterMaskBits[index >> 3] & (1 << (index & 7))) != 0;
-        }
-
-        private static float FineCellDistanceMeters(int radiusCells)
-        {
-            float tileMeters = MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale;
-            return Mathf.Max(0f, radiusCells) * tileMeters / Mathf.Max(1, subCellsPerPixelFine);
         }
 
         // --- helpers shared with the editor tool ------------------------------

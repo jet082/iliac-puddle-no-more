@@ -20,8 +20,6 @@ namespace DeepWaters.Editor
     /// </summary>
     internal static class WodCpuWaterClassifierV0
     {
-        public const float WaterThresholdNormalized = 100.4f / NewHeight;
-
         private const float TerrainX = 999f;
         private const float TerrainY = 499f;
         private const float CoastlineVar = 40f;
@@ -35,58 +33,6 @@ namespace DeepWaters.Editor
         private const float NoiseMapScale = 4f;
         private const float ScaledOceanElevation = 27.2f;
 
-        public static bool TryBuildWaterMask(
-            int mapPixelX,
-            int mapPixelY,
-            int hDim,
-            out bool[] water,
-            out float[] heights,
-            out string notes)
-        {
-            return TryBuildWaterMaskInternal(mapPixelX, mapPixelY, hDim, false, false,
-                TextureSamplingMode.LegacyUnitInterval,
-                out water, out heights, out notes);
-        }
-
-        public static bool TryBuildWaterMaskLocationPortV1(
-            int mapPixelX,
-            int mapPixelY,
-            int hDim,
-            out bool[] water,
-            out float[] heights,
-            out string notes)
-        {
-            return TryBuildWaterMaskInternal(mapPixelX, mapPixelY, hDim, true, false,
-                TextureSamplingMode.LegacyUnitInterval,
-                out water, out heights, out notes);
-        }
-
-        public static bool TryBuildWaterMaskRoadsV2(
-            int mapPixelX,
-            int mapPixelY,
-            int hDim,
-            out bool[] water,
-            out float[] heights,
-            out string notes)
-        {
-            return TryBuildWaterMaskInternal(mapPixelX, mapPixelY, hDim, true, true,
-                TextureSamplingMode.LegacyUnitInterval,
-                out water, out heights, out notes);
-        }
-
-        public static bool TryBuildWaterMaskGpuTextureV3(
-            int mapPixelX,
-            int mapPixelY,
-            int hDim,
-            out bool[] water,
-            out float[] heights,
-            out string notes)
-        {
-            return TryBuildWaterMaskInternal(mapPixelX, mapPixelY, hDim, true, true,
-                TextureSamplingMode.GpuLinearClamp,
-                out water, out heights, out notes);
-        }
-
         public static bool TryBuildHeightsGpuTextureV3(
             int mapPixelX,
             int mapPixelY,
@@ -97,40 +43,6 @@ namespace DeepWaters.Editor
             return TryBuildHeightsInternal(mapPixelX, mapPixelY, hDim, true, true,
                 TextureSamplingMode.GpuLinearClamp,
                 heights, out notes);
-        }
-
-        private static bool TryBuildWaterMaskInternal(
-            int mapPixelX,
-            int mapPixelY,
-            int hDim,
-            bool includeLocationPort,
-            bool includeRoadSmoothing,
-            TextureSamplingMode textureSamplingMode,
-            out bool[] water,
-            out float[] heights,
-            out string notes)
-        {
-            water = null;
-            heights = new float[hDim * hDim];
-            if (!TryBuildHeightsInternal(mapPixelX, mapPixelY, hDim, includeLocationPort, includeRoadSmoothing,
-                    textureSamplingMode, heights, out notes))
-            {
-                heights = null;
-                return false;
-            }
-
-            water = new bool[hDim * hDim];
-            for (int y = 0; y < hDim; y++)
-            {
-                for (int x = 0; x < hDim; x++)
-                {
-                    int heightIndex = y + x * hDim;
-                    int rowMajor = x + y * hDim;
-                    water[rowMajor] = heights[heightIndex] <= WaterThresholdNormalized;
-                }
-            }
-
-            return true;
         }
 
         private static bool TryBuildHeightsInternal(

@@ -42,8 +42,6 @@ namespace DeepWaters
 
         private static bool installed;
         private static bool terrainUpdateEventActive;
-        private static bool terrainUpdateReflectionWarningLogged;
-        private static FieldInfo terrainUpdateRunningField;
         private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
 
         // Shared runtime gates for streaming, terrain mutation, and transient content.
@@ -105,38 +103,11 @@ namespace DeepWaters
             }
         }
 
+        // The OnUpdateTerrainsStart/End events (subscribed at install, before
+        // any session starts) fully bracket StreamingWorld's terrain updates.
         internal static bool IsTerrainUpdateActive
         {
-            get
-            {
-                if (terrainUpdateEventActive)
-                    return true;
-
-                if (terrainUpdateRunningField == null)
-                    ResolveTerrainUpdateRunningField();
-
-                if (terrainUpdateRunningField == null)
-                    return false;
-
-                try
-                {
-                    GameManager gameManager = GameManager.Instance;
-                    if (gameManager == null || gameManager.StreamingWorld == null)
-                        return false;
-
-                    object value = terrainUpdateRunningField.GetValue(gameManager.StreamingWorld);
-                    return value is bool && (bool)value;
-                }
-                catch (System.Exception ex)
-                {
-                    if (!terrainUpdateReflectionWarningLogged)
-                    {
-                        Debug.LogWarning("[DeepWaters.Runtime] Could not read StreamingWorld.terrainUpdateRunning; blocking terrain holes until the next stable event. " + ex.Message);
-                        terrainUpdateReflectionWarningLogged = true;
-                    }
-                    return true;
-                }
-            }
+            get { return terrainUpdateEventActive; }
         }
 
         internal static bool CanMutateTerrainData
@@ -152,7 +123,6 @@ namespace DeepWaters
             if (installed)
                 return;
 
-            ResolveTerrainUpdateRunningField();
 			terrainArrayField = typeof(StreamingWorld).GetField("terrainArray", PrivateInstance);
 			updateLocationsField = typeof(StreamingWorld).GetField("updateLocations", PrivateInstance);
 			if (terrainArrayField == null || updateLocationsField == null)
@@ -210,19 +180,6 @@ namespace DeepWaters
             terrainUpdateEventActive = false;
             DeepWaterTerrainLookup.Clear();
 			SkipPeripheralLocationUpdates();
-        }
-
-        private static void ResolveTerrainUpdateRunningField()
-        {
-            if (terrainUpdateRunningField != null)
-                return;
-
-            terrainUpdateRunningField = typeof(StreamingWorld).GetField("terrainUpdateRunning", PrivateInstance);
-            if (terrainUpdateRunningField == null && !terrainUpdateReflectionWarningLogged)
-            {
-                Debug.LogWarning("[DeepWaters.Runtime] StreamingWorld.terrainUpdateRunning reflection failed; using terrain start/end events only.");
-                terrainUpdateReflectionWarningLogged = true;
-            }
         }
 
         private static void OnStartLoad(SaveData_v1 saveData)

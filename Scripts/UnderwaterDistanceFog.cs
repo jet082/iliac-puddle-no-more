@@ -159,14 +159,13 @@ namespace DeepWaters
             if (OutdoorSwimDriver.IsPresentationUnderwater(oceanSurfaceY))
                 return true;
 
+            Vector3 swimHeadPosition;
             if (IsExteriorSwimming(gameManager) &&
-                IsCameraOrPlayerBelowSurface(gameManager, camera, oceanSurfaceY))
+                TryGetPlayerHeadPosition(gameManager, out swimHeadPosition) &&
+                swimHeadPosition.y <= oceanSurfaceY - 0.15f)
             {
                 return true;
             }
-
-            if (camera != null && IsPointInsideDeepWater(camera.transform.position, oceanSurfaceY, 0.08f))
-                return true;
 
             Vector3 headPosition;
             return TryGetPlayerHeadPosition(gameManager, out headPosition) &&
@@ -242,19 +241,6 @@ namespace DeepWaters
             headPosition = player.transform.position;
             headPosition.y += (76 * MeshReader.GlobalScale) - 0.95f;
             return true;
-        }
-
-        private static bool IsCameraOrPlayerBelowSurface(GameManager gameManager, Camera camera, float oceanSurfaceY)
-        {
-            const float cameraSurfacePadding = 0.25f;
-            const float headSurfacePadding = -0.15f;
-
-            if (camera != null && camera.transform.position.y <= oceanSurfaceY + cameraSurfacePadding)
-                return true;
-
-            Vector3 headPosition;
-            return TryGetPlayerHeadPosition(gameManager, out headPosition) &&
-                   headPosition.y <= oceanSurfaceY + headSurfacePadding;
         }
 
         private static bool IsPointInsideDeepWater(Vector3 worldPosition, float oceanSurfaceY, float surfacePadding)

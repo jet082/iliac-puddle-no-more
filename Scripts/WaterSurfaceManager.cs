@@ -542,13 +542,11 @@ namespace DeepWaters
             MeshFilter topFilter = EnsureSurfaceRenderer(
                 visualGO.transform,
                 TopSurfaceChildName,
-                WaterSurfaceResources.GetTopMaterial(),
-                true);
+                WaterSurfaceResources.GetTopMaterial());
             MeshFilter undersideFilter = EnsureSurfaceRenderer(
                 visualGO.transform,
                 UndersideSurfaceChildName,
-                WaterSurfaceResources.GetUndersideMaterial(),
-                true);
+                WaterSurfaceResources.GetUndersideMaterial());
             ReplaceSurfaceMesh(topFilter, undersideFilter, surfaceMesh);
 
             WaterSurfaceResources.ApplyMaterialSettings();
@@ -560,8 +558,7 @@ namespace DeepWaters
         private static MeshFilter EnsureSurfaceRenderer(
             Transform root,
             string childName,
-            Material material,
-            bool visible)
+            Material material)
         {
             Transform existing = root.Find(childName);
             GameObject surfaceGO;
@@ -590,7 +587,7 @@ namespace DeepWaters
             if (meshRenderer.sharedMaterial != material)
                 meshRenderer.sharedMaterial = material;
 
-            meshRenderer.enabled = material != null && visible;
+            meshRenderer.enabled = material != null;
             DeepWaterRendering.DisableShadows(meshRenderer);
             return meshFilter;
         }
@@ -881,65 +878,68 @@ namespace DeepWaters
             }
         }
 
+        private static readonly Queue<int> featherQueue = new Queue<int>();
+        private static int[] featherDepthScratch;
+
+        // Constrained dilation of the surface-cell set into wet/baked-shore
+        // cells, ShorelineSurfaceFeatherCells rings deep. Single BFS over the
+        // frontier on pooled buffers (the old version rescanned the whole grid
+        // and allocated two fresh bool[n,n] per feather step).
         private static void AddLocalShorelineFeather(DaggerfallTerrain terrain, bool[,] cells, int n)
         {
             if (terrain == null || cells == null || n <= 0 || ShorelineSurfaceFeatherCells <= 0)
                 return;
 
-            bool[,] source = new bool[n, n];
+            if (featherDepthScratch == null || featherDepthScratch.Length < n * n)
+                featherDepthScratch = new int[n * n];
+            System.Array.Clear(featherDepthScratch, 0, n * n);
+            featherQueue.Clear();
+
+            // Seed with the current surface set at depth 1 (0 = unvisited).
             for (int z = 0; z < n; z++)
                 for (int x = 0; x < n; x++)
-                    source[z, x] = cells[z, x];
-
-            for (int pass = 0; pass < ShorelineSurfaceFeatherCells; pass++)
-            {
-                bool changed = false;
-                bool[,] next = new bool[n, n];
-                for (int z = 0; z < n; z++)
-                {
-                    for (int x = 0; x < n; x++)
+                    if (cells[z, x])
                     {
-                        next[z, x] = source[z, x];
-                        if (source[z, x] ||
-                            !HasAdjacentSurfaceCell(source, x, z, n) ||
-                            (!DeepWaterWaterClassification.IsCellVisuallyWet(terrain.MapData, x, z, n) &&
-                             !IsBakedShoreSurfaceCell(terrain, x, z, n)))
+                        featherDepthScratch[z * n + x] = 1;
+                        featherQueue.Enqueue((z << 16) | x);
+                    }
+
+            while (featherQueue.Count > 0)
+            {
+                int encoded = featherQueue.Dequeue();
+                int x = encoded & 0xffff;
+                int z = encoded >> 16;
+                int depth = featherDepthScratch[z * n + x];
+                if (depth > ShorelineSurfaceFeatherCells)
+                    continue;
+
+                for (int dz = -1; dz <= 1; dz++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dz == 0)
+                            continue;
+
+                        int xx = x + dx;
+                        int zz = z + dz;
+                        if (xx < 0 || zz < 0 || xx >= n || zz >= n ||
+                            featherDepthScratch[zz * n + xx] != 0)
                         {
                             continue;
                         }
 
-                        next[z, x] = true;
-                        changed = true;
+                        featherDepthScratch[zz * n + xx] = depth + 1;
+                        if (!DeepWaterWaterClassification.IsCellVisuallyWet(terrain.MapData, xx, zz, n) &&
+                            !IsBakedShoreSurfaceCell(terrain, xx, zz, n))
+                        {
+                            continue;
+                        }
+
+                        cells[zz, xx] = true;
+                        featherQueue.Enqueue((zz << 16) | xx);
                     }
                 }
-
-                source = next;
-                if (!changed)
-                    break;
             }
-
-            for (int z = 0; z < n; z++)
-                for (int x = 0; x < n; x++)
-                    cells[z, x] = source[z, x];
-        }
-
-        private static bool HasAdjacentSurfaceCell(bool[,] cells, int x, int z, int n)
-        {
-            for (int dz = -1; dz <= 1; dz++)
-            {
-                for (int dx = -1; dx <= 1; dx++)
-                {
-                    if (dx == 0 && dz == 0)
-                        continue;
-
-                    int xx = x + dx;
-                    int zz = z + dz;
-                    if (xx >= 0 && zz >= 0 && xx < n && zz < n && cells[zz, xx])
-                        return true;
-                }
-            }
-
-            return false;
         }
 
         private static bool IsBakedShoreSurfaceCell(DaggerfallTerrain terrain, int cellX, int cellZ, int resolution)
@@ -1116,19 +1116,11 @@ namespace DeepWaters
 
 		void OnEnable()
 		{
-			StreamingWorld.OnCreateLocationGameObject += OnCreateLocationGameObject;
-			StreamingWorld.OnUpdateLocationGameObject += OnUpdateLocationGameObject;
-			StreamingWorld.OnAvailableLocationGameObject += OnAvailableLocationGameObject;
-			StreamingWorld.OnFloatingOriginChange += OnFloatingOriginChange;
 			DeepWaterRuntime.OnTransientReset += ScheduleImmediateCheck;
 		}
 
 		void OnDisable()
 		{
-			StreamingWorld.OnCreateLocationGameObject -= OnCreateLocationGameObject;
-			StreamingWorld.OnUpdateLocationGameObject -= OnUpdateLocationGameObject;
-			StreamingWorld.OnAvailableLocationGameObject -= OnAvailableLocationGameObject;
-			StreamingWorld.OnFloatingOriginChange -= OnFloatingOriginChange;
 			DeepWaterRuntime.OnTransientReset -= ScheduleImmediateCheck;
 		}
 
@@ -1139,29 +1131,6 @@ namespace DeepWaters
 
 			nextCheckTime = Time.time + CheckInterval;
 			AnchorCurrentShipLocation();
-		}
-
-		private void OnCreateLocationGameObject(DaggerfallLocation dfLocation)
-		{
-			AnchorShipLocation(dfLocation);
-		}
-
-		private void OnUpdateLocationGameObject(GameObject locationObject, bool allowYield)
-		{
-			if (locationObject == null)
-				return;
-
-			AnchorShipLocation(locationObject.GetComponent<DaggerfallLocation>());
-		}
-
-		private void OnAvailableLocationGameObject()
-		{
-			AnchorCurrentShipLocation();
-		}
-
-		private void OnFloatingOriginChange()
-		{
-			ScheduleImmediateCheck();
 		}
 
 		private void ScheduleImmediateCheck()

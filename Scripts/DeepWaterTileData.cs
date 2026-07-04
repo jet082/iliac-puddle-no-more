@@ -55,20 +55,6 @@ namespace DeepWaters
             initialized = true;
         }
 
-        internal float GetDistanceToCoastMeters(float worldX, float worldZ)
-        {
-            if (!DeepWaterDistanceBake.IsLoaded)
-                return float.MaxValue;
-
-            int mapPixelX;
-            int mapPixelY;
-            float fracX;
-            float fracZ;
-            GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
-            return DeepWaterDistanceBake.SampleDistanceMeters(
-                mapPixelX, mapPixelY, fracX, fracZ);
-        }
-
         // Distance (meters) to the nearest CARVED SHORE EDGE — resolves small
         // islands the coast-distance field misses. Falls back to coast distance
         // on pre-v5 bakes (handled inside SampleEdgeDistanceMeters).
@@ -412,23 +398,8 @@ namespace DeepWaters
             if (!DeepWaterWaterClassification.MapDataHasWater(dfTerrain.MapData))
                 return false;
 
-            if (DeepWaterDistanceBake.HasFineWaterMask)
-			{
-				if (DeepWaterDistanceBake.MapPixelHasFineWaterCells(mx, my))
-				{
-					UsesLocalWaterFallback = false;
-					return true;
-				}
-
-				UsesLocalWaterFallback = true;
-				return true;
-			}
-
-            // Pre-v4 (legacy) fallback: heightmap-based self-check
-            // combined with coarse-mask neighbor check. Identical to
-            // v0.52.4 behavior so old bakes still get the shoreline
-            // ocean-connectivity improvement.
-            return DeepWaterDistanceBake.MapPixelOrCardinalNeighborHasWaterCells(mx, my);
+			UsesLocalWaterFallback = !DeepWaterDistanceBake.MapPixelHasFineWaterCells(mx, my);
+			return true;
         }
 
     }
