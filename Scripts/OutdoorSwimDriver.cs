@@ -2,6 +2,7 @@
 // License:         MIT
 
 using System.Collections.Generic;
+using System.Globalization;
 using System.Reflection;
 using DaggerfallConnect.Utility;
 using DaggerfallWorkshop;
@@ -44,11 +45,19 @@ namespace DeepWaters
         // while it is within these clearances of the waterline — i.e. mostly
         // submerged. Being above water (boat deck, shore) is naturally NOT
         // swimming, which is what makes boats work with no special-casing.
-        // SwimExitClearance must stay just ABOVE SwimPhysicsSurfaceOffset: DFU's
+        //
+        // INVARIANT: while forged, blockWaterLevel is published at
+        // ocean + SwimExitClearance (see ForgedSwimWaterLineY), because vanilla
+        // PlayerEnterExit.Update re-derives IsPlayerSwimming from blockWaterLevel
+        // every frame with the same formula IsPlayerAtSwimmingDepth uses. The two
+        // state machines therefore agree by construction. Publishing a LOWER line
+        // (the old ocean + SwimPhysicsSurfaceOffset) left a 0.20m band where
+        // vanilla un-swam and PostPhaseRestore re-swam every frame; each
+        // LevitateMotor.IsSwimming toggle latches PlayerMotor.CancelMovement,
+        // which froze the player at the shore until the contact grace expired.
+        // SwimExitClearance must still stay ABOVE SwimPhysicsSurfaceOffset: DFU's
         // float ceiling is oceanY + offset - 0.32, so this gap (0.20m) is the
-        // stable margin that holds the surface float below the swim-exit. Tying
-        // them equal collapses the margin to ~0.02m and the player bobs at the
-        // surface (pops in/out of swim every other frame).
+        // stable margin that holds the surface float below the swim-exit line.
         private const float SwimEnterClearance = 0.10f;
         private const float SwimExitClearance = 0.75f;
         private const float SwimPhysicsSurfaceOffset = 0.55f;
@@ -71,7 +80,7 @@ namespace DeepWaters
         private const float ShoreTerrainStandClearance = 0.35f;
 
         // Player water-contact probing (TryGetPlayerWaterColumn).
-        private const float WaterContactMinimumDepth = 0.15f;
+		private const float WaterContactMinimumDepth = 0.5f;
         private const float WaterContactGraceSeconds = 1.25f;
         private const float WaterContactProbeRadiusMin = 0.35f;
         private const float WaterContactProbeRadiusMax = 0.75f;
@@ -83,8 +92,6 @@ namespace DeepWaters
         // a surface floater can't sit exactly on the threshold.
         private const float ColliderGateOpenFeetMargin = 0.25f;
         private const float ColliderGateCloseFeetMargin = 1.00f;
-        private const float ColliderGateShoreProbeRadiusMin = 2.50f;
-        private const float ColliderGateShoreProbeRadiusMax = 4.00f;
         private const float ColliderGateShoreTerrainMargin = 0.35f;
         // The gate is a DISTANCE RING: every loaded ocean-water tile whose
         // footprint lies within this of the submerged player is disabled.
@@ -95,6 +102,13 @@ namespace DeepWaters
         private const float ColliderGateRefreshIntervalSeconds = 0.15f;
         private const float ColliderGateEjectGuardMargin = 0.5f;
         private const float ColliderGateEjectGuardPaddingMeters = 96f;
+        // Beach veto depth band: with feet at/above this, a player over vanilla
+        // terrain that rises clear of the waterline is standing/wading on real
+        // shore and keeps it solid; feet deeper belong to a genuine swimmer
+        // (e.g. skimming a carve wall whose XZ overhangs land) — never veto.
+        private const float ColliderGateSolidShoreMaxFeetDepth = 0.5f;
+		private const float StuckProbeLogIntervalSeconds = 0.25f;
+		private const float StuckProbeMaxDepth = 8f;
 
         // Boats.
         private const string BoatEffectBundleName = "ImOnABoat";
@@ -115,10 +129,14 @@ namespace DeepWaters
         private int colliderGateRefreshFrame = -1;
         private float nextColliderGateRefreshTime;
         private float waterContactUntil;
+		private Vector3 stuckProbeLastPosition;
+		private float stuckProbeLastTime;
+		private float stuckProbeNextLogTime;
 
         internal static bool DiagnosticWaterColliderGateActive { get; private set; }
         internal static int DiagnosticDisabledWaterColliderCount { get; private set; }
         internal static int DiagnosticDesiredWaterColliderCount { get; private set; }
+		internal static string DiagnosticWaterColliderGateReason { get; private set; }
         internal static bool DiagnosticForceDescendInput { get; set; }
 		internal static bool DiagnosticForceAscendInput { get; set; }
 
@@ -193,10 +211,11 @@ namespace DeepWaters
 			bool ascendInput = HasAscendInput();
 			float oceanSurfaceY = ComputeOceanSurfaceY();
 			UpdateWaterTerrainColliderGate(oceanSurfaceY, descendInput);
+			bool standingOnShore = !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
 			bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
-			bool standingOnShore = !hasWaterContact && !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
             bool isSwimming = hasWaterContact && !standingOnShore && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
             bool isPresentationUnderwater = hasWaterContact && !standingOnShore && IsPresentationUnderwater(oceanSurfaceY);
+			LogShoreStuckProbe(oceanSurfaceY, hasWaterContact, standingOnShore, isSwimming, isPresentationUnderwater, descendInput, ascendInput);
 
             if (!descendInput &&
                 !hasWaterContact &&
@@ -280,8 +299,8 @@ namespace DeepWaters
 			float oceanSurfaceY = ComputeOceanSurfaceY();
 			bool descendInput = HasDescendInput();
 			bool ascendInput = HasAscendInput();
+			bool standingOnShore = !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
 			bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
-			bool standingOnShore = !hasWaterContact && !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
             bool isSwimming = hasWaterContact && !standingOnShore && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
             bool isPresentationUnderwater = hasWaterContact && !standingOnShore && IsPresentationUnderwater(oceanSurfaceY);
 
@@ -318,8 +337,7 @@ namespace DeepWaters
 			bool ascendInput = HasAscendInput();
 			float oceanSurfaceY = ComputeOceanSurfaceY();
 			UpdateWaterTerrainColliderGate(oceanSurfaceY, descendInput);
-			bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
-			bool standingOnShore = !hasWaterContact && !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
+			bool standingOnShore = !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
 			if (standingOnShore)
 			{
 				Restore();
@@ -330,6 +348,7 @@ namespace DeepWaters
 			var pex = GameManager.Instance.PlayerEnterExit;
 			dfuBridge.RestoreDungeonState(pex);
 
+			bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
 			bool isSwimming = hasWaterContact && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
 			bool presentationUnderwater = hasWaterContact && IsPresentationUnderwater(oceanSurfaceY);
 
@@ -355,10 +374,34 @@ namespace DeepWaters
         {
             dfuBridge.ApplyWaterAudioState(
                 pex,
-                WorldYToBlockWaterLevel(oceanSurfaceY + SwimPhysicsSurfaceOffset),
+                WorldYToBlockWaterLevel(ForgedSwimWaterLineY(oceanSurfaceY, isSwimming)),
                 isSwimming ? PlayerMotor.OnExteriorWaterMethod.Swimming : PlayerMotor.OnExteriorWaterMethod.None,
                 IsPlayerHeadUnderwater(oceanSurfaceY));
 			ApplyDfuSwimFlags(pex, isSwimming);
+        }
+
+        // The published block water line IS the swim-exit threshold, so vanilla's
+        // per-frame IsPlayerSwimming recompute (PlayerEnterExit.Update) agrees
+        // with IsPlayerAtSwimmingDepth by construction (see the constants block).
+        private static float ForgedSwimWaterLineY(float oceanSurfaceY, bool isSwimming)
+        {
+            float line = oceanSurfaceY + SwimExitClearance;
+            if (!isSwimming)
+                return line;
+
+            // The descend/ascend-hold overrides claim "swimming" even with the
+            // check point above the exit line (e.g. crouch-diving off the
+            // sea-level heightfield). Lift the line to cover the swimmer so
+            // vanilla agrees for as long as the override holds.
+            GameObject player = GameManager.Instance != null ? GameManager.Instance.PlayerObject : null;
+            if (player != null)
+            {
+                float checkY = PlayerSwimCheckY(player.transform.position.y);
+                if (checkY >= line)
+                    line = checkY + 0.05f;
+            }
+
+            return line;
         }
 
 		private static void ApplyDfuSwimFlags(PlayerEnterExit pex, bool isSwimming)
@@ -525,6 +568,10 @@ namespace DeepWaters
             if (player == null)
                 return false;
 
+            // Vanilla's exact swim formula against the published water line.
+            // The old second clause (feet vs the collider gate's close margin)
+            // let the gate's hysteresis band claim "swimming" up to a meter
+            // above the water while vanilla disagreed — the shore freeze.
             float clearance = currentlyForged ? SwimExitClearance : SwimEnterClearance;
             return PlayerSwimCheckY(player.transform.position.y) < oceanSurfaceY + clearance;
         }
@@ -538,19 +585,39 @@ namespace DeepWaters
 
 		private bool HasRecentCenterWaterContact(float oceanSurfaceY, bool descendInput = false)
 		{
-			if (HasCenterWaterContact(oceanSurfaceY, descendInput))
-			{
-				waterContactUntil = Time.time + WaterContactGraceSeconds;
-				return true;
-			}
-
 			if (!descendInput && IsStandingOnShoreGround(oceanSurfaceY))
 			{
 				waterContactUntil = 0f;
 				return false;
 			}
 
+			if (HasCenterWaterContact(oceanSurfaceY, descendInput))
+			{
+				waterContactUntil = Time.time + WaterContactGraceSeconds;
+				return true;
+			}
+
+			if (!descendInput && IsPlayerGrounded())
+			{
+				waterContactUntil = 0f;
+				return false;
+			}
+
 			return Time.time < waterContactUntil;
+		}
+
+		private static bool IsPlayerGrounded()
+		{
+			GameManager gameManager = GameManager.Instance;
+			if (gameManager == null)
+				return false;
+
+			if (gameManager.PlayerMotor != null && gameManager.PlayerMotor.IsGrounded)
+				return true;
+
+			GameObject player = gameManager.PlayerObject;
+			CharacterController controller = player != null ? player.GetComponent<CharacterController>() : null;
+			return controller != null && controller.isGrounded;
 		}
 
         private static bool HasCenterWaterContact(float oceanSurfaceY, bool descendInput)
@@ -660,6 +727,8 @@ namespace DeepWaters
             return true;
         }
 
+        private static readonly RaycastHit[] shoreGroundProbeHits = new RaycastHit[8];
+
         private bool IsStandingOnShoreGround(float oceanSurfaceY)
         {
             if (Time.time < shoreExitGraceUntil)
@@ -669,13 +738,36 @@ namespace DeepWaters
             if (controller == null)
                 return false;
 
+            // The probe starts above the capsule, so a single Raycast always
+            // returned the player's own collider first; IsShoreGround rightly
+            // rejects self-hits, which meant real ground was never seen and
+            // this only returned true through the grace window above. Scan all
+            // hits and evaluate the nearest non-player one instead.
             Vector3 probe = controller.transform.position + Vector3.up * ShoreGroundProbeHeight;
-            RaycastHit hit;
-            if (!Physics.Raycast(probe, Vector3.down, out hit, ShoreGroundProbeDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            int hitCount = Physics.RaycastNonAlloc(
+                probe,
+                Vector3.down,
+                shoreGroundProbeHits,
+                ShoreGroundProbeDistance,
+                Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Ignore);
+
+            int nearest = -1;
+            for (int i = 0; i < hitCount; i++)
+            {
+                Collider hitCollider = shoreGroundProbeHits[i].collider;
+                if (hitCollider == null || hitCollider.transform.IsChildOf(controller.transform))
+                    continue;
+
+                if (nearest < 0 || shoreGroundProbeHits[i].distance < shoreGroundProbeHits[nearest].distance)
+                    nearest = i;
+            }
+
+            if (nearest < 0)
                 return false;
 
-            return hit.point.y >= oceanSurfaceY - ShoreGroundOceanMargin &&
-                   OutdoorShoreExitAssist.IsValidShoreStandingHit(hit, oceanSurfaceY);
+            return shoreGroundProbeHits[nearest].point.y >= oceanSurfaceY - ShoreGroundOceanMargin &&
+                   OutdoorShoreExitAssist.IsValidShoreStandingHit(shoreGroundProbeHits[nearest], oceanSurfaceY);
         }
 
         private void MarkShoreExit()
@@ -757,6 +849,172 @@ namespace DeepWaters
             float oceanSurfaceY;
             return DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) ? oceanSurfaceY : 0f;
         }
+
+		private void LogShoreStuckProbe(
+			float oceanSurfaceY,
+			bool hasWaterContact,
+			bool standingOnShore,
+			bool isSwimming,
+			bool isPresentationUnderwater,
+			bool descendInput,
+			bool ascendInput)
+		{
+			GameManager gameManager = GameManager.Instance;
+			GameObject player = gameManager != null ? gameManager.PlayerObject : null;
+			if (player == null)
+				return;
+
+			Vector3 position = player.transform.position;
+			float now = Time.unscaledTime;
+			float horizontalSpeed = float.NaN;
+			float verticalSpeed = float.NaN;
+			if (stuckProbeLastTime > 0f)
+			{
+				float dt = Mathf.Max(0.0001f, now - stuckProbeLastTime);
+				Vector3 delta = position - stuckProbeLastPosition;
+				horizontalSpeed = new Vector2(delta.x, delta.z).magnitude / dt;
+				verticalSpeed = delta.y / dt;
+			}
+
+			stuckProbeLastPosition = position;
+			stuckProbeLastTime = now;
+
+			InputManager input = InputManager.Instance;
+			float inputX = input != null ? input.Horizontal : 0f;
+			float inputY = input != null ? input.Vertical : 0f;
+
+			DeepWaterColumn playerColumn;
+			DeepWaterColumn centerColumn;
+			bool playerColumnPresent = TryGetPlayerWaterColumn(out playerColumn);
+			bool centerColumnPresent = TryGetUsableWaterColumn(position.x, position.z, out centerColumn);
+			bool nearSurface = Mathf.Abs(position.y - oceanSurfaceY) <= 4f;
+			bool relevant =
+				waterColliderGateActive ||
+				(playerColumnPresent && playerColumn.Depth <= StuckProbeMaxDepth) ||
+				(nearSurface && (Mathf.Abs(inputX) > 0.02f || Mathf.Abs(inputY) > 0.02f || descendInput || ascendInput));
+
+			if (!relevant || now < stuckProbeNextLogTime)
+				return;
+
+			stuckProbeNextLogTime = now + StuckProbeLogIntervalSeconds;
+
+			// Skip the player's own capsule (the probe starts above it, so a
+			// plain Raycast only ever reported "PlayerAdvanced" here and the
+			// down= field never showed what is actually underfoot).
+			RaycastHit downHit = default(RaycastHit);
+			bool hasDownHit = false;
+			int downHitCount = Physics.RaycastNonAlloc(
+				position + Vector3.up * 2f,
+				Vector3.down,
+				shoreGroundProbeHits,
+				12f,
+				Physics.DefaultRaycastLayers,
+				QueryTriggerInteraction.Ignore);
+			for (int i = 0; i < downHitCount; i++)
+			{
+				Collider hitCollider = shoreGroundProbeHits[i].collider;
+				if (hitCollider == null || hitCollider.transform.IsChildOf(player.transform))
+					continue;
+
+				if (!hasDownHit || shoreGroundProbeHits[i].distance < downHit.distance)
+				{
+					downHit = shoreGroundProbeHits[i];
+					hasDownHit = true;
+				}
+			}
+
+			RaycastHit forwardHit;
+			bool hasForwardHit = TryProbeForwardHit(position, out forwardHit);
+
+			CharacterController controller = player.GetComponent<CharacterController>();
+			LevitateMotor levitateMotor = player.GetComponent<LevitateMotor>();
+			PlayerHeightChanger heightChanger = player.GetComponent<PlayerHeightChanger>();
+			PlayerEnterExit pex = gameManager.PlayerEnterExit;
+			PlayerMotor playerMotor = gameManager.PlayerMotor;
+
+			Debug.Log(string.Format(
+				CultureInfo.InvariantCulture,
+				"[DeepWaters.StuckProbe] frame={0} pos=({1},{2},{3}) speed=({4}h,{5}v) input=({6:F2},{7:F2}) ocean={8} playerColumn={9} centerColumn={10} playerDepth={11} centerDepth={12} hasContact={13} shore={14} swim={15} pexSwim={16} levSwim={17} presentation={18} descend={19} ascend={20} forged={21} gate=({22},disabled={23},desired={24},reason={25}) motor=(pmGrounded={26},ccGrounded={27},onWater={28},height={29},inWaterTile={30},forcedCrouch={31}) down=({32},y={33},terrain={34},deepFloor={35},normalY={36}) forward=({37},dist={38},y={39},terrain={40},deepFloor={41}) clamp=({42},{43})",
+				Time.frameCount,
+				ProbeFloat(position.x),
+				ProbeFloat(position.y),
+				ProbeFloat(position.z),
+				ProbeFloat(horizontalSpeed),
+				ProbeFloat(verticalSpeed),
+				inputX,
+				inputY,
+				ProbeFloat(oceanSurfaceY),
+				playerColumnPresent ? "1" : "0",
+				centerColumnPresent ? "1" : "0",
+				playerColumnPresent ? ProbeFloat(playerColumn.Depth) : "",
+				centerColumnPresent ? ProbeFloat(centerColumn.Depth) : "",
+				hasWaterContact ? "1" : "0",
+				standingOnShore ? "1" : "0",
+				isSwimming ? "1" : "0",
+				pex != null && pex.IsPlayerSwimming ? "1" : "0",
+				levitateMotor != null && levitateMotor.IsSwimming ? "1" : "0",
+				isPresentationUnderwater ? "1" : "0",
+				descendInput ? "1" : "0",
+				ascendInput ? "1" : "0",
+				currentlyForged ? "1" : "0",
+				waterColliderGateActive ? "1" : "0",
+				disabledWaterTerrainColliders.Count,
+				desiredWaterTerrainColliders.Count,
+				DiagnosticWaterColliderGateReason ?? "",
+				playerMotor != null && playerMotor.IsGrounded ? "1" : "0",
+				controller != null && controller.isGrounded ? "1" : "0",
+				playerMotor != null ? playerMotor.OnExteriorWater.ToString() : "",
+				heightChanger != null ? heightChanger.HeightAction.ToString() : "",
+				heightChanger != null && heightChanger.IsInWaterTile ? "1" : "0",
+				heightChanger != null && heightChanger.ForcedSwimCrouch ? "1" : "0",
+				hasDownHit ? ProbeColliderName(downHit.collider) : "",
+				hasDownHit ? ProbeFloat(downHit.point.y) : "",
+				hasDownHit && downHit.collider.GetComponentInParent<DaggerfallTerrain>() != null ? "1" : "0",
+				hasDownHit && downHit.collider.GetComponentInParent<DeepWaterFloorMesh>() != null ? "1" : "0",
+				hasDownHit ? ProbeFloat(downHit.normal.y) : "",
+				hasForwardHit ? ProbeColliderName(forwardHit.collider) : "",
+				hasForwardHit ? ProbeFloat(forwardHit.distance) : "",
+				hasForwardHit ? ProbeFloat(forwardHit.point.y) : "",
+				hasForwardHit && forwardHit.collider.GetComponentInParent<DaggerfallTerrain>() != null ? "1" : "0",
+				hasForwardHit && forwardHit.collider.GetComponentInParent<DeepWaterFloorMesh>() != null ? "1" : "0",
+				OutdoorSwimMovementController.DiagnosticClampSource ?? "",
+				ProbeFloat(OutdoorSwimMovementController.DiagnosticClampDelta)));
+		}
+
+		private static bool TryProbeForwardHit(Vector3 position, out RaycastHit hit)
+		{
+			hit = new RaycastHit();
+			Camera camera = GameManager.Instance != null ? GameManager.Instance.MainCamera : null;
+			if (camera == null)
+				return false;
+
+			Vector3 forward = camera.transform.forward;
+			forward.y = 0f;
+			if (forward.sqrMagnitude < 0.001f)
+				return false;
+
+			forward.Normalize();
+			return Physics.SphereCast(
+				position + Vector3.up * 1f,
+				0.35f,
+				forward,
+				out hit,
+				2.5f,
+				Physics.DefaultRaycastLayers,
+				QueryTriggerInteraction.Ignore);
+		}
+
+		private static string ProbeColliderName(Collider collider)
+		{
+			return collider != null ? collider.name.Replace(',', ';') : "";
+		}
+
+		private static string ProbeFloat(float value)
+		{
+			return float.IsNaN(value) || float.IsInfinity(value)
+				? ""
+				: value.ToString("F2", CultureInfo.InvariantCulture);
+		}
 
         #endregion
 
@@ -1087,6 +1345,7 @@ namespace DeepWaters
             GameObject player = gameManager != null ? gameManager.PlayerObject : null;
             if (player == null || gameManager.PlayerEnterExit == null || gameManager.PlayerEnterExit.IsPlayerInside)
             {
+				DiagnosticWaterColliderGateReason = "inactive";
                 RestoreWaterTerrainCollider();
                 return;
             }
@@ -1094,13 +1353,14 @@ namespace DeepWaters
             Vector3 position = player.transform.position;
 			if (!descendInput && PlayerFeetY(player, position) > oceanSurfaceY + CurrentGateFeetMargin())
             {
+				DiagnosticWaterColliderGateReason = "feet-above";
                 RestoreWaterTerrainCollider();
                 return;
             }
 
 			bool nearSurface = IsPlayerNearSurfaceForShoreAssist(oceanSurfaceY);
 
-            if (ShouldThrottleColliderGateRefresh())
+            if (waterColliderGateActive && ShouldThrottleColliderGateRefresh())
                 return;
 
             // Unknown world state (terrain lookup starved during a map-pixel
@@ -1111,7 +1371,10 @@ namespace DeepWaters
             DaggerfallTerrain playerDfTerrain;
             Terrain playerTerrain;
             if (!DeepWaterTerrainLookup.TryGetByWorldPosition(position.x, position.z, out playerDfTerrain, out playerTerrain))
+			{
+				DiagnosticWaterColliderGateReason = "lookup-miss";
                 return;
+			}
 
             // Swimmable-water check: only open the gate where a carved
             // seafloor quad actually exists beneath the player (real water
@@ -1122,29 +1385,49 @@ namespace DeepWaters
             // padded eject guard holds anything a genuinely submerged player
             // is beneath.
 			DeepWaterColumn playerColumn;
-			if (!TryGetUsableWaterColumn(position.x, position.z, out playerColumn))
+			if (!TryGetPlayerWaterColumn(out playerColumn))
             {
 				if (!nearSurface && (waterColliderGateActive || Time.time < waterContactUntil))
+				{
+					DiagnosticWaterColliderGateReason = "hold-missing-column";
 					return;
+				}
 
                 if (TryRecoverFromSolidShore(oceanSurfaceY, position))
+				{
+					DiagnosticWaterColliderGateReason = "solid-shore";
                     return;
+				}
 
+				DiagnosticWaterColliderGateReason = "no-column";
                 RestoreWaterTerrainCollider();
                 return;
             }
 
 			if (oceanSurfaceY - playerColumn.SeafloorWorldY < WaterContactMinimumDepth)
 			{
+				DiagnosticWaterColliderGateReason = "shallow-column";
 				RestoreWaterTerrainCollider(force: true);
 				return;
 			}
 
-            if (!descendInput && nearSurface && IsNearColliderGateShore(position, oceanSurfaceY))
-            {
-                RestoreWaterTerrainCollider();
-                return;
-            }
+			// Genuine beach underfoot: the carve mask claims water (the
+			// min-depth strip) right up against shore terrain that rises above
+			// the waterline. Holding that tile's collider disabled pulls the
+			// beach out from under a standing/wading player — they fall
+			// through, swim re-forges, the recovery pops them back out, and
+			// the loop reads as the "flickering shallows" state. force:true
+			// because the shore-fitted floor mesh sits only ~5cm under the
+			// terrain here (depenetration is that small), while the deep-water
+			// eject guard would hold the beach collider off indefinitely for a
+			// swim-crouched capsule.
+			if (PlayerFeetY(player, position) >= oceanSurfaceY - ColliderGateSolidShoreMaxFeetDepth &&
+				IsBeachAboveWaterline(position.x, position.z, oceanSurfaceY))
+			{
+				DiagnosticWaterColliderGateReason = "beach-veto";
+				RestoreWaterTerrainCollider(force: true);
+				return;
+			}
 
             // Distance ring over this frame's live terrain snapshot.
             desiredWaterTerrainColliders.Clear();
@@ -1174,6 +1457,7 @@ namespace DeepWaters
 
             RestoreWaterTerrainCollidersExcept(desiredWaterTerrainColliders);
             waterColliderGateActive = disabledWaterTerrainColliders.Count > 0;
+			DiagnosticWaterColliderGateReason = "open";
             UpdateColliderGateDiagnostics();
         }
 
@@ -1227,43 +1511,40 @@ namespace DeepWaters
             return Mathf.Clamp(controller.radius * radiusScale, min, max);
         }
 
-        private static bool IsNearColliderGateShore(Vector3 position, float oceanSurfaceY)
+        // Vanilla terrain at this XZ rises clear above the waterline — genuine
+        // beach, as opposed to the sea-level heightfield LID over carved water
+        // (which sits at ~oceanY). Unlike IsSolidShoreForColliderGate this
+        // ignores the water classification entirely: the carve mask claiming
+        // water here is exactly the broken case the beach veto exists for.
+        // Unknown/unloaded terrain reports false (never veto blind).
+        private static bool IsBeachAboveWaterline(float worldX, float worldZ, float oceanSurfaceY)
         {
-            if (IsSolidShoreForColliderGate(position.x, position.z, oceanSurfaceY))
-                return true;
-
-            float radius = GetGateProbeRadius(ColliderGateShoreProbeRadiusMin, ColliderGateShoreProbeRadiusMax, 5f);
-            if (IsSolidShoreForColliderGate(position.x + radius, position.z, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x - radius, position.z, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x, position.z + radius, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x, position.z - radius, oceanSurfaceY))
+            DaggerfallTerrain dfTerrain;
+            Terrain terrain;
+            if (!DeepWaterTerrainLookup.TryGetByWorldPosition(worldX, worldZ, out dfTerrain, out terrain) ||
+                dfTerrain == null ||
+                terrain == null ||
+                terrain.terrainData == null ||
+                dfTerrain.MapData.heightmapSamples == null)
             {
-                return true;
+                return false;
             }
 
-            float diagonal = radius * 0.70710678f;
-            if (IsSolidShoreForColliderGate(position.x + diagonal, position.z + diagonal, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x + diagonal, position.z - diagonal, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x - diagonal, position.z + diagonal, oceanSurfaceY) ||
-                IsSolidShoreForColliderGate(position.x - diagonal, position.z - diagonal, oceanSurfaceY))
-            {
-                return true;
-            }
-
-            Camera camera = GameManager.Instance != null ? GameManager.Instance.MainCamera : null;
-            if (camera == null)
+            float tileWorldSize = DeepWaterWorld.TileWorldSize;
+            if (tileWorldSize <= 0f)
                 return false;
 
-            Vector3 forward = camera.transform.forward;
-            forward.y = 0f;
-            if (forward.sqrMagnitude < 0.001f)
+            Vector3 origin = dfTerrain.transform.position;
+            float fracX = (worldX - origin.x) / tileWorldSize;
+            float fracZ = (worldZ - origin.z) / tileWorldSize;
+            if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
                 return false;
 
-            forward.Normalize();
-            return IsSolidShoreForColliderGate(
-                position.x + forward.x * radius,
-                position.z + forward.z * radius,
-                oceanSurfaceY);
+            float terrainWorldY;
+            if (!TrySampleVanillaTerrainWorldY(dfTerrain, terrain, fracX, fracZ, out terrainWorldY))
+                return false;
+
+            return terrainWorldY > oceanSurfaceY + ColliderGateShoreTerrainMargin;
         }
 
         private static bool IsSolidShoreForColliderGate(float worldX, float worldZ, float oceanSurfaceY)

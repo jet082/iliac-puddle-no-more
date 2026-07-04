@@ -76,7 +76,7 @@ namespace DeepWaters
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
 			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test",
-			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "brokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf"
+			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "brokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -92,7 +92,7 @@ namespace DeepWaters
 
 		private static readonly HashSet<string> MovementProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
-			"iii", "kkkk", "lll", "mmm", "qqq", "desert", "open ocean 2", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf"
+			"iii", "kkkk", "lll", "mmm", "qqq", "desert", "open ocean 2", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck"
 		};
 
 		private static readonly Dictionary<string, string> ForwardScenarioPhases =
@@ -107,7 +107,8 @@ namespace DeepWaters
 				{ "mystery", "mystery_straight_lake_probe" },
 				{ "desert", "desert_straight_lake_probe" },
 				{ "brokencolliders2", "brokencolliders2_straight_collider_probe" },
-				{ "brokencolliders 2", "brokencolliders2_straight_collider_probe" }
+				{ "brokencolliders 2", "brokencolliders2_straight_collider_probe" },
+				{ "imstuck", "imstuck_straight_shore_probe" }
 			};
 
         private readonly List<MetricWindow> windows = new List<MetricWindow>();
@@ -647,7 +648,7 @@ namespace DeepWaters
                 return;
 
             float dt = Mathf.Min(Time.deltaTime, 0.1f);
-            Vector3 delta = direction * MoveSpeed * dt;
+			Vector3 delta = direction * CurrentNaturalMoveSpeed(player) * dt;
             CharacterController controller = player.GetComponent<CharacterController>();
             if (controller != null && controller.enabled)
                 controller.Move(delta);
@@ -673,7 +674,7 @@ namespace DeepWaters
                 return;
 
             float dt = Mathf.Min(Time.deltaTime, 0.1f);
-            Vector3 delta = direction * MoveSpeed * dt;
+			Vector3 delta = direction * CurrentNaturalMoveSpeed(player) * dt;
             CharacterController controller = player.GetComponent<CharacterController>();
             if (controller != null && controller.enabled)
                 controller.Move(delta);
@@ -686,6 +687,45 @@ namespace DeepWaters
 
             Physics.SyncTransforms();
         }
+
+		private static float CurrentNaturalMoveSpeed(GameObject player)
+		{
+			GameManager gameManager = GameManager.Instance;
+			PlayerSpeedChanger speedChanger = player != null ? player.GetComponent<PlayerSpeedChanger>() : null;
+			if (speedChanger == null || gameManager == null || gameManager.PlayerEntity == null)
+				return MoveSpeed;
+
+			if (ShouldUseConfiguredSwimSpeed(player, gameManager))
+			{
+				float walkSpeed = speedChanger.GetWalkSpeed(gameManager.PlayerEntity);
+				return speedChanger.GetSwimSpeed(walkSpeed * CurrentDiagnosticSwimSpeedMultiplier());
+			}
+
+			return speedChanger.GetBaseSpeed();
+		}
+
+		private static bool ShouldUseConfiguredSwimSpeed(GameObject player, GameManager gameManager)
+		{
+			if (gameManager.PlayerEnterExit != null && gameManager.PlayerEnterExit.IsPlayerSwimming)
+				return true;
+
+			if (gameManager.PlayerMotor != null &&
+				gameManager.PlayerMotor.OnExteriorWater == PlayerMotor.OnExteriorWaterMethod.Swimming)
+				return true;
+
+			float oceanSurfaceY;
+			DeepWaterColumn column;
+			return DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) &&
+				player.transform.position.y <= oceanSurfaceY + 1f &&
+				OutdoorSwimDriver.TryGetPlayerWaterColumn(out column);
+		}
+
+		private static float CurrentDiagnosticSwimSpeedMultiplier()
+		{
+			return DeepWaters.Instance != null
+				? Mathf.Clamp(DeepWaters.Instance.SwimSpeedMultiplier, 0.25f, 30f)
+				: 1f;
+		}
 
 		private void MovePlayerRaw(Vector3 velocity)
 		{
@@ -1374,7 +1414,7 @@ namespace DeepWaters
             string path = Path.Combine(dir, "deep-waters-diagnostics-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".csv");
             writer = new StreamWriter(path, false, Encoding.UTF8);
             writer.AutoFlush = true;
-            writer.WriteLine("utc,save,phase,event,currentPixel,formerPixel,seconds,fps,decorationsCurrent,decorationsFormer,enemiesCurrent,enemiesFormer,fishCurrent,fishFormer,lootCurrent,lootFormer,rubbleCurrent,rubbleFormer,contentEligibleCurrent,contentEligibleFormer,loadGateActive,loadGateCount,loadGateAge,terrainUpdateActive,loadGraceActive,heavyWorkBlocked,heavyWorkResumeIn,postRefreshPending,decorQueue,decorQueuedTerrains,locationSkippedLast,locationDeferred,playerX,playerY,playerZ,oceanY,columnPresent,columnDepth,renderedSeafloorY,carvedPresent,carvedSeafloorY,downHitY,downHitNormalY,downHitShore,downHitDeepFloor,downHitTerrain,downHitName,playerSwimming,controllerGrounded,cameraYaw,cameraPitch,cameraTransformYaw,cameraForwardX,cameraForwardZ,playerTransformYaw,worldCompX,worldCompY,worldCompZ,gpsWorldX,gpsWorldZ,terrainPixel,localFracX,localFracZ,tileValue,tileIndex,heightSample,localPointWater,bakedWater,carvedWater,rawFineWater,localMissedByFineBake,oceanConnected,horizontalSpeed,verticalSpeed,swimClampSource,swimClampDelta,waterGateActive,waterGateDisabled,waterGateDesired,forwardHitDistance,forwardHitY,forwardHitDeepFloor,forwardHitTerrain,forwardHitName,bodyHitDistance,bodyHitY,bodyHitDeepFloor,bodyHitTerrain,bodyHitName");
+            writer.WriteLine("utc,save,phase,event,currentPixel,formerPixel,seconds,fps,decorationsCurrent,decorationsFormer,enemiesCurrent,enemiesFormer,fishCurrent,fishFormer,lootCurrent,lootFormer,rubbleCurrent,rubbleFormer,contentEligibleCurrent,contentEligibleFormer,loadGateActive,loadGateCount,loadGateAge,terrainUpdateActive,loadGraceActive,heavyWorkBlocked,heavyWorkResumeIn,postRefreshPending,decorQueue,decorQueuedTerrains,locationSkippedLast,locationDeferred,playerX,playerY,playerZ,oceanY,columnPresent,columnDepth,renderedSeafloorY,carvedPresent,carvedSeafloorY,downHitY,downHitNormalY,downHitShore,downHitDeepFloor,downHitTerrain,downHitName,playerSwimming,controllerGrounded,cameraYaw,cameraPitch,cameraTransformYaw,cameraForwardX,cameraForwardZ,playerTransformYaw,worldCompX,worldCompY,worldCompZ,gpsWorldX,gpsWorldZ,terrainPixel,localFracX,localFracZ,tileValue,tileIndex,heightSample,localPointWater,bakedWater,carvedWater,rawFineWater,localMissedByFineBake,oceanConnected,horizontalSpeed,verticalSpeed,swimClampSource,swimClampDelta,waterGateActive,waterGateDisabled,waterGateDesired,waterGateReason,forwardHitDistance,forwardHitY,forwardHitDeepFloor,forwardHitTerrain,forwardHitName,bodyHitDistance,bodyHitY,bodyHitDeepFloor,bodyHitTerrain,bodyHitName");
         }
 
         private void WriteWindow(MetricWindow window, float seconds, float fps, Counts current, Counts former, RuntimeState runtime)
@@ -1469,6 +1509,7 @@ namespace DeepWaters
                 OutdoorSwimDriver.DiagnosticWaterColliderGateActive ? "1" : "0",
                 OutdoorSwimDriver.DiagnosticDisabledWaterColliderCount.ToString(CultureInfo.InvariantCulture),
                 OutdoorSwimDriver.DiagnosticDesiredWaterColliderCount.ToString(CultureInfo.InvariantCulture),
+				Csv(OutdoorSwimDriver.DiagnosticWaterColliderGateReason),
                 FloatCell(probe.ForwardHitDistance),
                 FloatCell(probe.ForwardHitY),
                 probe.ForwardHitDeepFloor ? "1" : "0",
