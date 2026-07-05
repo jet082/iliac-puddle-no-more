@@ -17,6 +17,59 @@ namespace DeepWaters
     /// DFU reuses terrain objects during world jumps, so systems that parent
     /// objects to terrain need one shared reset signal when the world is rebuilt.
     /// </summary>
+    /// <summary>
+    /// Per-frame accumulator for the tile-promote pipeline's main-thread cost
+    /// (OPTIMIZATION_POSSIBILITIES.md verification plan). Stages call
+    /// Begin/End; DeepWaters.Update flushes one [DeepWaters.PromoteMs] log
+    /// line whenever a frame's pipeline total crossed the threshold — giving
+    /// per-stage, per-tile milliseconds in Player.log with no per-frame spam.
+    /// </summary>
+    internal static class DeepWaterPromoteTiming
+    {
+        private const float LogThresholdMs = 2f;
+        private static readonly System.Text.StringBuilder detail = new System.Text.StringBuilder(200);
+        private static int accumFrame = -1;
+        private static float totalMs;
+
+        internal static long Begin()
+        {
+            return System.Diagnostics.Stopwatch.GetTimestamp();
+        }
+
+        internal static void End(long beginTimestamp, string stage, int mapPixelX, int mapPixelY)
+        {
+            float ms = (System.Diagnostics.Stopwatch.GetTimestamp() - beginTimestamp) *
+                       1000f / System.Diagnostics.Stopwatch.Frequency;
+            int frame = Time.frameCount;
+            if (frame != accumFrame)
+            {
+                Flush();
+                accumFrame = frame;
+            }
+
+            totalMs += ms;
+            if (detail.Length < 400)
+            {
+                detail.Append(stage).Append('(').Append(mapPixelX).Append(',').Append(mapPixelY)
+                      .Append(")=").Append(ms.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))
+                      .Append(' ');
+            }
+        }
+
+        internal static void Flush()
+        {
+            if (accumFrame >= 0 && totalMs >= LogThresholdMs)
+            {
+                Debug.Log("[DeepWaters.PromoteMs] frame=" + accumFrame +
+                          " total=" + totalMs.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) +
+                          " | " + detail);
+            }
+
+            totalMs = 0f;
+            detail.Length = 0;
+        }
+    }
+
     internal static class DeepWaterRuntime
     {
         internal static event System.Action OnTransientReset;

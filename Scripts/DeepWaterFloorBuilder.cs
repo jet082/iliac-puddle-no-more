@@ -51,11 +51,88 @@ namespace DeepWaters
 
         private static bool installed;
 
+        // Deferred build queue (P1 of OPTIMIZATION_POSSIBILITIES.md). Only the
+        // player's own 3x3 pixel ring builds synchronously inside the promote
+        // event; every farther tile queues here and is built nearest-first,
+        // one tile per frame, from DeepWaters.Update. A far tile is ~820m+
+        // away — under the underwater fog (~36-95m vision) and the surface's
+        // opaque horizon curtain, a build landing a few frames late is
+        // invisible, while the promote frame stops carrying the full
+        // mask+floor+cap+surface cost (measured 25-35ms per streamed tile).
+        private const int SyncBuildChebyshevRadius = 1;
+        private static readonly List<DaggerfallTerrain> deferredBuilds = new List<DaggerfallTerrain>(48);
+
         internal static void Install()
         {
             if (installed) return;
             DaggerfallTerrain.OnPromoteTerrainData += HandlePromote;
+            DeepWaterRuntime.OnTransientReset += deferredBuilds.Clear;
             installed = true;
+        }
+
+        internal static bool IsNearPlayerPixel(DaggerfallTerrain dfTerrain)
+        {
+            GameManager gameManager = GameManager.Instance;
+            PlayerGPS playerGPS = gameManager != null ? gameManager.PlayerGPS : null;
+            if (playerGPS == null || dfTerrain == null)
+                return true;
+
+            int dx = dfTerrain.MapPixelX - playerGPS.CurrentMapPixel.X;
+            int dy = dfTerrain.MapPixelY - playerGPS.CurrentMapPixel.Y;
+            return System.Math.Abs(dx) <= SyncBuildChebyshevRadius &&
+                   System.Math.Abs(dy) <= SyncBuildChebyshevRadius;
+        }
+
+        // One deferred tile per frame, nearest to the player first. The
+        // IsCurrentBuild guard inside HandlePromoteCore makes stale or
+        // already-built entries a cheap no-op; recycled tiles re-enqueue via
+        // their next promote.
+        internal static void PumpDeferredBuilds()
+        {
+            if (deferredBuilds.Count == 0)
+                return;
+
+            GameManager gameManager = GameManager.Instance;
+            PlayerGPS playerGPS = gameManager != null ? gameManager.PlayerGPS : null;
+            int px = playerGPS != null ? playerGPS.CurrentMapPixel.X : 0;
+            int py = playerGPS != null ? playerGPS.CurrentMapPixel.Y : 0;
+
+            int best = -1;
+            int bestDistance = int.MaxValue;
+            for (int i = deferredBuilds.Count - 1; i >= 0; i--)
+            {
+                DaggerfallTerrain candidate = deferredBuilds[i];
+                if (candidate == null)
+                {
+                    deferredBuilds.RemoveAt(i);
+                    continue;
+                }
+
+                int distance = System.Math.Max(
+                    System.Math.Abs(candidate.MapPixelX - px),
+                    System.Math.Abs(candidate.MapPixelY - py));
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = i;
+                }
+            }
+
+            if (best < 0)
+                return;
+
+            DaggerfallTerrain dfTerrain = deferredBuilds[best];
+            deferredBuilds.RemoveAt(best);
+
+            Terrain terrain = dfTerrain.GetComponent<Terrain>();
+            if (terrain == null || terrain.terrainData == null)
+                return;
+
+            // Same entry as the genuine promote path: adding child meshes is
+            // safe at any time (no terrain-data mutation), and the internal
+            // guard skips tiles whose build is already current.
+            HandlePromote(dfTerrain, terrain.terrainData);
+            WaterSurfaceManager.BuildSurfaceFor(dfTerrain, terrain.terrainData);
         }
 
         // Force=true bypasses HandlePromoteCore's IsCurrentBuild guard so
@@ -81,6 +158,16 @@ namespace DeepWaters
 
         private static void HandlePromote(DaggerfallTerrain dfTerrain, TerrainData terrainData)
         {
+            // Far tiles defer to the pump: the promote frame keeps only the
+            // player-adjacent ring's build cost. A deferred tile that gets
+            // recycled before its turn simply no-ops in the guard and
+            // re-enqueues through its next promote.
+            if (dfTerrain != null && !IsNearPlayerPixel(dfTerrain) && !deferredBuilds.Contains(dfTerrain))
+            {
+                deferredBuilds.Add(dfTerrain);
+                return;
+            }
+
             // Genuine DFU promote event. It fires from inside
             // StreamingWorld's terrain update — BEFORE this tile renders its
             // first frame — so the TerrainRenderer LOD quadtree does not yet
@@ -178,15 +265,21 @@ namespace DeepWaters
             }
 
             bool[,] holes;
+            long timing = DeepWaterPromoteTiming.Begin();
             bool hasAnyHoles = ComputeHoleMask(dfTerrain, tile, terrainData, out holes);
+            DeepWaterPromoteTiming.End(timing, "mask", dfTerrain.MapPixelX, dfTerrain.MapPixelY);
             if (!hasAnyHoles)
             {
                 RemoveFloor(dfTerrain);
                 return;
             }
 
+            timing = DeepWaterPromoteTiming.Begin();
             BuildOrRefreshFloor(dfTerrain, terrainData, tile, holes);
+            DeepWaterPromoteTiming.End(timing, "floor", dfTerrain.MapPixelX, dfTerrain.MapPixelY);
+            timing = DeepWaterPromoteTiming.Begin();
             UpdateTerrainCapRenderer(dfTerrain);
+            DeepWaterPromoteTiming.End(timing, "cap", dfTerrain.MapPixelX, dfTerrain.MapPixelY);
 			if (OnFloorRefreshed != null)
 			{
 				try { OnFloorRefreshed(dfTerrain); }

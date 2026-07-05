@@ -484,6 +484,19 @@ namespace DeepWaters
 
         private static void HandlePromote(DaggerfallTerrain sender, TerrainData terrainData)
         {
+            // Far tiles build with the floor builder's deferred pump instead
+            // of on the promote frame (BuildSurfaceFor below).
+            if (sender != null && !DeepWaterFloorBuilder.IsNearPlayerPixel(sender))
+                return;
+
+            HandlePromoteCore(sender, terrainData, true);
+        }
+
+        // Deferred-pump entry: same trust level as a genuine promote (the
+        // surface build never mutates terrain data, it only adds child
+        // renderers), so it must not be gated on CanMutateTerrainData.
+        internal static void BuildSurfaceFor(DaggerfallTerrain sender, TerrainData terrainData)
+        {
             HandlePromoteCore(sender, terrainData, true);
         }
 
@@ -509,14 +522,33 @@ namespace DeepWaters
 				return;
 			}
 
+			// Rebuild guard (same pattern as the floor builder): DFU allocates a
+			// fresh heightmapSamples array per genuine promote, so reference
+			// equality on it plus the map pixel identifies an identical build.
+			Transform existingVisual = sender.transform.Find(VisualChildName);
+			if (existingVisual != null)
+			{
+				DeepWatersWaterSurface existingMarker = existingVisual.GetComponent<DeepWatersWaterSurface>();
+				if (existingMarker != null &&
+					existingMarker.BuiltMapPixelX == sender.MapPixelX &&
+					existingMarker.BuiltMapPixelY == sender.MapPixelY &&
+					object.ReferenceEquals(existingMarker.BuiltHeightmapSamples, sender.MapData.heightmapSamples))
+				{
+					return;
+				}
+			}
+
+			long timing = DeepWaterPromoteTiming.Begin();
 			Mesh surfaceMesh = BuildSurfaceMesh(sender, terrainData);
 			if (surfaceMesh == null)
 			{
+				DeepWaterPromoteTiming.End(timing, "surface", sender.MapPixelX, sender.MapPixelY);
 				RemoveExisting(sender);
 				return;
 			}
 
 			EnsureVisibleSurface(sender, terrainData, surfaceMesh);
+			DeepWaterPromoteTiming.End(timing, "surface", sender.MapPixelX, sender.MapPixelY);
 		}
 
         private static void EnsureVisibleSurface(DaggerfallTerrain terrain, TerrainData terrainData, Mesh surfaceMesh)
@@ -536,8 +568,12 @@ namespace DeepWaters
                 visualGO = existing.gameObject;
             }
 
-			if (visualGO.GetComponent<DeepWatersWaterSurface>() == null)
-				visualGO.AddComponent<DeepWatersWaterSurface>();
+			DeepWatersWaterSurface marker = visualGO.GetComponent<DeepWatersWaterSurface>();
+			if (marker == null)
+				marker = visualGO.AddComponent<DeepWatersWaterSurface>();
+			marker.BuiltMapPixelX = terrain.MapPixelX;
+			marker.BuiltMapPixelY = terrain.MapPixelY;
+			marker.BuiltHeightmapSamples = terrain.MapData.heightmapSamples;
 
             MeshFilter topFilter = EnsureSurfaceRenderer(
                 visualGO.transform,
@@ -1099,6 +1135,9 @@ namespace DeepWaters
     /// </summary>
     internal class DeepWatersWaterSurface : MonoBehaviour
     {
+        internal int BuiltMapPixelX = int.MinValue;
+        internal int BuiltMapPixelY = int.MinValue;
+        internal float[,] BuiltHeightmapSamples;
     }
 
 	/// <summary>

@@ -33,6 +33,7 @@ namespace DeepWaters
 
         private float tileWorldSize;
         private Vector3 cachedOrigin;
+        private int originCacheFrame = -1;
         private bool initialized;
 		private MapPixelData mapData;
 
@@ -51,6 +52,8 @@ namespace DeepWaters
 			UsesLocalWaterFallback = false;
             tileWorldSize = MapsFile.WorldMapTerrainDim * MeshReader.GlobalScale;
             cachedOrigin = dfTerrain.transform.position;
+            originCacheFrame = Time.frameCount;
+            CacheClimateNeighborhood();
             IsOceanConnected = ComputeOceanConnectivity(dfTerrain);
             initialized = true;
         }
@@ -176,37 +179,10 @@ namespace DeepWaters
         // smooths the per-climate base/band across pixel boundaries — no hard
         // depth STEP (wall/seam) and no abrupt texture line where the climate
         // changes, while regional variety is preserved between boundaries.
+        // Values come from the 3x3 neighborhood cached at Initialize: the mesh
+        // build calls this per vertex, and the old path made 4 layered
+        // MapFileReader climate lookups per call (~17k per tile build).
         internal void GetBlendedClimate(float worldX, float worldZ, out float baseDepth, out float band)
-        {
-            int climateWN, climateEN, climateWS, climateES;
-            float wx, wy;
-            GetSurroundingClimates(worldX, worldZ, out climateWN, out climateEN, out climateWS, out climateES, out wx, out wy);
-
-            float depthN = Mathf.Lerp(DeepBathymetry.ClimateBaseDepth(climateWN), DeepBathymetry.ClimateBaseDepth(climateEN), wx);
-            float depthS = Mathf.Lerp(DeepBathymetry.ClimateBaseDepth(climateWS), DeepBathymetry.ClimateBaseDepth(climateES), wx);
-            baseDepth = Mathf.Lerp(depthN, depthS, wy);
-
-            float bandN = Mathf.Lerp(DeepBathymetry.ClimateBandSignal(climateWN), DeepBathymetry.ClimateBandSignal(climateEN), wx);
-            float bandS = Mathf.Lerp(DeepBathymetry.ClimateBandSignal(climateWS), DeepBathymetry.ClimateBandSignal(climateES), wx);
-            band = Mathf.Lerp(bandN, bandS, wy);
-        }
-
-        internal float GetBlendedClimateBaseDepth(float worldX, float worldZ)
-        {
-            float baseDepth, band;
-            GetBlendedClimate(worldX, worldZ, out baseDepth, out band);
-            return baseDepth;
-        }
-
-        // The 4 map-pixel climates whose CENTERS surround this world position,
-        // plus the bilinear weights. Pixel centers sit at frac 0.5, so the -0.5
-        // shift puts centers on integers; resolving through the same global
-        // mapping as GetGlobalMapFractions keeps the result identical on both
-        // sides of a shared edge.
-        private void GetSurroundingClimates(
-            float worldX, float worldZ,
-            out int climateWN, out int climateEN, out int climateWS, out int climateES,
-            out float wx, out float wy)
         {
             int mapPixelX;
             int mapPixelY;
@@ -214,18 +190,52 @@ namespace DeepWaters
             float fracZ;
             GetGlobalMapFractions(worldX, worldZ, out mapPixelX, out mapPixelY, out fracX, out fracZ);
 
-            // Global pixel-center space (south-growing Y matches the map pixel Y).
+            // Global pixel-center space (south-growing Y matches map pixel Y).
             float gx = mapPixelX + fracX - 0.5f;
             float gy = mapPixelY + (1f - fracZ) - 0.5f;
             int px = Mathf.FloorToInt(gx);
             int py = Mathf.FloorToInt(gy);
-            wx = gx - px;
-            wy = gy - py;
+            float wx = gx - px;
+            float wy = gy - py;
 
-            climateWN = ClimateAtPixel(px, py);
-            climateEN = ClimateAtPixel(px + 1, py);
-            climateWS = ClimateAtPixel(px, py + 1);
-            climateES = ClimateAtPixel(px + 1, py + 1);
+            // In-tile queries only ever touch this tile's 3x3 pixel window;
+            // clamp keeps a stray edge sample inside the cache.
+            int ix0 = Mathf.Clamp(px - (MapPixelX - 1), 0, 2);
+            int iy0 = Mathf.Clamp(py - (MapPixelY - 1), 0, 2);
+            int ix1 = Mathf.Min(ix0 + 1, 2);
+            int iy1 = Mathf.Min(iy0 + 1, 2);
+
+            float depthN = Mathf.Lerp(climateBaseDepthCache[iy0 * 3 + ix0], climateBaseDepthCache[iy0 * 3 + ix1], wx);
+            float depthS = Mathf.Lerp(climateBaseDepthCache[iy1 * 3 + ix0], climateBaseDepthCache[iy1 * 3 + ix1], wx);
+            baseDepth = Mathf.Lerp(depthN, depthS, wy);
+
+            float bandN = Mathf.Lerp(climateBandCache[iy0 * 3 + ix0], climateBandCache[iy0 * 3 + ix1], wx);
+            float bandS = Mathf.Lerp(climateBandCache[iy1 * 3 + ix0], climateBandCache[iy1 * 3 + ix1], wx);
+            band = Mathf.Lerp(bandN, bandS, wy);
+        }
+
+        private readonly float[] climateBaseDepthCache = new float[9];
+        private readonly float[] climateBandCache = new float[9];
+
+        private void CacheClimateNeighborhood()
+        {
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    int climate = ClimateAtPixel(MapPixelX + dx, MapPixelY + dy);
+                    int index = (dy + 1) * 3 + (dx + 1);
+                    climateBaseDepthCache[index] = DeepBathymetry.ClimateBaseDepth(climate);
+                    climateBandCache[index] = DeepBathymetry.ClimateBandSignal(climate);
+                }
+            }
+        }
+
+        internal float GetBlendedClimateBaseDepth(float worldX, float worldZ)
+        {
+            float baseDepth, band;
+            GetBlendedClimate(worldX, worldZ, out baseDepth, out band);
+            return baseDepth;
         }
 
         private int ClimateAtPixel(int mapX, int mapY)
@@ -311,12 +321,19 @@ namespace DeepWaters
 
         private void GetTileFractions(float worldX, float worldZ, out float fracX, out float fracZ)
         {
-            // Re-read the tile origin each query in case the streaming world
-            // shifted us (FloatingOrigin can move terrains between updates,
-            // so caching the position from Initialize would drift).
-            Vector3 origin = transform != null ? transform.position : cachedOrigin;
-            fracX = (worldX - origin.x) / tileWorldSize;
-            fracZ = (worldZ - origin.z) / tileWorldSize;
+            // FloatingOrigin moves terrains only BETWEEN frames, so one
+            // transform read per tile per frame is exact — and the mesh
+            // build's thousands of queries per tile stop paying the native
+            // transform boundary on every call (the v0.53.0 hot-loop lesson).
+            if (originCacheFrame != Time.frameCount)
+            {
+                if (transform != null)
+                    cachedOrigin = transform.position;
+                originCacheFrame = Time.frameCount;
+            }
+
+            fracX = (worldX - cachedOrigin.x) / tileWorldSize;
+            fracZ = (worldZ - cachedOrigin.z) / tileWorldSize;
         }
 
         private void GetGlobalMapFractions(

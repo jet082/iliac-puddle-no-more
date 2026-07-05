@@ -43,8 +43,9 @@ namespace DeepWaters
 		internal float PassiveFishFrequency { get; private set; } = PassiveFishFrequencyAtMidpoint;
 		internal int MaxLiveFish { get; private set; } = MaxLiveFishLimit;
 		internal bool SpawnUnderwaterDecorations { get; private set; } = true;
-		internal int DecorationPopulateRadius { get; private set; } = 1;
+		internal int DecorationPopulateRadius { get; private set; } = 3;
 		internal float DecorationFrequency { get; private set; } = DecorationFrequencyAtMidpoint;
+		internal int MaxDecorationsPerTile { get; private set; } = 768;
 		internal float SeafloorLootRate { get; private set; } = SeafloorLootRateAtMidpoint;
 		internal int MaxLiveLootObjects { get; private set; } = 32;
 		internal float TreasureClusterRate { get; private set; } = TreasureClusterRateAtMidpoint;
@@ -171,6 +172,7 @@ namespace DeepWaters
 			SpawnUnderwaterDecorations = GetBoolSetting(settings, "SpawnUnderwaterDecorations");
 			DecorationPopulateRadius = Mathf.Clamp(GetIntSetting(settings, "DecorationPopulateRadius"), 1, 3);
 			DecorationFrequency = GetScaledSliderSetting(settings, "DecorationFrequency", DecorationFrequencyAtMidpoint);
+			MaxDecorationsPerTile = Mathf.Clamp(GetIntSetting(settings, "MaxDecorationsPerTile"), 64, 2304);
 			SeafloorLootRate = GetScaledSliderSetting(settings, "SeafloorLootRate", SeafloorLootRateAtMidpoint);
 			MaxLiveLootObjects = Mathf.Max(0, GetIntSetting(settings, "MaxLiveLootObjects"));
 			TreasureClusterRate = GetScaledSliderSetting(settings, "TreasureClusterRate", TreasureClusterRateAtMidpoint);
@@ -308,6 +310,8 @@ namespace DeepWaters
 
         void Update()
         {
+            DeepWaterPromoteTiming.Flush();
+            DeepWaterFloorBuilder.PumpDeferredBuilds();
             DeepWaterRuntime.Pump();
 			DeepWaterFloorMaterial.UpdateLighting();
 			SuppressVanillaWaterEncounters();

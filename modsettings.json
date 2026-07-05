@@ -77,7 +77,7 @@
                     "Max": 3,
                     "Value": 2,
                     "Name": "DecorationPopulateRadius",
-                    "Description": "Decoration spawning in map pixels around layer",
+                    "Description": "Decoration spawning radius in map pixels (3 = full loaded ring, no pop-in)",
                     "$version": "v1",
                     "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderIntKey"
                 },
@@ -89,6 +89,15 @@
                     "Description": "Decoration rate",
                     "$version": "v1",
                     "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderFloatKey"
+                },
+                {
+                    "Min": 64,
+                    "Max": 2304,
+                    "Value": 768,
+                    "Name": "MaxDecorationsPerTile",
+                    "Description": "Max decorations per map pixel (lower = better performance)",
+                    "$version": "v1",
+                    "$type": "DaggerfallWorkshop.Game.Utility.ModSupport.ModSettings.SliderIntKey"
                 },
                 {
                     "Min": 0.0,

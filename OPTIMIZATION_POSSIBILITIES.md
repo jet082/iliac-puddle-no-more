@@ -1,5 +1,18 @@
 # Optimization Possibilities: Map-Pixel Streaming Stutter
 
+> **Status 2026-07-05:** partially implemented. **KEPT (measured wins, mcs-safe):**
+> P4 (origin/climate caches), P6 (surface guard), and a lite P1 (deferred far-tile
+> builds, player 3x3 stays synchronous — this is the 1286→188ms load-frame win).
+> **P5 (decoration slicing) was IMPLEMENTED THEN FULLY REVERTED** — the sliced
+> spawn refactor triggered an mcs codegen miscompilation that corrupted
+> `PickRecord`'s struct returns → garbage records → DFU texture NRE → starved ALL
+> content (fish/enemies/loot/decorations). It compiled clean in Roslyn AND the
+> offline-mcs harness; only the in-game run caught it. If the decor 34ms/288ms
+> spike needs mitigation, use a SIMPLE cap (MaxDecorationsPerTile), not a resumable
+> job. **P2 (collider ring) was disproven by measurement** — the cook averages
+> 0.28ms with fast midphase; do not implement it. See PERFORMANCE_ITERATION_LOG.md
+> and the memory [[dfu-mod-compiler-gotchas]] / [[diagnostics-harness-workflow]].
+
 Date: 2026-07-03. Analysis of the current source tree (v0.56.x lineage, post-rewrite).
 No code changes proposed here — this is the map for future work.
 

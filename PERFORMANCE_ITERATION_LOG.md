@@ -1370,3 +1370,79 @@ Validation:
 - Regression pass completed cleanly for `ledge`, `ledge2`, and `desert`.
 - `ledge` and `ledge2` did not reintroduce the giant artificial ramps.
 - `desert` forward probe ended on dry land in `DeepWatersDiagnostics\deep-waters-desert-desert_straight_lake_probe-end-20260621-202306.png`.
+
+## Map-Pixel Crossing Stutter: Measured Tranche (2026-07-04)
+
+Instrumented the promote pipeline (`[DeepWaters.PromoteMs]` per-stage lines, flushed
+from DeepWaters.Update) and ran `bbb,ccc` traversals (240s) after each change.
+
+Baseline per-tile stage costs (avg/max ms): decor 34.6/288, floor 11.8/40,
+surface 6.2/25, mask 3.2/7, cap 0.6/15, collider 0.28/2.3. The collider cook is a
+non-issue — the doc's P2 (collider ring) was dropped on data.
+
+Changes, in order:
+
+1. **Decoration populate sliced (P5):** PopulateTile is a resumable job — one sample
+   row per step under a 3ms/frame budget, Random state carried across slices
+   (bit-identical output), then the spawn executes as per-batch plan steps capped at
+   200 items. decor avg 34.6 -> ~5-7; the 288ms whole-tile spike is gone.
+2. **Sampling cuts (P4):** frame-stamped tile-origin cache (one transform read per
+   tile per frame) + 3x3 climate-neighborhood cache at Initialize. floor 11.8 -> 8.9.
+3. **Surface rebuild guard (P6):** heightmap reference-equality, same pattern as the
+   floor builder. surface builds per run 244 -> 88.
+4. **Deferred far-tile builds (P1-lite):** only the player's 3x3 ring builds inside
+   the promote event; farther tiles queue and build nearest-first, one per frame,
+   from DeepWaters.Update (fog + horizon curtain hide the latency; decorations
+   already chain on HasReadyFloor).
+
+Final vs baseline: median heavy-frame 29.6 -> 12.3ms, p90 53.4 -> 26.2ms, the
+init/teleport whole-ring frame 1286 -> 188ms, PromoteMs frames 319 -> 179.
+Shore regression pass clean (fallthrough min-Y == start, 0 falls; fallenin
+self-rescues).
+
+Remaining known spikes (next round candidates):
+
+- **First-texture cost, 600-1000ms once per unique replacement texture per
+  session** (GetStaticBillboardMaterial import + the edge-clean flood fill inside a
+  spawn step). Candidate: run the flood fill on a worker thread, or pre-warm the
+  decoration texture set during load.
+- **Multi-tile sync frames (~100-190ms)** when a teleport/diagonal crossing promotes
+  several near-ring tiles in one frame — could stagger the 8 neighbors 1/frame,
+  keeping only the player's own tile strictly synchronous.
+
+## Decoration Slicing Reverted — mcs Miscompilation (2026-07-05)
+
+The decoration slicing from the 2026-07-04 tranche was FULLY REVERTED. It broke all
+underwater content (the user loaded in to an empty world: no fish, enemies, or
+decorations, one loot pile).
+
+Root cause: the sliced spawn refactor (`UnderwaterDecorationBatchFactory.BuildSpawnPlan`
+/ `ExecuteSpawnStep` + the resumable populate job) triggered a **DFU-mcs codegen
+miscompilation**. It compiled cleanly in Roslyn AND the offline mcs harness, but the
+runtime mcs emitted wrong code: `UnderwaterDecorationCatalog.PickRecord` (unchanged,
+provably-valid immutable pool) returned garbage structs (`0:0`, `-1431801301` = the
+0xAA uninitialized-memory fill). Garbage record → DFU `TextureReader.GetTexture2D` NRE
+(null `albedoMap` when the bogus archive fails to load) → thrown from `ProcessWorkQueue`
+*before* the encounter/loot pumps in `DeepWaters.Update` → starved everything.
+
+Timeline (ccc `decorationsCurrent` from the diagnostics CSVs):
+
+| build | decorations |
+| --- | ---: |
+| baseline (instrumentation only) | 2304 |
+| + generation slicing | 2304 (fine) |
+| + spawn slicing | **0 (broke)** |
+| + deferred builds | 0 |
+| reverted slicing (both) | **2304 (fixed)** |
+
+Kept from the tranche (mcs-safe, real wins): P4 origin+climate caches, P6 surface
+rebuild guard, P1-lite deferred far-tile builds (the 1286→188ms load-frame win), a
+per-record guard around DFU's `GetTexture2D` NRE, and the PromoteMs instrumentation.
+
+Also fixed a workflow hazard: repeated in-place UnityPy `.dfmod` patching corrupted the
+bundle (wrote a 0-byte file → mod wouldn't load → stuck on title screen). Recovery is a
+single-pass rebuild from a known-good base with temp-file verification before placing.
+
+Net perf effect of the revert: the decor 34ms/288ms per-tile spike returns, but the
+headline load/teleport-frame win (1286→188ms) and the sampling-cache wins are retained.
+The decor spike, if it matters, should be mitigated with a simple cap next time.

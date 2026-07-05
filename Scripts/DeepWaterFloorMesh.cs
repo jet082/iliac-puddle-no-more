@@ -213,7 +213,9 @@ namespace DeepWaters
             mesh.RecalculateBounds();
 
             EnsureMaterial();
+            long colliderTiming = DeepWaterPromoteTiming.Begin();
             EnsureCollider();
+            DeepWaterPromoteTiming.End(colliderTiming, "collider", BuiltMapPixelX, BuiltMapPixelY);
 
         }
 

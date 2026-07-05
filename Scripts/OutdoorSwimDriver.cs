@@ -425,26 +425,26 @@ namespace DeepWaters
             }
         }
 
-        /// <summary>Teardown for save loads: clear every forged/swim flag.</summary>
+        /// <summary>
+        /// Save-load teardown. DFU owns the NEWLY loaded scene's dungeon + water
+        /// state (it sets isPlayerInsideDungeon on dungeon enter and rewrites
+        /// blockWaterLevel per dungeon block). We must NOT force those here: the
+        /// old path called Restore()/RestoreDungeonState which set
+        /// isPlayerInsideDungeon=false, and loading a DUNGEON save while still
+        /// forged from outdoor water then left DFU's dungeon-water swimming
+        /// permanently dead. Just drop our OWN forge tracking so Update
+        /// re-forges fresh for outdoor water; leave DFU's fields alone.
+        /// </summary>
         private void ClearOutdoorWaterState()
         {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.PlayerEnterExit == null)
                 return;
 
+            currentlyForged = false;
+            dfuBridge.DropForgeTracking();
             ResetHeadWaterState(false);
             ReleaseSwimMotorFrameSpikeGuard();
-            if (currentlyForged)
-            {
-                Restore();
-            }
-            else
-            {
-                PlayerEnterExit pex = gameManager.PlayerEnterExit;
-                dfuBridge.ApplyWaterAudioState(pex, NoWaterSentinel, PlayerMotor.OnExteriorWaterMethod.None, false);
-				ApplyDfuSwimFlags(pex, false);
-            }
-
             RequestStandAfterWaterExit();
         }
 
@@ -1540,7 +1540,12 @@ namespace DeepWaters
 
 		void Update()
 		{
-			if (!IsOutdoorSwimming() || DeepWaterRuntime.IsLoadGraceActive)
+			// Stroke/dash + swim-speed apply to ANY swimming (outdoor forged OR
+			// native dungeon water) — both drive the player through LevitateMotor,
+			// so the extras layer on identically. Only the anti-tunnel clamps are
+			// outdoor-specific (they reference the carved seafloor mesh, which does
+			// not exist in dungeons).
+			if (!IsAnySwimming() || DeepWaterRuntime.IsLoadGraceActive)
 			{
 				RemoveSpeedModifier();
 				ResetStroke();
@@ -1553,7 +1558,8 @@ namespace DeepWaters
 			HandleStrokeInput();
 			ApplyStrokeMotion();
 			ClearClampDiagnostics();
-			ClampAboveRenderedSeafloor();
+			if (IsOutdoorSwimming())
+				ClampAboveRenderedSeafloor();
 		}
 
         private void CachePlayerMotorParts()
@@ -1725,8 +1731,12 @@ namespace DeepWaters
             else if (input.HasAction(InputManager.Actions.Crouch) || input.HasAction(InputManager.Actions.FloatDown))
                 direction.y -= 0.65f;
 
+            // Outdoor-only: don't let an upward stroke launch the player above the
+            // ocean surface. There is no ocean surface in a dungeon, so the clamp
+            // is skipped there (DFU's LevitateMotor owns the dungeon water ceiling).
             float oceanSurfaceY;
             if (direction.y > 0f &&
+                gameManager.PlayerEnterExit != null && !gameManager.PlayerEnterExit.IsPlayerInside &&
                 DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) &&
                 cameraTransform.position.y > oceanSurfaceY + SurfaceUpwardCameraClearance)
             {
@@ -1852,6 +1862,27 @@ namespace DeepWaters
                 return true;
 
             return OutdoorSwimDriver.IsPresentationUnderwater(oceanSurfaceY);
+        }
+
+        // Outdoor forged water OR native dungeon water. LevitateMotor.IsSwimming
+        // is DFU's single swim-movement signal for both, so it drives the
+        // stroke/speed extras uniformly; the outdoor path keeps its richer test
+        // (presentation-underwater etc.) for the surface-swim case.
+        private static bool IsAnySwimming()
+        {
+            if (IsOutdoorSwimming())
+                return true;
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null || !gameManager.IsPlayingGame() ||
+                gameManager.PlayerEntity == null || gameManager.PlayerEntity.IsWaterWalking)
+            {
+                return false;
+            }
+
+            GameObject player = gameManager.PlayerObject;
+            LevitateMotor levitateMotor = player != null ? player.GetComponent<LevitateMotor>() : null;
+            return levitateMotor != null && levitateMotor.IsSwimming;
         }
     }
 
@@ -2014,6 +2045,19 @@ namespace DeepWaters
 		{
 			isPlayerInsideDungeonField.SetValue(pex, false);
 			ClearOutdoorDungeonParent(pex);
+		}
+
+		// Forget our forge WITHOUT writing any PlayerEnterExit/PlayerMotor
+		// field. On a save load DFU has already set the newly-loaded scene's
+		// dungeon + water state; RestoreDungeonState would force
+		// isPlayerInsideDungeon=false, which — when a dungeon save is loaded
+		// while still forged from outdoor water — permanently disables DFU's
+		// dungeon-water swimming (that flag is set only on dungeon ENTER, never
+		// per-frame, so it never self-corrects).
+		internal void DropForgeTracking()
+		{
+			outdoorDungeonParentAssigned = false;
+			outdoorDungeonParent = null;
 		}
 
 		internal void ApplyWaterAudioState(

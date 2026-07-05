@@ -16,7 +16,7 @@ namespace DeepWaters
     internal static class UnderwaterDecorations
     {
         private const int MaxTilesPerWorkCycle = 1;
-        private const int MaxDecorationsPerTile = 2304;
+        private const int MaxDecorationsPerTileHardCap = 2304;
         private const int SampleStride = 3;
         private const float MinimumDecorationSpacing = 5f;
         private const float MinimumSeafloorDepth = 8f;
@@ -32,6 +32,7 @@ namespace DeepWaters
         private static readonly Dictionary<UnderwaterDecorationRecord, float> authoredVisualHeightCache =
             new Dictionary<UnderwaterDecorationRecord, float>();
         private static bool installed;
+        private static bool loggedVisualHeightFailure;
 
         internal static int PendingWorkCount
         {
@@ -101,7 +102,9 @@ namespace DeepWaters
 
 				RemoveDecoration(dfTerrain);
 
+				long timing = DeepWaterPromoteTiming.Begin();
 				PopulateTile(dfTerrain, terrain.terrainData);
+				DeepWaterPromoteTiming.End(timing, "decor", dfTerrain.MapPixelX, dfTerrain.MapPixelY);
 				processed++;
 			}
 		}
@@ -332,13 +335,17 @@ namespace DeepWaters
                 float worldX = origin.x + localX;
                 float worldZ = origin.z + localZ;
 
-                DeepWaterColumn column;
-                if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column)) continue;
-                if (column.Depth < MinimumSeafloorDepth) continue;
-
+                // Read the seafloor straight from the built floor-mesh grid. This
+                // is the DFU-nature-cheap path: TrySampleMeshLocalY is a few array
+                // reads + a bilinear, and returns false for non-water quads — so
+                // it is the swimmable-volume test AND the height in one call. The
+                // old per-candidate DeepWaterWorld.TryGetWaterColumn did a terrain
+                // lookup + bake bilinear + ~8 Perlin bathymetry calls each, which
+                // is what made placement too costly to populate the full ring.
                 float seafloorLocalY;
-                if (!TryResolveSeafloorY(floorMesh, column, worldX, worldZ, out seafloorLocalY))
+                if (floorMesh == null || !floorMesh.TrySampleMeshLocalY(worldX, worldZ, out seafloorLocalY))
                     continue;
+                if (oceanLocalY - seafloorLocalY < MinimumSeafloorDepth) continue;
 
                 if (!IsGentleEnoughForDecoration(floorMesh, worldX, worldZ, oceanLocalY)) continue;
 
@@ -390,44 +397,46 @@ namespace DeepWaters
             if (dfUnity == null || dfUnity.MeshReader == null)
                 return false;
 
-            Vector2 archiveSize = dfUnity.MeshReader.GetScaledBillboardSize(record.Archive, record.Record);
-            if (archiveSize.y > 0f)
-                visualHeight = archiveSize.y * MeshReader.GlobalScale;
-            else if (record.Archive == 106)
-                visualHeight = BubbleFallbackVisualHeightNativeUnits * MeshReader.GlobalScale;
-
-            if (DaggerfallUnity.Settings.AssetInjection &&
-                !UnderwaterDecorationCatalog.UsesArchiveAnimation(record))
+            // GetScaledBillboardSize (and the replacement probe) trigger a full
+            // DFU texture load, which NREs inside TextureReader.GetTexture2D
+            // when an archive fails to load (null albedoMap deref — a stock-DFU
+            // bug we can't patch). A record whose texture won't load must skip
+            // cleanly rather than throw up through the whole populate pass; the
+            // result is cached below so a record is only probed once.
+            try
             {
-                UnderwaterDecorationReplacementInfo replacementInfo;
-                if (UnderwaterDecorationReplacementCache.TryGet(record, out replacementInfo) &&
-                    replacementInfo.BatchSize.y > 0f)
+                Vector2 archiveSize = dfUnity.MeshReader.GetScaledBillboardSize(record.Archive, record.Record);
+                if (archiveSize.y > 0f)
+                    visualHeight = archiveSize.y * MeshReader.GlobalScale;
+                else if (record.Archive == 106)
+                    visualHeight = BubbleFallbackVisualHeightNativeUnits * MeshReader.GlobalScale;
+
+                if (DaggerfallUnity.Settings.AssetInjection &&
+                    !UnderwaterDecorationCatalog.UsesArchiveAnimation(record))
                 {
-                    visualHeight = Mathf.Max(
-                        visualHeight,
-                        replacementInfo.BatchSize.y * MeshReader.GlobalScale);
+                    UnderwaterDecorationReplacementInfo replacementInfo;
+                    if (UnderwaterDecorationReplacementCache.TryGet(record, out replacementInfo) &&
+                        replacementInfo.BatchSize.y > 0f)
+                    {
+                        visualHeight = Mathf.Max(
+                            visualHeight,
+                            replacementInfo.BatchSize.y * MeshReader.GlobalScale);
+                    }
                 }
+            }
+            catch (System.Exception ex)
+            {
+                if (!loggedVisualHeightFailure)
+                {
+                    loggedVisualHeightFailure = true;
+                    Debug.LogWarning("[DeepWaters.Decorations] DFU texture load failed for decoration " +
+                        record.Archive + ":" + record.Record + "; skipping this record. " + ex.Message);
+                }
+                visualHeight = 0f;
             }
 
             authoredVisualHeightCache[record] = visualHeight;
             return visualHeight > 0f;
-        }
-
-        private static bool TryResolveSeafloorY(
-            DeepWaterFloorMesh floorMesh,
-            DeepWaterColumn column,
-            float worldX,
-            float worldZ,
-            out float seafloorLocalY)
-        {
-            if (floorMesh != null && floorMesh.TrySampleMeshLocalY(worldX, worldZ, out seafloorLocalY))
-                return true;
-
-            if (DeepWaterWorld.TryGetRenderedSeafloorLocalY(column, worldX, worldZ, out seafloorLocalY))
-                return true;
-
-            seafloorLocalY = 0f;
-            return false;
         }
 
         private static bool IsGentleEnoughForDecoration(
@@ -521,7 +530,10 @@ namespace DeepWaters
 
         private static void TrimDecorationPositions(List<UnderwaterDecorationPlacementInfo> positions)
         {
-            if (positions == null || positions.Count <= MaxDecorationsPerTile)
+            int cap = DeepWaters.Instance != null
+                ? Mathf.Clamp(DeepWaters.Instance.MaxDecorationsPerTile, 1, MaxDecorationsPerTileHardCap)
+                : MaxDecorationsPerTileHardCap;
+            if (positions == null || positions.Count <= cap)
                 return;
 
             for (int i = positions.Count - 1; i > 0; i--)
@@ -532,7 +544,7 @@ namespace DeepWaters
                 positions[j] = swap;
             }
 
-            positions.RemoveRange(MaxDecorationsPerTile, positions.Count - MaxDecorationsPerTile);
+            positions.RemoveRange(cap, positions.Count - cap);
         }
 
         private static void MarkCurrentTerrain(DaggerfallTerrain dfTerrain)

@@ -161,16 +161,6 @@ namespace DeepWaters
             return groupObject;
         }
 
-        private static GameObject CreateDecorationGroup(Transform parent)
-        {
-            var group = new GameObject(GroupName);
-            group.transform.parent = parent;
-            group.transform.localPosition = Vector3.zero;
-            group.transform.localRotation = Quaternion.identity;
-            group.transform.localScale = Vector3.one;
-            return group;
-        }
-
         private static void SpawnArchiveBillboards(Transform parent, List<UnderwaterDecorationPlacementInfo> positions)
         {
             // DFU's native billboard batch handles animated flats itself: it
@@ -193,28 +183,6 @@ namespace DeepWaters
                 SpawnArchiveBillboards(parent, pair.Key, pair.Value);
         }
 
-        private static void SpawnArchiveBillboards(
-            Transform parent,
-            int archive,
-            List<DaggerfallBillboardBatch.BasicInfo> positions)
-        {
-            DaggerfallBillboardBatch batch = GameObjectHelper.CreateBillboardBatchGameObject(
-                archive,
-                parent);
-            if (batch == null)
-                return;
-
-            batch.Clear();
-            batch.gameObject.name = "DeepWaters_DecorationArchiveBatch_" + archive;
-            ApplyArchiveAnimationSpeed(batch, archive);
-
-            AddArchiveItems(batch, positions);
-
-            batch.Apply();
-            ApplyUnderwaterDecorationMaterial(batch.GetComponent<MeshRenderer>());
-            DeepWaterRendering.DisableShadows(batch.gameObject);
-        }
-
         private static void SpawnReplacementAwareBillboards(Transform parent, List<UnderwaterDecorationPlacementInfo> positions)
         {
             var archivePositions = new Dictionary<int, List<DaggerfallBillboardBatch.BasicInfo>>();
@@ -228,10 +196,6 @@ namespace DeepWaters
 
                 if (UnderwaterDecorationCatalog.UsesArchiveAnimation(record))
                 {
-                    // DREAM-style imported multi-frame replacements animate by
-                    // swapping material textures on DaggerfallBillboard. The
-                    // batch paths only animate atlas UVs, which can leave these
-                    // records as flat white quads.
                     UnderwaterDecorationReplacementInfo animatedInfo;
                     if (UnderwaterDecorationReplacementCache.TryGet(record, out animatedInfo))
                     {
@@ -269,6 +233,38 @@ namespace DeepWaters
             }
 
             SpawnAnimatedReplacementBillboards(parent, animatedReplacementPositions);
+        }
+
+        private static GameObject CreateDecorationGroup(Transform parent)
+        {
+            var group = new GameObject(GroupName);
+            group.transform.parent = parent;
+            group.transform.localPosition = Vector3.zero;
+            group.transform.localRotation = Quaternion.identity;
+            group.transform.localScale = Vector3.one;
+            return group;
+        }
+
+        private static void SpawnArchiveBillboards(
+            Transform parent,
+            int archive,
+            List<DaggerfallBillboardBatch.BasicInfo> positions)
+        {
+            DaggerfallBillboardBatch batch = GameObjectHelper.CreateBillboardBatchGameObject(
+                archive,
+                parent);
+            if (batch == null)
+                return;
+
+            batch.Clear();
+            batch.gameObject.name = "DeepWaters_DecorationArchiveBatch_" + archive;
+            ApplyArchiveAnimationSpeed(batch, archive);
+
+            AddArchiveItems(batch, positions);
+
+            batch.Apply();
+            ApplyUnderwaterDecorationMaterial(batch.GetComponent<MeshRenderer>());
+            DeepWaterRendering.DisableShadows(batch.gameObject);
         }
 
         private static void AddReplacementPosition(
