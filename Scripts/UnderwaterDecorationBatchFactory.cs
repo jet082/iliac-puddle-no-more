@@ -145,6 +145,8 @@ namespace DeepWaters
         private static readonly int CutoffProperty = Shader.PropertyToID("_Cutoff");
         private static readonly Dictionary<Material, Material> underwaterMaterialCache = new Dictionary<Material, Material>();
         private static readonly Dictionary<Texture, Texture> cleanedTextureCache = new Dictionary<Texture, Texture>();
+		private static readonly HashSet<int> warmedArchiveAtlases = new HashSet<int>();
+		private static bool loggedArchiveWarmupFailure;
 
         internal static GameObject Spawn(Transform terrainParent, List<UnderwaterDecorationPlacementInfo> positions)
         {
@@ -161,6 +163,24 @@ namespace DeepWaters
             return groupObject;
         }
 
+		internal static bool PumpArchiveWarmup(List<UnderwaterDecorationPlacementInfo> positions, ref int index)
+		{
+			if (!DaggerfallUnity.Settings.AssetInjection || positions == null)
+				return false;
+
+			while (index < positions.Count)
+			{
+				int archive = positions[index++].Archive;
+				if (warmedArchiveAtlases.Contains(archive))
+					continue;
+
+				WarmArchiveAtlas(archive);
+				return true;
+			}
+
+			return false;
+		}
+
         private static void SpawnArchiveBillboards(Transform parent, List<UnderwaterDecorationPlacementInfo> positions)
         {
             // DFU's native billboard batch handles animated flats itself: it
@@ -175,12 +195,63 @@ namespace DeepWaters
                 SpawnArchiveBillboards(parent, archivePositions);
         }
 
+		private static void WarmArchiveAtlas(int archive)
+		{
+			warmedArchiveAtlases.Add(archive);
+
+			DaggerfallUnity dfUnity = DaggerfallUnity.Instance;
+			if (dfUnity == null || dfUnity.MaterialReader == null)
+				return;
+
+			long timing = DiagnosticTimingBegin();
+			try
+			{
+				Rect[] rects;
+				RecordIndex[] indices;
+				int size = DaggerfallUnity.Settings.AssetInjection ? 4096 : 2048;
+				Material material = dfUnity.MaterialReader.GetMaterialAtlas(
+					archive,
+					0,
+					4,
+					size,
+					out rects,
+					out indices,
+					4,
+					true,
+					0,
+					false,
+					true);
+
+				if (material != null)
+				{
+					Material underwaterMaterial = CreateUnderwaterDecorationMaterial(material);
+					if (underwaterMaterial == null)
+						ConfigureUnderwaterDecorationMaterial(material);
+				}
+			}
+			catch (System.Exception ex)
+			{
+				if (!loggedArchiveWarmupFailure)
+				{
+					loggedArchiveWarmupFailure = true;
+					Debug.LogWarning("[DeepWaters.Decorations] Archive warmup failed for " +
+						archive + ": " + ex.Message);
+				}
+			}
+			finally
+			{
+				DiagnosticTimingEnd(timing, "decorWarm");
+			}
+		}
+
         private static void SpawnArchiveBillboards(
             Transform parent,
             Dictionary<int, List<DaggerfallBillboardBatch.BasicInfo>> archivePositions)
         {
+			long timing = DiagnosticTimingBegin();
             foreach (KeyValuePair<int, List<DaggerfallBillboardBatch.BasicInfo>> pair in archivePositions)
                 SpawnArchiveBillboards(parent, pair.Key, pair.Value);
+			DiagnosticTimingEnd(timing, "decorArch");
         }
 
         private static void SpawnReplacementAwareBillboards(Transform parent, List<UnderwaterDecorationPlacementInfo> positions)
@@ -189,6 +260,7 @@ namespace DeepWaters
             var replacementPositions = new Dictionary<UnderwaterDecorationRecord, List<Vector3>>();
             var animatedReplacementPositions = new List<UnderwaterDecorationPlacementInfo>();
 
+			long groupingTiming = DiagnosticTimingBegin();
             for (int i = 0; i < positions.Count; i++)
             {
                 UnderwaterDecorationPlacementInfo item = positions[i];
@@ -213,7 +285,9 @@ namespace DeepWaters
                 }
 
                 UnderwaterDecorationReplacementInfo replacementInfo;
-                if (!UnderwaterDecorationReplacementCache.TryGetMaterial(record, out replacementInfo))
+                if (!UnderwaterDecorationReplacementCache.TryGetMaterial(record, out replacementInfo) ||
+					replacementInfo == null ||
+					!replacementInfo.HasReplacement)
                 {
                     AddArchivePosition(archivePositions, item);
                     continue;
@@ -221,6 +295,7 @@ namespace DeepWaters
 
                 AddReplacementPosition(replacementPositions, record, item.LocalPosition);
             }
+			DiagnosticTimingEnd(groupingTiming, "decorGroup");
 
             if (archivePositions.Count > 0)
                 SpawnArchiveBillboards(parent, archivePositions);
@@ -297,10 +372,13 @@ namespace DeepWaters
             // passes the never-populated cachedMaterial.atlasRects/atlasIndices
             // into its job and throws on Apply(). Its only in-tree callers are
             // commented out. Keep building the batch mesh by hand.
+			long meshTiming = DiagnosticTimingBegin();
             Mesh mesh = BuildMaterialBillboardBatchMesh(positions, info);
+			DiagnosticTimingEnd(meshTiming, "decorRepMesh");
             if (mesh == null)
                 return;
 
+			long objectTiming = DiagnosticTimingBegin();
             var go = new GameObject("DeepWaters_DecorationMaterialBatch_" + record.Archive + "_" + record.Record);
             go.transform.parent = parent;
             go.transform.localPosition = Vector3.zero;
@@ -315,6 +393,7 @@ namespace DeepWaters
 
             ApplyUnderwaterDecorationMaterial(go.GetComponent<MeshRenderer>());
             DeepWaterRendering.DisableShadows(go);
+			DiagnosticTimingEnd(objectTiming, "decorRepObj");
         }
 
         private static void SpawnAnimatedReplacementBillboards(
@@ -324,6 +403,7 @@ namespace DeepWaters
             if (positions == null || positions.Count == 0)
                 return;
 
+			long timing = DiagnosticTimingBegin();
             for (int i = 0; i < positions.Count; i++)
             {
                 UnderwaterDecorationPlacementInfo item = positions[i];
@@ -350,6 +430,7 @@ namespace DeepWaters
                 ApplyUnderwaterDecorationMaterial(go.GetComponent<MeshRenderer>());
                 DeepWaterRendering.DisableShadows(go);
             }
+			DiagnosticTimingEnd(timing, "decorAnim");
         }
 
         private static void AddArchivePosition(
@@ -575,6 +656,7 @@ namespace DeepWaters
             if (source == null || source.width <= 0 || source.height <= 0)
                 return null;
 
+			long timing = DiagnosticTimingBegin();
             RenderTexture previous = RenderTexture.active;
             RenderTexture rt = RenderTexture.GetTemporary(source.width, source.height, 0, RenderTextureFormat.ARGB32);
             Texture2D copy = null;
@@ -609,6 +691,7 @@ namespace DeepWaters
             {
                 RenderTexture.active = previous;
                 RenderTexture.ReleaseTemporary(rt);
+				DiagnosticTimingEnd(timing, "decorCleanTex");
             }
         }
 
@@ -714,6 +797,17 @@ namespace DeepWaters
                 material.SetFloat(CutoffProperty, cutoff);
             }
         }
+
+		private static long DiagnosticTimingBegin()
+		{
+			return DeepWaterDiagnosticsRunner.Active ? DeepWaterPromoteTiming.Begin() : 0L;
+		}
+
+		private static void DiagnosticTimingEnd(long beginTimestamp, string stage)
+		{
+			if (beginTimestamp != 0L)
+				DeepWaterPromoteTiming.End(beginTimestamp, stage, 0, 0);
+		}
 
         private sealed class OwnedUnderwaterDecorationMesh : MonoBehaviour
         {

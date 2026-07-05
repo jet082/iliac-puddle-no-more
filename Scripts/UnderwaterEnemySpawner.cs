@@ -85,6 +85,7 @@ namespace DeepWaters
         // Total live enemies are capped by the MaxLiveEnemies setting.
         private const int EnemyAttemptsPerPixel = 96;
         private const float EnemyFrequencyAtMidpoint = 0.5f;
+		private const int MaxPendingEnemySpawnsPerFrame = 1;
 
 		// Rare "boss" roll: 1 in 100 of each deep-ocean enemy spawn becomes
 		// an ancient lich or ancient vampire.
@@ -96,10 +97,22 @@ namespace DeepWaters
         {
             internal readonly TransientObjectTracker Enemies = new TransientObjectTracker();
             internal int AttemptsRemaining;
+			internal int LiveOrPendingCount;
+			internal bool Active = true;
         }
+
+		private struct EnemySpawnRequest
+		{
+			internal PixelEnemyGroup Group;
+			internal Vector3 WorldPos;
+			internal Transform Parent;
+			internal MobileTypes Type;
+			internal MobileGender Gender;
+		}
 
 		private static readonly Dictionary<long, PixelEnemyGroup> pixelGroups = new Dictionary<long, PixelEnemyGroup>();
 		private static readonly List<long> despawnScratch = new List<long>();
+		private static readonly Queue<EnemySpawnRequest> pendingSpawns = new Queue<EnemySpawnRequest>();
 		private static bool installed;
 		private static int liveCount;
 
@@ -127,9 +140,35 @@ namespace DeepWaters
         internal static void ClearAll()
         {
 			foreach (var kv in pixelGroups)
+			{
+				kv.Value.Active = false;
 				kv.Value.Enemies.Clear();
+			}
 			pixelGroups.Clear();
+			pendingSpawns.Clear();
 			liveCount = 0;
+		}
+
+		internal static void PumpPendingSpawns()
+		{
+			int budget = MaxPendingEnemySpawnsPerFrame;
+			while (budget > 0 && pendingSpawns.Count > 0)
+			{
+				budget--;
+				EnemySpawnRequest request = pendingSpawns.Dequeue();
+				if (request.Group == null || !request.Group.Active)
+					continue;
+
+				GameObject enemy = SpawnEnemy(request.WorldPos, request.Parent, request.Type, request.Gender);
+				if (enemy != null)
+				{
+					request.Group.Enemies.Add(enemy);
+					continue;
+				}
+
+				request.Group.LiveOrPendingCount = Mathf.Max(0, request.Group.LiveOrPendingCount - 1);
+				liveCount = Mathf.Max(0, liveCount - 1);
+			}
 		}
 
         internal static void TickDespawn(HashSet<long> keepKeys)
@@ -145,8 +184,9 @@ namespace DeepWaters
 			{
 				long key = despawnScratch[i];
 				PixelEnemyGroup group = pixelGroups[key];
-				liveCount = Mathf.Max(0, liveCount - group.Enemies.Count);
-				group.Enemies.Clear();
+				group.Active = false;
+				liveCount = Mathf.Max(0, liveCount - group.LiveOrPendingCount);
+				group.Enemies.Release();
 				pixelGroups.Remove(key);
 			}
         }
@@ -196,14 +236,26 @@ namespace DeepWaters
                 MobileTypes type = PickEnemyForDepth(depthFraction, out gender);
 				Vector3 resolvedPos = PickEnemyPosition(worldX, worldZ, floorY, surfaceY, type, depthFraction);
 
-                GameObject enemy = SpawnEnemy(resolvedPos, parent, type, gender);
-				if (enemy != null)
-				{
-					group.Enemies.Add(enemy);
-					liveCount++;
-				}
+				ReserveEnemySpawn(group, resolvedPos, parent, type, gender);
             }
         }
+
+		private static bool ReserveEnemySpawn(PixelEnemyGroup group, Vector3 worldPos, Transform parent, MobileTypes type, MobileGender gender)
+		{
+			if (group == null || !group.Active || parent == null)
+				return false;
+
+			EnemySpawnRequest request;
+			request.Group = group;
+			request.WorldPos = worldPos;
+			request.Parent = parent;
+			request.Type = type;
+			request.Gender = gender;
+			pendingSpawns.Enqueue(request);
+			group.LiveOrPendingCount++;
+			liveCount++;
+			return true;
+		}
 
         internal static int TrySpawnRareEnemiesNearTreasureCluster(Vector3 centre)
         {

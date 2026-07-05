@@ -18,18 +18,19 @@ namespace DeepWaters
     /// never visible. Per-frame spawn work is metered so a freshly entered pixel
     /// fills over a few ticks instead of hitching.
     /// </summary>
-    internal static class UnderwaterEncounterPulse
-    {
-        private const float TickInterval = 0.3f;
-        private const float PopulateRadius = 200f;
-        private const float DespawnRadius = 300f;
+	internal static class UnderwaterEncounterPulse
+	{
+		private const float TickInterval = 0.1f;
+		private const float PopulateRadius = 200f;
+		private const float DespawnRadius = 300f;
+		private const int MaxPendingDestroysPerFrame = 12;
 		private const float PopulateRadiusSq = PopulateRadius * PopulateRadius;
 		private const float DespawnRadiusSq = DespawnRadius * DespawnRadius;
         // Per-pixel, per-tick attempt caps. Every in-range pixel gets a few
 		// attempts each tick so the live-cap budget fills all of them in parallel
 		// (even spread) rather than the nearest pixel eating the whole cap.
-		private const int FishAttemptsPerPixelPerTick = 6;
-		private const int EnemyAttemptsPerPixelPerTick = 12;
+		private const int FishAttemptsPerPixelPerTick = 2;
+		private const int EnemyAttemptsPerPixelPerTick = 4;
 		private const float DisableClearGraceSeconds = 2f;
 
         private static float nextTickTime;
@@ -37,9 +38,10 @@ namespace DeepWaters
         private static float enemyDisabledSince = -1f;
         private static bool installed;
 
-        private static readonly List<DaggerfallTerrain> loadedDfTerrains = new List<DaggerfallTerrain>();
-        private static readonly HashSet<long> keepKeys = new HashSet<long>();
-        private static readonly List<PopulateCandidate> populateCandidates = new List<PopulateCandidate>();
+		private static readonly List<DaggerfallTerrain> loadedDfTerrains = new List<DaggerfallTerrain>();
+		private static readonly HashSet<long> keepKeys = new HashSet<long>();
+		private static readonly List<PopulateCandidate> populateCandidates = new List<PopulateCandidate>();
+		private static readonly Queue<GameObject> pendingDestroys = new Queue<GameObject>();
 
         private struct PopulateCandidate
         {
@@ -59,52 +61,64 @@ namespace DeepWaters
 
 		internal static void Pump()
 		{
+			PumpPendingDestroys();
+			UnderwaterPassiveFishSpawner.PumpPendingSpawns();
+			UnderwaterEnemySpawner.PumpPendingSpawns();
+
 			if (Time.time < nextTickTime)
 				return;
 			nextTickTime = Time.time + TickInterval;
+			long timing = DeepWaterPromoteTiming.Begin();
 
-			if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+			try
 			{
-				ClearEverything();
-				return;
-			}
+				if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+				{
+					ClearEverything();
+					return;
+				}
 
-			PassiveFishResources.UpdateInventoryState();
+				PassiveFishResources.UpdateInventoryState();
 
-			bool exteriorWater = DeepWaterWorld.IsPlayerInExteriorWaterContext();
-			bool fishEnabled = exteriorWater && UnderwaterPassiveFishSpawner.CanPopulate();
-			bool enemiesEnabled = exteriorWater && UnderwaterEnemySpawner.CanPopulate();
+				bool exteriorWater = DeepWaterWorld.IsPlayerInExteriorWaterContext();
+				bool fishEnabled = exteriorWater && UnderwaterPassiveFishSpawner.CanPopulate();
+				bool enemiesEnabled = exteriorWater && UnderwaterEnemySpawner.CanPopulate();
 
-			HandleDisable(fishEnabled, ref fishDisabledSince, UnderwaterPassiveFishSpawner.ClearAll);
-			HandleDisable(enemiesEnabled, ref enemyDisabledSince, UnderwaterEnemySpawner.ClearAll);
+				HandleDisable(fishEnabled, ref fishDisabledSince, UnderwaterPassiveFishSpawner.ClearAll);
+				HandleDisable(enemiesEnabled, ref enemyDisabledSince, UnderwaterEnemySpawner.ClearAll);
 
-			if (!fishEnabled && !enemiesEnabled)
-				return;
+				if (!fishEnabled && !enemiesEnabled)
+					return;
 
-			Vector3 playerPos;
-			if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
-				return;
+				Vector3 playerPos;
+				if (!DeepWaterWorld.TryGetPlayerPosition(out playerPos))
+					return;
 
-			CollectPixels(playerPos);
+				CollectPixels(playerPos);
 
-			if (fishEnabled)
-				UnderwaterPassiveFishSpawner.TickDespawn(keepKeys);
-			if (enemiesEnabled)
-				UnderwaterEnemySpawner.TickDespawn(keepKeys);
-
-			for (int i = 0; i < populateCandidates.Count; i++)
-			{
-				DaggerfallTerrain terrain = populateCandidates[i].Terrain;
 				if (fishEnabled)
-				{
-					int fishBudget = FishAttemptsPerPixelPerTick;
-					UnderwaterPassiveFishSpawner.TickPopulate(terrain, ref fishBudget);
-				}
+					UnderwaterPassiveFishSpawner.TickDespawn(keepKeys);
 				if (enemiesEnabled)
+					UnderwaterEnemySpawner.TickDespawn(keepKeys);
+
+				for (int i = 0; i < populateCandidates.Count; i++)
 				{
-					int enemyBudget = EnemyAttemptsPerPixelPerTick;
-					UnderwaterEnemySpawner.TickPopulate(terrain, ref enemyBudget);
+					DaggerfallTerrain terrain = populateCandidates[i].Terrain;
+					if (fishEnabled)
+					{
+						int fishBudget = FishAttemptsPerPixelPerTick;
+						UnderwaterPassiveFishSpawner.TickPopulate(terrain, ref fishBudget);
+					}
+					if (enemiesEnabled)
+					{
+						int enemyBudget = EnemyAttemptsPerPixelPerTick;
+						UnderwaterEnemySpawner.TickPopulate(terrain, ref enemyBudget);
+					}
 				}
+			}
+			finally
+			{
+				DeepWaterPromoteTiming.End(timing, "encounter", 0, 0);
 			}
 		}
 
@@ -171,11 +185,49 @@ namespace DeepWaters
                 clearAll();
         }
 
-        private static void ClearEverything()
-        {
-            UnderwaterPassiveFishSpawner.ClearAll();
-            UnderwaterEnemySpawner.ClearAll();
-        }
+		private static void ClearEverything()
+		{
+			FlushPendingDestroys();
+			UnderwaterPassiveFishSpawner.ClearAll();
+			UnderwaterEnemySpawner.ClearAll();
+		}
+
+		internal static void QueueDestroy(GameObject go)
+		{
+			if (go == null)
+				return;
+
+			go.SetActive(false);
+			pendingDestroys.Enqueue(go);
+		}
+
+		private static void PumpPendingDestroys()
+		{
+			if (pendingDestroys.Count == 0)
+				return;
+
+			long timing = DeepWaterDiagnosticsRunner.Active ? DeepWaterPromoteTiming.Begin() : 0L;
+			int budget = MaxPendingDestroysPerFrame;
+			while (budget-- > 0 && pendingDestroys.Count > 0)
+			{
+				GameObject go = pendingDestroys.Dequeue();
+				if (go != null)
+					UnityEngine.Object.Destroy(go);
+			}
+
+			if (timing != 0L)
+				DeepWaterPromoteTiming.End(timing, "destroy", 0, 0);
+		}
+
+		private static void FlushPendingDestroys()
+		{
+			while (pendingDestroys.Count > 0)
+			{
+				GameObject go = pendingDestroys.Dequeue();
+				if (go != null)
+					UnityEngine.Object.Destroy(go);
+			}
+		}
 
         private static void ResetState()
         {
@@ -210,6 +262,14 @@ namespace DeepWaters
 				if (objects[i] != null)
 					UnityEngine.Object.Destroy(objects[i]);
 			}
+
+			objects.Clear();
+		}
+
+		internal void Release()
+		{
+			for (int i = objects.Count - 1; i >= 0; i--)
+				UnderwaterEncounterPulse.QueueDestroy(objects[i]);
 
 			objects.Clear();
 		}

@@ -1446,3 +1446,121 @@ single-pass rebuild from a known-good base with temp-file verification before pl
 Net perf effect of the revert: the decor 34ms/288ms per-tile spike returns, but the
 headline load/teleport-frame win (1286→188ms) and the sampling-cache wins are retained.
 The decor spike, if it matters, should be mitigated with a simple cap next time.
+
+## Max-Content Swim Perf Pass (2026-07-05)
+
+Prompt:
+
+- User wanted max decorations/fish/enemies kept intact while reducing the remaining
+  transition/swim stutters.
+- `swimperftest` became the focused benchmark save.
+
+Harness cleanup:
+
+- Disabled periodic screenshots for `swimperftest`; screenshots were polluting frame
+  timing.
+- Disabled per-row CSV flushes and used lightweight per-frame rows for this save
+  instead of full probe/count scans.
+- `DeepWaterPromoteTiming` now writes CSV detail only while diagnostics are active; no
+  Player.log spam.
+
+Kept changes:
+
+- Decoration placement now samples slope from the rendered seafloor mesh
+  (`TrySampleMeshLocalYAndSlope`) instead of doing four extra water-column probes per
+  candidate.
+- Fish/enemy instantiation is queued: same caps/targets, but GameObjects are created in
+  small per-frame batches instead of one large pulse.
+- Encounter reservation ticks are smoothed from `0.3s` bursts to `0.1s` ticks with the
+  same attempts per second.
+- Decoration generation is split into two whole-tile phases: placement list first, final
+  batch spawn later on a quiet frame. This avoids the old mcs-hostile resumable iterator
+  and still creates one final decoration group.
+- Decoration placement stops after a full pass once enough candidates exist to hit the
+  configured cap. This preserves max counts but avoids extra passes that would be trimmed
+  away.
+
+Rejected changes:
+
+- Direct static archive mesh batches were tested and reverted. They barely moved
+  `decor` time and made p95/p99.5 worse; most cost is replacement batch/object work, not
+  DFU archive `AddItem`.
+- Per-decoration chunking remains rejected. The earlier mcs corruption and the later
+  multi-group batch experiment both made things worse.
+
+Key measurements (`swimperftest`, 120s, max content settings):
+
+| build | p95 | p99 | p99.5 | max | >50ms | >75ms | >100ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| clean baseline `20260705-142427` | 17.68 | 48.28 | 75.06 | 214.26 | 109 | 59 | 29 |
+| spawn smoothing `20260705-145025` | 15.58 | 30.55 | 52.83 | 165.89 | 67 | 36 | 14 |
+| two-step decor + cap early-stop `20260705-152651` | 15.63 | 31.89 | 51.85 | 150.49 | 69 | 12 | 2 |
+
+Decoration split details in the kept build:
+
+- `decorPlace`: total `99.0ms`, avg `2.48ms`, max `9.2ms`.
+- `decorBatch`: total `538.3ms`, avg `15.38ms`, max `24.3ms`.
+- This confirms the remaining decoration cost is almost entirely final batch/material/
+  GameObject creation, not candidate sampling.
+
+Remaining candidates:
+
+- `decorBatch` is now the next real bottleneck. A future safe refactor would combine
+  replacement-record meshes into fewer Unity objects/submeshes without changing counts.
+- Some >100ms frames still have tiny measured Deep Waters work (`encounter=0.1ms` etc.),
+  likely Unity/DFU aftereffects from object activation or terrain streaming. The promoted
+  work itself is no longer the whole spike.
+
+## Max-Content Swim Perf Continuation (2026-07-05)
+
+Goal: keep max fish/enemy/decoration functionality intact and chase the remaining
+`swimperftest` tail spikes without lowering caps.
+
+Kept changes:
+
+- Vanilla static decoration records now route through DFU archive billboard batches unless
+  the replacement cache reports a real replacement. This avoids treating every vanilla
+  material as a replacement mesh/object path.
+- Archive atlas warmup is pumped ahead of final decoration spawn, one archive at a time,
+  so the first expensive material/texture work is less likely to land on the same frame as
+  batch creation.
+- Decoration work is guarded so `ProcessWorkQueue()` cannot run twice in one frame from
+  both terrain-end and the main mod update.
+- Passive fish now use one central pump, distant/hidden fish update at a lower cadence, and
+  fish renderers/click colliders are disabled outside the actual underwater/surface vision
+  range. Fish counts are unchanged.
+- Fish/enemy map-pixel despawns now deactivate old objects immediately but meter actual
+  `Destroy()` calls through a tiny queue. This reduces transition cleanup spikes without
+  changing live spawn caps.
+
+Rejected:
+
+- Combining replacement decoration records into one multi-submesh object was a hard fail:
+  it produced catastrophic `decorPlace` stalls (`p99 ~= 11s`, max `30s`). Reverted.
+- Enemy renderer-only distance culling looked harmless in code but regressed the tail
+  (`max 234.98ms`), so it was removed.
+
+Key measurements (`swimperftest`, 120s, max content settings):
+
+| build | p95 | p99 | p99.5 | max | >50ms | >75ms | >100ms | max fish |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| two-step decor + cap early-stop `20260705-152651` | 15.63 | 31.89 | 51.85 | 150.49 | 69 | 12 | 2 | 720 |
+| vanilla archive routing `20260705-154953` | 16.32 | 31.76 | 50.10 | 1103.57 | 63 | 14 | 5 | 720 |
+| archive warmup `20260705-155725` | 16.00 | 29.39 | 45.22 | 242.67 | 53 | 9 | 4 | 720 |
+| one-frame work guard `20260705-160156` | 15.61 | 28.98 | 46.35 | 131.57 | 52 | 11 | 5 | 720 |
+| distant fish throttle `20260705-160741` | 13.55 | 25.92 | 42.41 | 143.09 | 47 | 7 | 3 | 720 |
+| central fish pump probe `20260705-162054` | 13.75 | 27.52 | 46.70 | 153.41 | 59 | 12 | 6 | 720 |
+| fish visibility cull `20260705-162600` | 12.51 | 21.36 | 41.41 | 137.05 | 39 | 7 | 3 | 720 |
+| deferred despawn `20260705-163221` | 11.80 | 20.00 | 39.99 | 129.35 | 43 | 7 | 4 | 720 |
+| rejected enemy cull `20260705-163716` | 12.10 | 21.75 | 40.88 | 234.98 | 39 | 6 | 3 | 720 |
+| final patched dfmod `20260705-164255` | 12.52 | 22.24 | 41.63 | 146.46 | 43 | 6 | 3 | 720 |
+
+Current read:
+
+- The biggest kept win in this tranche is culling fog-hidden fish renderers/colliders while
+  leaving the population cap alone.
+- The remaining worst frames are mostly Unity/DFU object/render/terrain aftereffects:
+  `fishUpdate` itself is only about `0.6-0.7ms` average and `~3ms` worst at 720 fish.
+- Next plausible large improvement, if needed, is not more spawn tuning. It is batching or
+  virtualizing far fish visuals so hundreds of far fish are not hundreds of live Unity
+  render/collider objects until they approach the visible/interactable radius.

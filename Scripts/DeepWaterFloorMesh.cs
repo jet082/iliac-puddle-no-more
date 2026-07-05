@@ -288,6 +288,59 @@ namespace DeepWaters
             return true;
         }
 
+		internal bool TrySampleMeshLocalYAndSlope(float worldX, float worldZ, out float localY, out float slopeDegrees)
+		{
+			localY = 0f;
+			slopeDegrees = 0f;
+			if (vertexLocalY == null || dfTerrain == null || tileWorldSizeCached <= 0f)
+				return false;
+
+			Vector3 origin = dfTerrain.transform.position;
+			float fracX = (worldX - origin.x) / tileWorldSizeCached;
+			float fracZ = (worldZ - origin.z) / tileWorldSizeCached;
+			if (fracX < 0f || fracX > 1f || fracZ < 0f || fracZ > 1f)
+				return false;
+
+			int n = VertexGridSize;
+			float fx = fracX * (n - 1);
+			float fz = fracZ * (n - 1);
+			int x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, n - 2);
+			int z0 = Mathf.Clamp(Mathf.FloorToInt(fz), 0, n - 2);
+			if (floorQuadWater != null && !floorQuadWater[z0, x0])
+				return false;
+
+			int x1 = x0 + 1;
+			int z1 = z0 + 1;
+			float tx = Mathf.Clamp01(fx - x0);
+			float tz = Mathf.Clamp01(fz - z0);
+
+			float y00 = vertexLocalY[z0, x0];
+			float y10 = vertexLocalY[z0, x1];
+			float y01 = vertexLocalY[z1, x0];
+			float y11 = vertexLocalY[z1, x1];
+			float dyCellX;
+			float dyCellZ;
+
+			if (tx >= tz)
+			{
+				localY = y00 * (1f - tx) + y10 * (tx - tz) + y11 * tz;
+				dyCellX = y10 - y00;
+				dyCellZ = y11 - y10;
+			}
+			else
+			{
+				localY = y00 * (1f - tz) + y01 * (tz - tx) + y11 * tx;
+				dyCellX = y11 - y01;
+				dyCellZ = y01 - y00;
+			}
+
+			float cellSpacing = tileWorldSizeCached / (n - 1);
+			float dhdx = dyCellX / cellSpacing;
+			float dhdz = dyCellZ / cellSpacing;
+			slopeDegrees = Mathf.Atan(Mathf.Sqrt(dhdx * dhdx + dhdz * dhdz)) * Mathf.Rad2Deg;
+			return true;
+		}
+
         internal void EnsureRuntimeCollider()
         {
             if (HasValidRuntimeCollider && colliderBuildVersion == buildVersion)

@@ -19,17 +19,48 @@ namespace DeepWaters
     /// </summary>
     /// <summary>
     /// Per-frame accumulator for the tile-promote pipeline's main-thread cost
-    /// (OPTIMIZATION_POSSIBILITIES.md verification plan). Stages call
-    /// Begin/End; DeepWaters.Update flushes one [DeepWaters.PromoteMs] log
-    /// line whenever a frame's pipeline total crossed the threshold — giving
-    /// per-stage, per-tile milliseconds in Player.log with no per-frame spam.
+    /// (OPTIMIZATION_POSSIBILITIES.md verification plan). Stages call Begin/End;
+    /// diagnostics CSV rows consume the flushed totals.
     /// </summary>
     internal static class DeepWaterPromoteTiming
     {
-        private const float LogThresholdMs = 2f;
         private static readonly System.Text.StringBuilder detail = new System.Text.StringBuilder(200);
         private static int accumFrame = -1;
         private static float totalMs;
+		private static string detailText = string.Empty;
+		private static int previousFrame = -1;
+		private static float previousTotalMs;
+		private static string previousDetail = string.Empty;
+
+		internal static int CurrentFrame
+		{
+			get { return accumFrame; }
+		}
+
+		internal static float CurrentTotalMs
+		{
+			get { return totalMs; }
+		}
+
+		internal static string CurrentDetail
+		{
+			get { return detailText; }
+		}
+
+		internal static int PreviousFrame
+		{
+			get { return previousFrame; }
+		}
+
+		internal static float PreviousTotalMs
+		{
+			get { return previousTotalMs; }
+		}
+
+		internal static string PreviousDetail
+		{
+			get { return previousDetail; }
+		}
 
         internal static long Begin()
         {
@@ -38,6 +69,9 @@ namespace DeepWaters
 
         internal static void End(long beginTimestamp, string stage, int mapPixelX, int mapPixelY)
         {
+			if (beginTimestamp == 0L)
+				return;
+
             float ms = (System.Diagnostics.Stopwatch.GetTimestamp() - beginTimestamp) *
                        1000f / System.Diagnostics.Stopwatch.Frequency;
             int frame = Time.frameCount;
@@ -48,25 +82,27 @@ namespace DeepWaters
             }
 
             totalMs += ms;
-            if (detail.Length < 400)
+            if (DeepWaterDiagnosticsRunner.Active && detail.Length < 400)
             {
                 detail.Append(stage).Append('(').Append(mapPixelX).Append(',').Append(mapPixelY)
                       .Append(")=").Append(ms.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))
                       .Append(' ');
+				detailText = detail.ToString();
             }
         }
 
         internal static void Flush()
         {
-            if (accumFrame >= 0 && totalMs >= LogThresholdMs)
-            {
-                Debug.Log("[DeepWaters.PromoteMs] frame=" + accumFrame +
-                          " total=" + totalMs.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) +
-                          " | " + detail);
-            }
+			if (accumFrame >= 0)
+			{
+				previousFrame = accumFrame;
+				previousTotalMs = totalMs;
+				previousDetail = detailText;
+			}
 
             totalMs = 0f;
             detail.Length = 0;
+			detailText = string.Empty;
         }
     }
 

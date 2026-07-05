@@ -317,6 +317,7 @@ namespace DeepWaters
 			SuppressVanillaWaterEncounters();
 			UnderwaterDecorations.ProcessWorkQueue();
 			UnderwaterEncounterPulse.Pump();
+			PassiveFishBehaviour.PumpAll();
 			UnderwaterLootSpawner.Pump();
         }
 

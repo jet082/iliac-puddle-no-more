@@ -18,25 +18,27 @@ namespace DeepWaters
         private const int MaxTilesPerWorkCycle = 1;
         private const int MaxDecorationsPerTileHardCap = 2304;
         private const int SampleStride = 3;
+		private const float MaxExistingTileWorkBeforeDecorationMs = 1f;
         private const float MinimumDecorationSpacing = 5f;
         private const float MinimumSeafloorDepth = 8f;
         private const float SeafloorClearance = 0.25f;
         private const float AnimatedSeafloorClearance = 0.75f;
         private const float SurfaceDecorationClearance = 0.5f;
-        private const float SlopeProbeDistance = 4f;
         private const float MaxDecorationSlopeDegrees = 35f;
         private const float BubbleFallbackVisualHeightNativeUnits = 72f;
 
         private static readonly Queue<DaggerfallTerrain> workQueue = new Queue<DaggerfallTerrain>();
+		private static readonly Queue<PendingDecorationBatch> pendingBatchQueue = new Queue<PendingDecorationBatch>();
         private static readonly HashSet<DaggerfallTerrain> queuedTerrains = new HashSet<DaggerfallTerrain>();
         private static readonly Dictionary<UnderwaterDecorationRecord, float> authoredVisualHeightCache =
             new Dictionary<UnderwaterDecorationRecord, float>();
         private static bool installed;
         private static bool loggedVisualHeightFailure;
+		private static int lastProcessFrame = -1;
 
         internal static int PendingWorkCount
         {
-            get { return workQueue.Count; }
+            get { return workQueue.Count + pendingBatchQueue.Count; }
         }
 
         internal static int QueuedTerrainCount
@@ -50,6 +52,16 @@ namespace DeepWaters
             internal int MapPixelY;
             internal int FloorBuildVersion;
         }
+
+		private sealed class PendingDecorationBatch
+		{
+			internal DaggerfallTerrain Terrain;
+			internal int MapPixelX;
+			internal int MapPixelY;
+			internal int FloorBuildVersion;
+			internal List<UnderwaterDecorationPlacementInfo> Positions;
+			internal int ArchiveWarmupIndex;
+		}
 
         internal static void Install()
         {
@@ -66,7 +78,16 @@ namespace DeepWaters
 
 		internal static void ProcessWorkQueue()
 		{
+			if (lastProcessFrame == Time.frameCount)
+				return;
+
+			lastProcessFrame = Time.frameCount;
 			if (!DeepWaterRuntime.CanRunHeavyRuntimeWork)
+				return;
+			if (DeepWaterPromoteTiming.CurrentFrame == Time.frameCount &&
+				DeepWaterPromoteTiming.CurrentTotalMs > MaxExistingTileWorkBeforeDecorationMs)
+				return;
+			if (ProcessPendingBatch())
 				return;
 
 			int processed = 0;
@@ -100,11 +121,7 @@ namespace DeepWaters
 				if (IsCurrentDecoration(dfTerrain))
 					continue;
 
-				RemoveDecoration(dfTerrain);
-
-				long timing = DeepWaterPromoteTiming.Begin();
 				PopulateTile(dfTerrain, terrain.terrainData);
-				DeepWaterPromoteTiming.End(timing, "decor", dfTerrain.MapPixelX, dfTerrain.MapPixelY);
 				processed++;
 			}
 		}
@@ -121,6 +138,7 @@ namespace DeepWaters
         private static void ResetRuntimeState()
         {
             workQueue.Clear();
+			pendingBatchQueue.Clear();
             queuedTerrains.Clear();
 
             DecorationMarker[] markers = Object.FindObjectsOfType<DecorationMarker>();
@@ -250,14 +268,22 @@ namespace DeepWaters
                     return;
                 }
 
+				long placementTiming = DeepWaterPromoteTiming.Begin();
                 List<UnderwaterDecorationPlacementInfo> positions =
                     BuildDecorationPositions(dfTerrain, terrainData, passes);
+				DeepWaterPromoteTiming.End(placementTiming, "decorPlace", dfTerrain.MapPixelX, dfTerrain.MapPixelY);
                 if (positions.Count == 0)
                     return;
 
                 TrimDecorationPositions(positions);
-                UnderwaterDecorationBatchFactory.Spawn(dfTerrain.transform, positions);
-                MarkCurrentTerrain(dfTerrain);
+				pendingBatchQueue.Enqueue(new PendingDecorationBatch
+				{
+					Terrain = dfTerrain,
+					MapPixelX = dfTerrain.MapPixelX,
+					MapPixelY = dfTerrain.MapPixelY,
+					FloorBuildVersion = CurrentFloorBuildVersion(dfTerrain),
+					Positions = positions,
+				});
             }
             finally
             {
@@ -280,15 +306,20 @@ namespace DeepWaters
             TerrainData terrainData,
             int passes)
         {
-            var positions = new List<UnderwaterDecorationPlacementInfo>();
-            var spacingGrid = new Dictionary<int, List<Vector2>>();
+			int cap = GetDecorationCap();
+            var positions = new List<UnderwaterDecorationPlacementInfo>(cap);
+            var spacingGrid = new Dictionary<int, List<Vector2>>(Mathf.Max(32, cap / 4));
             DeepWaterFloorMesh floorMesh = dfTerrain.GetComponentInChildren<DeepWaterFloorMesh>();
             DeepWaterTileData tile = dfTerrain.GetComponent<DeepWaterTileData>();
             int climateIndex = tile != null ? tile.BiomeClimateIndex : 0;
             int totalPasses = DecorationPassesForBiome(passes, climateIndex);
 
             for (int i = 0; i < totalPasses; i++)
+			{
                 GenerateBillboardPositions(dfTerrain, terrainData, floorMesh, climateIndex, positions, spacingGrid);
+				if (positions.Count >= cap)
+					break;
+			}
 
             return positions;
         }
@@ -343,11 +374,11 @@ namespace DeepWaters
                 // lookup + bake bilinear + ~8 Perlin bathymetry calls each, which
                 // is what made placement too costly to populate the full ring.
                 float seafloorLocalY;
-                if (floorMesh == null || !floorMesh.TrySampleMeshLocalY(worldX, worldZ, out seafloorLocalY))
+				float slopeDegrees;
+                if (floorMesh == null || !floorMesh.TrySampleMeshLocalYAndSlope(worldX, worldZ, out seafloorLocalY, out slopeDegrees))
                     continue;
                 if (oceanLocalY - seafloorLocalY < MinimumSeafloorDepth) continue;
-
-                if (!IsGentleEnoughForDecoration(floorMesh, worldX, worldZ, oceanLocalY)) continue;
+				if (slopeDegrees > MaxDecorationSlopeDegrees) continue;
 
                 UnderwaterDecorationRecord record = UnderwaterDecorationCatalog.PickRecord(climateIndex);
                 float visualHeight;
@@ -439,58 +470,61 @@ namespace DeepWaters
             return visualHeight > 0f;
         }
 
-        private static bool IsGentleEnoughForDecoration(
-            DeepWaterFloorMesh floorMesh,
-            float worldX,
-            float worldZ,
-            float oceanLocalY)
-        {
-            float leftY, rightY, backY, forwardY;
-            if (!TryProbeSeafloorY(floorMesh, worldX - SlopeProbeDistance, worldZ, oceanLocalY, out leftY) ||
-                !TryProbeSeafloorY(floorMesh, worldX + SlopeProbeDistance, worldZ, oceanLocalY, out rightY) ||
-                !TryProbeSeafloorY(floorMesh, worldX, worldZ - SlopeProbeDistance, oceanLocalY, out backY) ||
-                !TryProbeSeafloorY(floorMesh, worldX, worldZ + SlopeProbeDistance, oceanLocalY, out forwardY))
-            {
-                return false;
-            }
+		private static bool ProcessPendingBatch()
+		{
+			while (pendingBatchQueue.Count > 0)
+			{
+				PendingDecorationBatch pending = pendingBatchQueue.Peek();
+				if (!IsPendingBatchCurrent(pending))
+				{
+					pendingBatchQueue.Dequeue();
+					continue;
+				}
 
-            float dhdx = (rightY - leftY) / (SlopeProbeDistance * 2f);
-            float dhdz = (forwardY - backY) / (SlopeProbeDistance * 2f);
-            float slopeDegrees = Mathf.Atan(Mathf.Sqrt(dhdx * dhdx + dhdz * dhdz)) * Mathf.Rad2Deg;
-            return slopeDegrees <= MaxDecorationSlopeDegrees;
-        }
+				if (!CanPopulate())
+				{
+					pendingBatchQueue.Dequeue();
+					RemoveDecoration(pending.Terrain);
+					ClearDecorationMarker(pending.Terrain);
+					continue;
+				}
 
-        private static bool TryProbeSeafloorY(
-            DeepWaterFloorMesh floorMesh,
-            float worldX,
-            float worldZ,
-            float oceanLocalY,
-            out float seafloorLocalY)
-        {
-            if (floorMesh != null && floorMesh.TrySampleMeshLocalY(worldX, worldZ, out seafloorLocalY))
-                return seafloorLocalY < oceanLocalY - MinimumSeafloorDepth;
+				if (ShouldPreservePlayerTileDecorations(pending.Terrain))
+				{
+					pendingBatchQueue.Dequeue();
+					continue;
+				}
 
-            DeepWaterColumn column;
-            if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
-            {
-                seafloorLocalY = 0f;
-                return false;
-            }
+				if (UnderwaterDecorationBatchFactory.PumpArchiveWarmup(pending.Positions, ref pending.ArchiveWarmupIndex))
+					return true;
 
-            if (column.Depth < MinimumSeafloorDepth)
-            {
-                seafloorLocalY = 0f;
-                return false;
-            }
+				pendingBatchQueue.Dequeue();
+				RemoveDecoration(pending.Terrain);
+				long batchTiming = DeepWaterPromoteTiming.Begin();
+				UnderwaterDecorationBatchFactory.Spawn(pending.Terrain.transform, pending.Positions);
+				DeepWaterPromoteTiming.End(batchTiming, "decorBatch", pending.MapPixelX, pending.MapPixelY);
+				MarkCurrentTerrain(pending.Terrain);
+				return true;
+			}
 
-            if (!DeepWaterWorld.TryGetRenderedSeafloorLocalY(column, worldX, worldZ, out seafloorLocalY))
-            {
-                seafloorLocalY = 0f;
-                return false;
-            }
+			return false;
+		}
 
-            return seafloorLocalY < oceanLocalY - MinimumSeafloorDepth;
-        }
+		private static bool IsPendingBatchCurrent(PendingDecorationBatch pending)
+		{
+			if (pending == null ||
+				pending.Terrain == null ||
+				pending.Positions == null ||
+				pending.Positions.Count == 0)
+			{
+				return false;
+			}
+
+			return pending.Terrain.MapPixelX == pending.MapPixelX &&
+				pending.Terrain.MapPixelY == pending.MapPixelY &&
+				CurrentFloorBuildVersion(pending.Terrain) == pending.FloorBuildVersion &&
+				HasReadyFloor(pending.Terrain);
+		}
 
         private static bool CanPlaceDecoration(Vector3 localPos, Dictionary<int, List<Vector2>> spacingGrid)
         {
@@ -530,9 +564,7 @@ namespace DeepWaters
 
         private static void TrimDecorationPositions(List<UnderwaterDecorationPlacementInfo> positions)
         {
-            int cap = DeepWaters.Instance != null
-                ? Mathf.Clamp(DeepWaters.Instance.MaxDecorationsPerTile, 1, MaxDecorationsPerTileHardCap)
-                : MaxDecorationsPerTileHardCap;
+            int cap = GetDecorationCap();
             if (positions == null || positions.Count <= cap)
                 return;
 
@@ -546,6 +578,13 @@ namespace DeepWaters
 
             positions.RemoveRange(cap, positions.Count - cap);
         }
+
+		private static int GetDecorationCap()
+		{
+			return DeepWaters.Instance != null
+				? Mathf.Clamp(DeepWaters.Instance.MaxDecorationsPerTile, 1, MaxDecorationsPerTileHardCap)
+				: MaxDecorationsPerTileHardCap;
+		}
 
         private static void MarkCurrentTerrain(DaggerfallTerrain dfTerrain)
         {
@@ -615,12 +654,18 @@ namespace DeepWaters
 
         private static void RemoveDecoration(DaggerfallTerrain dfTerrain)
         {
-            Transform existing = dfTerrain.transform.Find(UnderwaterDecorationBatchFactory.GroupName);
-            if (existing != null)
-            {
-                existing.gameObject.SetActive(false);
-                Object.Destroy(existing.gameObject);
-            }
+			if (dfTerrain == null)
+				return;
+
+			for (int i = dfTerrain.transform.childCount - 1; i >= 0; i--)
+			{
+				Transform child = dfTerrain.transform.GetChild(i);
+				if (child == null || child.name != UnderwaterDecorationBatchFactory.GroupName)
+					continue;
+
+				child.gameObject.SetActive(false);
+				Object.Destroy(child.gameObject);
+			}
         }
 
         private static void ClearDecorationMarker(DaggerfallTerrain dfTerrain)

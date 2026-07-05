@@ -76,7 +76,7 @@ namespace DeepWaters
 		{
 			"ddd", "eee", "fff", "ggg", "hhh", "iii", "jjj", "kkkk", "lll", "mmm",
 			"nnn", "ooo", "qqq", "rrr", "sss", "ttt", "mystery", "distance fog test",
-			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "brokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck", "fallthrough", "fallenin"
+			"ledge", "ledge2", "ledge4", "weird bathymetry", "gap1", "gap2", "gap3", "day", "midday", "night", "nightunderwater", "bottomunderwaternight", "bottomunderwaterday", "overdeepwater", "overdeepwater2", "sailing", "sailingbottom", "wodbrokenterrain", "brokenterrain", "visualhole", "visualhole2", "visualhole3", "visualhole4", "visualhole5", "brokencolliders", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck", "fallthrough", "fallenin", "swimperftest"
 		};
 
 		private static readonly HashSet<string> VisualScenarioSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -92,7 +92,7 @@ namespace DeepWaters
 
 		private static readonly HashSet<string> MovementProbeSaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 		{
-			"iii", "kkkk", "lll", "mmm", "qqq", "desert", "open ocean 2", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck", "fallthrough", "fallenin"
+			"iii", "kkkk", "lll", "mmm", "qqq", "desert", "open ocean 2", "brokencolliders2", "brokencolliders 2", "vanillabrokenshelf", "imstuck", "fallthrough", "fallenin", "swimperftest"
 		};
 
 		private static readonly Dictionary<string, string> ForwardScenarioPhases =
@@ -110,7 +110,8 @@ namespace DeepWaters
 				{ "brokencolliders 2", "brokencolliders2_straight_collider_probe" },
 				{ "imstuck", "imstuck_straight_shore_probe" },
 				{ "fallthrough", "fallthrough_straight_shore_probe" },
-				{ "fallenin", "fallenin_hole_probe" }
+				{ "fallenin", "fallenin_hole_probe" },
+				{ "swimperftest", "swimperftest_straight_perf" }
 			};
 
         private readonly List<MetricWindow> windows = new List<MetricWindow>();
@@ -127,11 +128,14 @@ namespace DeepWaters
         private float lastFrameTime;
         private bool hasLastFramePlayer;
 
+		internal static bool Active { get; private set; }
+
         internal static void Install(GameObject host)
         {
             if (!IsEnabled())
                 return;
 
+			Active = true;
             host.AddComponent<DeepWaterDiagnosticsRunner>();
         }
 
@@ -232,6 +236,7 @@ namespace DeepWaters
                 yield return null;
 
             running = false;
+			Active = false;
             Debug.Log("[DeepWaters.Diagnostics] Complete: " + ((FileStream)writer.BaseStream).Name);
             writer.Flush();
 
@@ -479,14 +484,21 @@ namespace DeepWaters
             string phase;
 			if (!ForwardScenarioPhases.TryGetValue(saveName ?? string.Empty, out phase))
 				phase = "fff_straight_seam_probe";
-            float seconds = Mathf.Min(TargetedScenarioSeconds, Mathf.Max(10f, durationSeconds));
+			float seconds = string.Equals(saveName, "swimperftest", StringComparison.OrdinalIgnoreCase)
+				? Mathf.Max(10f, durationSeconds)
+				: Mathf.Min(TargetedScenarioSeconds, Mathf.Max(10f, durationSeconds));
             yield return RunNaturalForwardPhase(saveName, phase, seconds);
             yield return CaptureDiagnosticScreenshot(saveName, phase + "-end");
         }
 
-		private static bool IsBiomeVisualProbeSave(string saveName)
+        private static bool IsBiomeVisualProbeSave(string saveName)
 		{
 			return BiomeVisualProbeSaves.Contains(saveName);
+		}
+
+		private static bool IsPerformanceProbeSave(string saveName)
+		{
+			return string.Equals(saveName, "swimperftest", StringComparison.OrdinalIgnoreCase);
 		}
 
         private IEnumerator RunStationaryPhase(string saveName, string phase, float seconds)
@@ -511,6 +523,8 @@ namespace DeepWaters
         private IEnumerator RunNaturalMotionPhase(string saveName, string phase, float seconds, Vector3 direction)
         {
             bool writeFrameMovement = MovementProbeSaves.Contains(saveName);
+			bool capturePeriodicScreenshots = !IsPerformanceProbeSave(saveName);
+			bool lightweightFrameRows = IsPerformanceProbeSave(saveName);
             if (writeFrameMovement)
                 ResetFrameMovementProbe();
 
@@ -529,9 +543,14 @@ namespace DeepWaters
                 MovePlayerNatural(direction);
                 CheckMapPixelTransition(saveName, phase);
                 if (writeFrameMovement)
-                    WriteMovementSnapshot(saveName, phase, "frame");
+				{
+					if (lightweightFrameRows)
+						WriteLightweightMovementSnapshot(saveName, phase, "frame");
+					else
+						WriteMovementSnapshot(saveName, phase, "frame");
+				}
 
-                if (Time.realtimeSinceStartup >= nextScreenshot)
+                if (capturePeriodicScreenshots && Time.realtimeSinceStartup >= nextScreenshot)
                 {
                     yield return CaptureDiagnosticScreenshot(saveName, phase + "-" + Mathf.RoundToInt(seconds - (end - Time.realtimeSinceStartup)) + "s");
                     nextScreenshot = Time.realtimeSinceStartup + TargetedScreenshotIntervalSeconds;
@@ -1388,6 +1407,48 @@ namespace DeepWaters
             WriteSnapshot(saveName, phase, eventName, horizontalSpeed, verticalSpeed);
         }
 
+		private void WriteLightweightMovementSnapshot(string saveName, string phase, string eventName)
+		{
+			float horizontalSpeed = float.NaN;
+			float verticalSpeed = float.NaN;
+			Vector3 player = Vector3.zero;
+			if (GameManager.Instance != null && GameManager.Instance.PlayerObject != null)
+			{
+				player = GameManager.Instance.PlayerObject.transform.position;
+				float now = Time.realtimeSinceStartup;
+				if (hasLastFramePlayer)
+				{
+					float dt = Mathf.Max(0.0001f, now - lastFrameTime);
+					Vector3 delta = player - lastFramePlayer;
+					horizontalSpeed = new Vector2(delta.x, delta.z).magnitude / dt;
+					verticalSpeed = delta.y / dt;
+				}
+
+				lastFramePlayer = player;
+				lastFrameTime = now;
+				hasLastFramePlayer = true;
+			}
+
+			DFPosition current;
+			if (!TryGetCurrentPixel(out current))
+				current = hasLastPixel ? lastPixel : new DFPosition();
+
+			DFPosition former = hasLastPixel ? lastPixel : current;
+			Counts currentCounts = Counts.LightweightLive();
+			Counts formerCounts = Counts.Unsampled();
+			WriteWindow(
+				new MetricWindow(saveName, phase, eventName, current, former),
+				0f,
+				0f,
+				currentCounts,
+				formerCounts,
+				SampleRuntimeState(),
+				horizontalSpeed,
+				verticalSpeed,
+				false,
+				player);
+		}
+
         private void ResetFrameMovementProbe()
         {
             hasLastFramePlayer = false;
@@ -1415,8 +1476,8 @@ namespace DeepWaters
             Directory.CreateDirectory(dir);
             string path = Path.Combine(dir, "deep-waters-diagnostics-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".csv");
             writer = new StreamWriter(path, false, Encoding.UTF8);
-            writer.AutoFlush = true;
-            writer.WriteLine("utc,save,phase,event,currentPixel,formerPixel,seconds,fps,decorationsCurrent,decorationsFormer,enemiesCurrent,enemiesFormer,fishCurrent,fishFormer,lootCurrent,lootFormer,rubbleCurrent,rubbleFormer,contentEligibleCurrent,contentEligibleFormer,loadGateActive,loadGateCount,loadGateAge,terrainUpdateActive,loadGraceActive,heavyWorkBlocked,heavyWorkResumeIn,postRefreshPending,decorQueue,decorQueuedTerrains,locationSkippedLast,locationDeferred,playerX,playerY,playerZ,oceanY,columnPresent,columnDepth,renderedSeafloorY,carvedPresent,carvedSeafloorY,downHitY,downHitNormalY,downHitShore,downHitDeepFloor,downHitTerrain,downHitName,playerSwimming,controllerGrounded,cameraYaw,cameraPitch,cameraTransformYaw,cameraForwardX,cameraForwardZ,playerTransformYaw,worldCompX,worldCompY,worldCompZ,gpsWorldX,gpsWorldZ,terrainPixel,localFracX,localFracZ,tileValue,tileIndex,heightSample,localPointWater,bakedWater,carvedWater,rawFineWater,localMissedByFineBake,oceanConnected,horizontalSpeed,verticalSpeed,swimClampSource,swimClampDelta,waterGateActive,waterGateDisabled,waterGateDesired,waterGateReason,forwardHitDistance,forwardHitY,forwardHitDeepFloor,forwardHitTerrain,forwardHitName,bodyHitDistance,bodyHitY,bodyHitDeepFloor,bodyHitTerrain,bodyHitName");
+            writer.AutoFlush = false;
+            writer.WriteLine("utc,save,phase,event,currentPixel,formerPixel,seconds,fps,decorationsCurrent,decorationsFormer,enemiesCurrent,enemiesFormer,fishCurrent,fishFormer,lootCurrent,lootFormer,rubbleCurrent,rubbleFormer,contentEligibleCurrent,contentEligibleFormer,loadGateActive,loadGateCount,loadGateAge,terrainUpdateActive,loadGraceActive,heavyWorkBlocked,heavyWorkResumeIn,postRefreshPending,decorQueue,decorQueuedTerrains,locationSkippedLast,locationDeferred,playerX,playerY,playerZ,oceanY,columnPresent,columnDepth,renderedSeafloorY,carvedPresent,carvedSeafloorY,downHitY,downHitNormalY,downHitShore,downHitDeepFloor,downHitTerrain,downHitName,playerSwimming,controllerGrounded,cameraYaw,cameraPitch,cameraTransformYaw,cameraForwardX,cameraForwardZ,playerTransformYaw,worldCompX,worldCompY,worldCompZ,gpsWorldX,gpsWorldZ,terrainPixel,localFracX,localFracZ,tileValue,tileIndex,heightSample,localPointWater,bakedWater,carvedWater,rawFineWater,localMissedByFineBake,oceanConnected,horizontalSpeed,verticalSpeed,swimClampSource,swimClampDelta,waterGateActive,waterGateDisabled,waterGateDesired,waterGateReason,forwardHitDistance,forwardHitY,forwardHitDeepFloor,forwardHitTerrain,forwardHitName,bodyHitDistance,bodyHitY,bodyHitDeepFloor,bodyHitTerrain,bodyHitName,frame,frameDeltaMs,instantFps,promoteMs,promoteDetail,previousPromoteMs,previousPromoteDetail,gc0,gc1,gc2,managedMemoryMB");
         }
 
         private void WriteWindow(MetricWindow window, float seconds, float fps, Counts current, Counts former, RuntimeState runtime)
@@ -1425,11 +1486,31 @@ namespace DeepWaters
         }
 
         private void WriteWindow(MetricWindow window, float seconds, float fps, Counts current, Counts former, RuntimeState runtime, float horizontalSpeed, float verticalSpeed)
+		{
+			Vector3 player = Vector3.zero;
+			if (GameManager.Instance != null && GameManager.Instance.PlayerObject != null)
+				player = GameManager.Instance.PlayerObject.transform.position;
+			WriteWindow(window, seconds, fps, current, former, runtime, horizontalSpeed, verticalSpeed, true, player);
+		}
+
+		private void WriteWindow(MetricWindow window, float seconds, float fps, Counts current, Counts former, RuntimeState runtime, float horizontalSpeed, float verticalSpeed, bool sampleProbe, Vector3 player)
         {
-            Vector3 player = Vector3.zero;
-            if (GameManager.Instance != null && GameManager.Instance.PlayerObject != null)
-                player = GameManager.Instance.PlayerObject.transform.position;
-            PlayerProbe probe = SamplePlayerProbe(player);
+            PlayerProbe probe = sampleProbe ? SamplePlayerProbe(player) : CreateEmptyPlayerProbe();
+			float frameDeltaMs = Time.unscaledDeltaTime * 1000f;
+			float instantFps = Time.unscaledDeltaTime > 0.0001f ? 1f / Time.unscaledDeltaTime : 0f;
+			float promoteMs = DeepWaterPromoteTiming.CurrentFrame == Time.frameCount
+				? DeepWaterPromoteTiming.CurrentTotalMs
+				: 0f;
+			string promoteDetail = DeepWaterPromoteTiming.CurrentFrame == Time.frameCount
+				? DeepWaterPromoteTiming.CurrentDetail
+				: string.Empty;
+			float previousPromoteMs = DeepWaterPromoteTiming.PreviousFrame == Time.frameCount - 1
+				? DeepWaterPromoteTiming.PreviousTotalMs
+				: 0f;
+			string previousPromoteDetail = DeepWaterPromoteTiming.PreviousFrame == Time.frameCount - 1
+				? DeepWaterPromoteTiming.PreviousDetail
+				: string.Empty;
+			float managedMemoryMB = System.GC.GetTotalMemory(false) / (1024f * 1024f);
 
             writer.WriteLine(string.Join(",",
                 Csv(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)),
@@ -1440,16 +1521,16 @@ namespace DeepWaters
                 Csv(PixelString(window.FormerPixel)),
                 seconds.ToString("F2", CultureInfo.InvariantCulture),
                 fps.ToString("F2", CultureInfo.InvariantCulture),
-                current.Decorations.ToString("F2", CultureInfo.InvariantCulture),
-                former.Decorations.ToString("F2", CultureInfo.InvariantCulture),
-                current.Enemies.ToString("F2", CultureInfo.InvariantCulture),
-                former.Enemies.ToString("F2", CultureInfo.InvariantCulture),
-                current.Fish.ToString("F2", CultureInfo.InvariantCulture),
-                former.Fish.ToString("F2", CultureInfo.InvariantCulture),
-                current.Loot.ToString("F2", CultureInfo.InvariantCulture),
-                former.Loot.ToString("F2", CultureInfo.InvariantCulture),
-                current.Rubble.ToString("F2", CultureInfo.InvariantCulture),
-                former.Rubble.ToString("F2", CultureInfo.InvariantCulture),
+                FloatCell(current.Decorations),
+                FloatCell(former.Decorations),
+                FloatCell(current.Enemies),
+                FloatCell(former.Enemies),
+                FloatCell(current.Fish),
+                FloatCell(former.Fish),
+                FloatCell(current.Loot),
+                FloatCell(former.Loot),
+                FloatCell(current.Rubble),
+                FloatCell(former.Rubble),
                 IsContentEligible(window.CurrentPixel) ? "1" : "0",
                 IsContentEligible(window.FormerPixel) ? "1" : "0",
                 runtime.LoadGateActive.ToString("F2", CultureInfo.InvariantCulture),
@@ -1521,8 +1602,20 @@ namespace DeepWaters
 				FloatCell(probe.BodyHitY),
 				probe.BodyHitDeepFloor ? "1" : "0",
 				probe.BodyHitTerrain ? "1" : "0",
-				Csv(probe.BodyHitName)));
-            writer.Flush();
+				Csv(probe.BodyHitName),
+				Time.frameCount.ToString(CultureInfo.InvariantCulture),
+				frameDeltaMs.ToString("F2", CultureInfo.InvariantCulture),
+				instantFps.ToString("F2", CultureInfo.InvariantCulture),
+				promoteMs.ToString("F2", CultureInfo.InvariantCulture),
+				Csv(promoteDetail),
+				previousPromoteMs.ToString("F2", CultureInfo.InvariantCulture),
+				Csv(previousPromoteDetail),
+				System.GC.CollectionCount(0).ToString(CultureInfo.InvariantCulture),
+				System.GC.CollectionCount(1).ToString(CultureInfo.InvariantCulture),
+				System.GC.CollectionCount(2).ToString(CultureInfo.InvariantCulture),
+				managedMemoryMB.ToString("F2", CultureInfo.InvariantCulture)));
+			if (!string.Equals(window.EventName, "frame", StringComparison.OrdinalIgnoreCase))
+				writer.Flush();
         }
 
         private static string Csv(string value)
@@ -1539,38 +1632,7 @@ namespace DeepWaters
 
         private static PlayerProbe SamplePlayerProbe(Vector3 player)
         {
-            PlayerProbe probe = new PlayerProbe
-            {
-                OceanY = float.NaN,
-                ColumnDepth = float.NaN,
-                RenderedSeafloorY = float.NaN,
-                CarvedSeafloorY = float.NaN,
-                DownHitY = float.NaN,
-                DownHitNormalY = float.NaN,
-				DownHitName = string.Empty,
-                CameraYaw = float.NaN,
-                CameraPitch = float.NaN,
-                CameraTransformYaw = float.NaN,
-                CameraForwardX = float.NaN,
-                CameraForwardZ = float.NaN,
-                ForwardHitDistance = float.NaN,
-                ForwardHitY = float.NaN,
-                ForwardHitName = string.Empty,
-				BodyHitDistance = float.NaN,
-				BodyHitY = float.NaN,
-				BodyHitName = string.Empty,
-                PlayerTransformYaw = float.NaN,
-                WorldCompensation = new Vector3(float.NaN, float.NaN, float.NaN),
-                GpsWorldX = float.NaN,
-                GpsWorldZ = float.NaN,
-                TerrainPixel = string.Empty,
-                LocalFracX = float.NaN,
-                LocalFracZ = float.NaN,
-                TileValue = -1,
-                TileIndex = -1,
-                HeightSample = float.NaN,
-                TerrainSampleWorldY = float.NaN
-            };
+            PlayerProbe probe = CreateEmptyPlayerProbe();
 
             float oceanY;
             if (DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
@@ -1726,6 +1788,42 @@ namespace DeepWaters
 
             return probe;
         }
+
+		private static PlayerProbe CreateEmptyPlayerProbe()
+		{
+			return new PlayerProbe
+			{
+				OceanY = float.NaN,
+				ColumnDepth = float.NaN,
+				RenderedSeafloorY = float.NaN,
+				CarvedSeafloorY = float.NaN,
+				DownHitY = float.NaN,
+				DownHitNormalY = float.NaN,
+				DownHitName = string.Empty,
+				CameraYaw = float.NaN,
+				CameraPitch = float.NaN,
+				CameraTransformYaw = float.NaN,
+				CameraForwardX = float.NaN,
+				CameraForwardZ = float.NaN,
+				ForwardHitDistance = float.NaN,
+				ForwardHitY = float.NaN,
+				ForwardHitName = string.Empty,
+				BodyHitDistance = float.NaN,
+				BodyHitY = float.NaN,
+				BodyHitName = string.Empty,
+				PlayerTransformYaw = float.NaN,
+				WorldCompensation = new Vector3(float.NaN, float.NaN, float.NaN),
+				GpsWorldX = float.NaN,
+				GpsWorldZ = float.NaN,
+				TerrainPixel = string.Empty,
+				LocalFracX = float.NaN,
+				LocalFracZ = float.NaN,
+				TileValue = -1,
+				TileIndex = -1,
+				HeightSample = float.NaN,
+				TerrainSampleWorldY = float.NaN
+			};
+		}
 
 		private static bool TryGetForwardProbeHit(Vector3 origin, Vector3 direction, GameObject player, out RaycastHit hit)
 		{
@@ -1901,6 +1999,26 @@ namespace DeepWaters
             public float Fish;
             public float Loot;
             public float Rubble;
+
+			public static Counts Unsampled()
+			{
+				return new Counts
+				{
+					Decorations = float.NaN,
+					Enemies = float.NaN,
+					Fish = float.NaN,
+					Loot = float.NaN,
+					Rubble = float.NaN
+				};
+			}
+
+			public static Counts LightweightLive()
+			{
+				Counts counts = Unsampled();
+				counts.Enemies = UnderwaterEnemySpawner.LiveCount;
+				counts.Fish = UnderwaterPassiveFishSpawner.LiveCount;
+				return counts;
+			}
 
             public void Add(Counts other)
             {

@@ -10,6 +10,10 @@ namespace DeepWaters
 {
     internal class PassiveFishBehaviour : MonoBehaviour
     {
+		private static readonly System.Collections.Generic.List<PassiveFishBehaviour> activeFish =
+			new System.Collections.Generic.List<PassiveFishBehaviour>(1024);
+		private static bool pumpingFish;
+
         private const float BaseCruiseSpeed = 1.2f;
         private const float BaseFleeSpeed = 3.5f;
         private const float FleeDistance = 8.0f;
@@ -28,6 +32,9 @@ namespace DeepWaters
         private const float SeafloorClearance = 0.8f;
         private const float SurfaceClearance = 1.4f;
         private const float WaterColumnRefreshInterval = 0.25f;
+		private const float DistantUpdateDistance = 160f;
+		private const float DistantUpdateDistanceSqr = DistantUpdateDistance * DistantUpdateDistance;
+		private const float DistantUpdateInterval = 0.25f;
 
         // Horizontal collision check: probes forward each frame so fish bounce
         // off seafloor walls, shore cliffs, and vanilla terrain instead of
@@ -56,47 +63,117 @@ namespace DeepWaters
         private float fleeDartHoldMin = DefaultFleeDartHoldMin;
         private float fleeDartHoldMax = DefaultFleeDartHoldMax;
 		private Renderer visibilityRenderer;
+		private Collider visibilityCollider;
         private DeepWaterColumn cachedColumn;
         private float nextWaterColumnRefreshTime;
         private bool hasCachedColumn;
         private int obstacleProbeFrameOffset;
+		private float nextDistantUpdateTime;
+		private bool initialized;
+		private bool registered;
+
+		void OnEnable()
+		{
+			if (registered)
+				return;
+
+			registered = true;
+			activeFish.Add(this);
+		}
+
+		void OnDisable()
+		{
+			registered = false;
+			if (!pumpingFish)
+				activeFish.Remove(this);
+		}
+
+		internal static void PumpAll()
+		{
+			if (activeFish.Count == 0)
+				return;
+
+			long timing = DeepWaterDiagnosticsRunner.Active ? DeepWaterPromoteTiming.Begin() : 0L;
+			pumpingFish = true;
+			try
+			{
+				var gameManager = GameManager.Instance;
+				if (gameManager == null || gameManager.PlayerObject == null)
+					return;
+
+				Vector3 playerPos = gameManager.PlayerObject.transform.position;
+				for (int i = activeFish.Count - 1; i >= 0; i--)
+				{
+					PassiveFishBehaviour fish = activeFish[i];
+					if (fish == null || !fish.registered)
+						continue;
+
+					fish.ManagedUpdate(gameManager, playerPos);
+				}
+			}
+			finally
+			{
+				pumpingFish = false;
+				for (int i = activeFish.Count - 1; i >= 0; i--)
+				{
+					PassiveFishBehaviour fish = activeFish[i];
+					if (fish == null || !fish.registered)
+						activeFish.RemoveAt(i);
+				}
+
+				if (timing != 0L)
+					DeepWaterPromoteTiming.End(timing, "fishUpdate", 0, 0);
+			}
+		}
 
         internal void Initialize(DaggerfallLoot lootTarget, float cruiseMultiplier, float fleeMultiplier, PassiveFishSchool fishSchool, float dartHoldMin, float dartHoldMax)
         {
             loot = lootTarget;
             cruiseSpeedMultiplier = cruiseMultiplier;
             fleeSpeedMultiplier = fleeMultiplier;
-            school = fishSchool;
-            fleeDartHoldMin = Mathf.Max(0.1f, dartHoldMin);
-            fleeDartHoldMax = Mathf.Max(fleeDartHoldMin, dartHoldMax);
+			school = fishSchool;
+			fleeDartHoldMin = Mathf.Max(0.1f, dartHoldMin);
+			fleeDartHoldMax = Mathf.Max(fleeDartHoldMin, dartHoldMax);
 			visibilityRenderer = GetComponent<Renderer>();
+			visibilityCollider = GetComponent<Collider>();
             if (school != null)
                 schoolOffset = transform.position - school.Center;
 
             lastSafePosition = transform.position;
             hasLastSafePosition = true;
             obstacleProbeFrameOffset = Random.Range(0, ObstacleProbeFrameInterval);
+			nextDistantUpdateTime = Time.time + Random.value * DistantUpdateInterval;
             PickWanderDirection();
+			initialized = true;
         }
 
-        void Update()
+        private void ManagedUpdate(GameManager gameManager, Vector3 playerPos)
         {
+			if (!initialized)
+				return;
+
             if (loot != null && loot.Items.Count == 0)
             {
                 Destroy(gameObject);
                 return;
             }
 
-            var gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.PlayerObject == null)
                 return;
 
-            Vector3 playerPos = gameManager.PlayerObject.transform.position;
-			UpdateAboveSurfaceVisibility(gameManager, playerPos);
             Vector3 fromPlayer = transform.position - playerPos;
+			float playerDistanceSqr = fromPlayer.sqrMagnitude;
+			bool visible = UpdateDistanceVisibility(gameManager, playerPos);
+			bool distantOrHidden = !visible || playerDistanceSqr > DistantUpdateDistanceSqr;
+			if (distantOrHidden && Time.time < nextDistantUpdateTime)
+				return;
+
+			if (distantOrHidden)
+				nextDistantUpdateTime = Time.time + DistantUpdateInterval + Random.value * 0.05f;
+
             float speed = BaseCruiseSpeed * cruiseSpeedMultiplier;
             float turnSharpness = CruiseTurnSharpness;
-            bool playerNearFish = fromPlayer.sqrMagnitude < FleeDistance * FleeDistance;
+            bool playerNearFish = playerDistanceSqr < FleeDistance * FleeDistance;
 
             if (playerNearFish && school != null)
                 school.ReportThreat(fromPlayer);
@@ -144,25 +221,36 @@ namespace DeepWaters
             DeepWaterRendering.FaceMainCamera(transform);
         }
 
-		private void UpdateAboveSurfaceVisibility(GameManager gameManager, Vector3 playerPos)
+		private bool UpdateDistanceVisibility(GameManager gameManager, Vector3 playerPos)
 		{
 			if (visibilityRenderer == null)
 				visibilityRenderer = GetComponent<Renderer>();
-			if (visibilityRenderer == null || gameManager.MainCamera == null)
-				return;
+			if (visibilityCollider == null)
+				visibilityCollider = GetComponent<Collider>();
+			if (gameManager.MainCamera == null)
+				return true;
 
 			float oceanY;
+			float visibleDistance;
 			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) ||
 				gameManager.MainCamera.transform.position.y < oceanY - 0.05f)
 			{
-				visibilityRenderer.enabled = true;
-				return;
+				visibleDistance = DeepWaterWorld.UnderwaterVisionDistance * 1.1f;
+			}
+			else
+			{
+				visibleDistance = WaterSurfaceResources.GetTopSurfaceOpaqueFadeEnd();
 			}
 
 			Vector3 flatDelta = transform.position - playerPos;
 			flatDelta.y = 0f;
-			float visibleDistance = WaterSurfaceResources.GetTopSurfaceOpaqueFadeEnd();
-			visibilityRenderer.enabled = flatDelta.sqrMagnitude <= visibleDistance * visibleDistance;
+			bool visible = flatDelta.sqrMagnitude <= visibleDistance * visibleDistance;
+			if (visibilityRenderer != null && visibilityRenderer.enabled != visible)
+				visibilityRenderer.enabled = visible;
+			if (visibilityCollider != null && visibilityCollider.enabled != visible)
+				visibilityCollider.enabled = visible;
+
+			return visible;
 		}
 
         // Probe forward in the swim direction. If we'd hit anything solid, hold

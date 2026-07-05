@@ -41,15 +41,28 @@ namespace DeepWaters
 		private const int SchoolPositionAttempts = 24;
 		private const float DeepFishFloorBiasStart = 0.55f;
 		private const float DeepFishFloorBandMeters = 35f;
+		private const int MaxPendingFishSpawnsPerFrame = 5;
 
         private sealed class PixelFishGroup
         {
             internal readonly TransientObjectTracker Fish = new TransientObjectTracker();
             internal int AttemptsRemaining;
+			internal int LiveOrPendingCount;
+			internal bool Active = true;
         }
+
+		private struct FishSpawnRequest
+		{
+			internal PixelFishGroup Group;
+			internal Vector3 WorldPos;
+			internal Transform Parent;
+			internal PassiveFishSpecies Species;
+			internal PassiveFishSchool School;
+		}
 
         private static readonly Dictionary<long, PixelFishGroup> pixelGroups = new Dictionary<long, PixelFishGroup>();
         private static readonly List<long> despawnScratch = new List<long>();
+		private static readonly Queue<FishSpawnRequest> pendingSpawns = new Queue<FishSpawnRequest>();
 		private static readonly List<Vector3> schoolPositionsScratch = new List<Vector3>(32);
         private static bool installed;
 		private static int liveCount;
@@ -97,10 +110,36 @@ namespace DeepWaters
         internal static void ClearAll()
         {
             foreach (var kv in pixelGroups)
-                kv.Value.Fish.Clear();
+			{
+				kv.Value.Active = false;
+				kv.Value.Fish.Clear();
+			}
             pixelGroups.Clear();
+			pendingSpawns.Clear();
 			liveCount = 0;
         }
+
+		internal static void PumpPendingSpawns()
+		{
+			int budget = MaxPendingFishSpawnsPerFrame;
+			while (budget > 0 && pendingSpawns.Count > 0)
+			{
+				budget--;
+				FishSpawnRequest request = pendingSpawns.Dequeue();
+				if (request.Group == null || !request.Group.Active)
+					continue;
+
+				GameObject go = SpawnPassiveFish(request.WorldPos, request.Parent, request.Species, request.School);
+				if (go != null)
+				{
+					request.Group.Fish.Add(go);
+					continue;
+				}
+
+				request.Group.LiveOrPendingCount = Mathf.Max(0, request.Group.LiveOrPendingCount - 1);
+				liveCount = Mathf.Max(0, liveCount - 1);
+			}
+		}
 
         // Drop the fish of any populated pixel no longer in the keep set (out of
         // despawn range or unloaded). By the time a pixel leaves the keep range it
@@ -117,10 +156,11 @@ namespace DeepWaters
 
             for (int i = 0; i < despawnScratch.Count; i++)
             {
-                long key = despawnScratch[i];
+				long key = despawnScratch[i];
 				PixelFishGroup group = pixelGroups[key];
-				liveCount = Mathf.Max(0, liveCount - group.Fish.Count);
-				group.Fish.Clear();
+				group.Active = false;
+				liveCount = Mathf.Max(0, liveCount - group.LiveOrPendingCount);
+				group.Fish.Release();
                 pixelGroups.Remove(key);
             }
         }
@@ -220,11 +260,17 @@ namespace DeepWaters
 
 		private static bool SpawnFish(Vector3 worldPos, Transform parent, PassiveFishSpecies species, PassiveFishSchool school, PixelFishGroup group)
 		{
-			GameObject go = SpawnPassiveFish(worldPos, parent, species, school);
-			if (go == null)
+			if (group == null || !group.Active || species == null)
 				return false;
 
-			group.Fish.Add(go);
+			FishSpawnRequest request;
+			request.Group = group;
+			request.WorldPos = worldPos;
+			request.Parent = parent;
+			request.Species = species;
+			request.School = school;
+			pendingSpawns.Enqueue(request);
+			group.LiveOrPendingCount++;
 			liveCount++;
 			return true;
 		}
