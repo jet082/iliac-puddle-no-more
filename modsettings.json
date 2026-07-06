@@ -92,8 +92,8 @@
                 },
                 {
                     "Min": 64,
-                    "Max": 2304,
-                    "Value": 768,
+                    "Max": 2160,
+                    "Value": 1080,
                     "Name": "MaxDecorationsPerTile",
                     "Description": "Max decorations per map pixel (lower = better performance)",
                     "$version": "v1",
@@ -120,7 +120,7 @@
                 {
                     "Min": 0.0,
                     "Max": 1.0,
-                    "Value": 0.2,
+                    "Value": 0.3,
                     "Name": "TreasureClusterRate",
                     "Description": "Wreckage treasure rate",
                     "$version": "v1",
