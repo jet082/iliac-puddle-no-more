@@ -78,6 +78,10 @@ namespace DeepWaters
         // Player water-contact probing (TryGetPlayerWaterColumn).
 		private const float WaterContactMinimumDepth = 0.5f;
         private const float WaterContactGraceSeconds = 1.25f;
+        // Crouch-dive headroom: a wading player (swim-check ~ocean+0.75) can
+        // still start a dive with Crouch, but solid decks above the water
+        // (Warm Ashes ships) stay far outside water contact.
+        private const float DescendWaterContactAllowance = 1.5f;
         private const float WaterContactProbeRadiusMin = 0.35f;
         private const float WaterContactProbeRadiusMax = 0.75f;
 
@@ -597,6 +601,16 @@ namespace DeepWaters
                 return false;
 
             Vector3 position = player.transform.position;
+
+            // Contact means the body is at the water line, not merely above a
+            // water column. Standing on solid geometry over deep water (e.g. a
+            // Warm Ashes ship deck) must NOT count: the descend/ascend shortcuts
+            // in the swim decision would otherwise turn Crouch/Jump on a dry
+            // deck into instant swim mode.
+            float allowance = descendInput ? DescendWaterContactAllowance : SwimExitClearance;
+            if (PlayerSwimCheckY(position.y) > oceanSurfaceY + allowance)
+                return false;
+
 			DeepWaterColumn column;
 			return TryGetUsableWaterColumn(position.x, position.z, out column);
         }

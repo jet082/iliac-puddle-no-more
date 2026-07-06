@@ -453,6 +453,9 @@ namespace DeepWaters
         private const int ShorelineSeedScanCells = 32;
         private const int ShorelineSurfaceFeatherCells = 4;
         private const float SurfaceRenderYOffset = 0.03f;
+        // Thickness of the surface trigger box (below) that external mods raycast
+        // against to detect deep-waters ocean, e.g. Warm Ashes ship placement.
+        private const float SurfaceTriggerThickness = 0.5f;
 
         private static bool installed;
 
@@ -589,6 +592,18 @@ namespace DeepWaters
             visualGO.transform.localPosition = new Vector3(0f, oceanY + SurfaceRenderYOffset, 0f);
             visualGO.transform.localScale    = Vector3.one;
             visualGO.transform.localRotation = Quaternion.identity;
+
+            // Tile-spanning trigger box so external mods can locate the deep-waters
+            // ocean surface by a downward raycast (they look for a collider named
+            // "DeepWaters_Surface"; Warm Ashes uses this to place ships). Trigger
+            // only: it never blocks the swimmer, and every deep-waters raycast uses
+            // QueryTriggerInteraction.Ignore, so our own swim/shore logic never sees it.
+            BoxCollider surfaceTrigger = visualGO.GetComponent<BoxCollider>();
+            if (surfaceTrigger == null)
+                surfaceTrigger = visualGO.AddComponent<BoxCollider>();
+            surfaceTrigger.isTrigger = true;
+            surfaceTrigger.center = new Vector3(terrainData.size.x * 0.5f, 0f, terrainData.size.z * 0.5f);
+            surfaceTrigger.size = new Vector3(terrainData.size.x, SurfaceTriggerThickness, terrainData.size.z);
         }
 
         private static MeshFilter EnsureSurfaceRenderer(
