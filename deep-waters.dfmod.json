@@ -11,6 +11,7 @@
         "Assets/Game/Mods/deep-waters/modsettings.json",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaters.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaters.Bootstrap.cs",
+        "Assets/Game/Mods/deep-waters/Scripts/DeepWaterDiagnosticsRunner.cs",
         "Assets/Game/Mods/deep-waters/Scripts/SwimmingSfxBridge.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepWaterWorld.cs",
         "Assets/Game/Mods/deep-waters/Scripts/DeepBathymetry.cs",

@@ -145,7 +145,7 @@
                 {
                     "Min": 0.0,
                     "Max": 1.0,
-                    "Value": 0.1,
+                    "Value": 0.7,
                     "Name": "WaterSurfaceTopTransparency",
                     "Description": "Water surface transparency from above",
                     "$version": "v1",

@@ -7,3 +7,5 @@ Diagnostics/WodExactWaterMasks.bytes
 Scripts/Editor/DeepWatersBatchModBuilder.cs
 Diagnostics/*
 Diagnostics/
+Docs/
+DeepWatersHarness.json
