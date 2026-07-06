@@ -264,13 +264,16 @@ namespace DeepWaters
                 biomes: WaterBiome.Tropical,
                 minDepthFraction: 0f,
                 maxDepthFraction: 0.35f),
+            // Finulon uses record 41, not 48: vanilla TEXTURE.216 defines records
+            // 0-47 only, so 48 has no texture for DFU to fall back on if the icon
+            // cache is ever missed (which crashed the loot window before).
             new PassiveFishSpecies(
                 FinulonTemplateIndex,
                 "Finulon",
-                48,
+                41,
                 5,
                 1.8f,
-                GenerateTextureAssetNames("finulon", 48),
+                GenerateTextureAssetNames("finulon", 41),
                 1.2f,
                 1.2f,
                 1,

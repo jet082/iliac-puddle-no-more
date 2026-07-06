@@ -147,9 +147,9 @@
         "isOneHanded": false,
         "isIngredient": false,
         "worldTextureArchive": 216,
-        "worldTextureRecord": 48,
+        "worldTextureRecord": 41,
         "playerTextureArchive": 216,
-        "playerTextureRecord": 48,
+        "playerTextureRecord": 41,
         "isNotRepairable": true,
         "hasNoEncumbrance": false
     }

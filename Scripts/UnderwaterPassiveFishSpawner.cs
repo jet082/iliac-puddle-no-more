@@ -314,8 +314,11 @@ namespace DeepWaters
 
 			DaggerfallLoot loot = go.AddComponent<DaggerfallLoot>();
 			loot.ContainerType = LootContainerTypes.DroppedLoot;
-			loot.TextureArchive = species.TextureArchive;
-			loot.TextureRecord = species.TextureRecord;
+			// Leave TextureArchive/Record at 0. DFU's remote-loot-icon render
+			// (UpdateRemoteTargetIcon) calls ImageReader.GetImageData on the loot's
+			// archive/record; record 48 (finulon) is out of range for vanilla
+			// archive 216 and throws inside the window's OnPush. UpdateFishLootIcon
+			// paints the real fish icon anyway, so let DFU use its default container.
 			loot.Items.AddItem(fishItem);
 
 			FishLootIcon lootIcon = go.AddComponent<FishLootIcon>();
