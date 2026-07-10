@@ -21,8 +21,9 @@ namespace DeepWaters
     /// holed patch subdivides), so the heightfield stays intact and the
     /// outdoor swim collider gate disables its collider locally to let the
     /// player descend to the seafloor mesh.
+	/// Public members provide a general integration surface for other mods.
     /// </summary>
-    internal static class DeepWaterFloorBuilder
+	public static class DeepWaterFloorBuilder
     {
         private const string FloorChildName = "DeepWaters_Seafloor";
         // Buffer of non-hole vanilla terrain we keep around the shoreline.
@@ -47,7 +48,11 @@ namespace DeepWaters
         internal const float HoleBufferMeters = 0.5f;
 
         // Decorations wait for this so spawn heights sample the finished floor.
-        internal static event System.Action<DaggerfallTerrain> OnFloorRefreshed;
+		/// <summary>Raised after a seafloor mesh and collider are built, before dependent content refreshes.</summary>
+		public static event System.Action<DaggerfallTerrain> OnSeafloorBuilt;
+
+		/// <summary>Raised after the seafloor and Deep Waters terrain integrations are fully refreshed.</summary>
+		public static event System.Action<DaggerfallTerrain> OnFloorRefreshed;
 
         private static bool installed;
 
@@ -139,14 +144,14 @@ namespace DeepWaters
         // callers that genuinely need a rebuild (settings changed, save
         // load completed) actually get one even when DFU hasn't
         // re-allocated heightmap arrays.
-        internal static void RefreshLoadedTiles(bool force = false)
+		public static void RefreshLoadedTiles(bool force = false)
         {
             DaggerfallTerrain[] terrains = Object.FindObjectsOfType<DaggerfallTerrain>();
             for (int i = 0; i < terrains.Length; i++)
                 RefreshLoadedTile(terrains[i], force);
         }
 
-        private static void RefreshLoadedTile(DaggerfallTerrain dfTerrain, bool force = false)
+		public static void RefreshLoadedTile(DaggerfallTerrain dfTerrain, bool force = false)
         {
             if (dfTerrain == null)
                 return;
@@ -155,6 +160,71 @@ namespace DeepWaters
             if (unityTerrain != null && unityTerrain.terrainData != null)
                 HandlePromote(dfTerrain, unityTerrain.terrainData, force);
         }
+
+		public static bool IsSeafloorCurrent(DaggerfallTerrain terrain)
+		{
+			DeepWaterFloorMesh floor;
+			if (!TryGetFloorComponent(terrain, out floor))
+				return false;
+
+			return floor.BuildVersion > 0 &&
+				floor.BuiltMapPixelX == terrain.MapPixelX &&
+				floor.BuiltMapPixelY == terrain.MapPixelY &&
+				object.ReferenceEquals(floor.LastBuiltHeightmapSamples, terrain.MapData.heightmapSamples) &&
+				floor.HasValidRuntimeCollider;
+		}
+
+		public static int GetSeafloorBuildVersion(DaggerfallTerrain terrain)
+		{
+			DeepWaterFloorMesh floor;
+			return TryGetFloorComponent(terrain, out floor) ? floor.BuildVersion : -1;
+		}
+
+		/// <summary>Gets the live rendered mesh and collider for a streamed terrain tile.</summary>
+		public static bool TryGetSeafloor(DaggerfallTerrain terrain, out Mesh mesh, out MeshCollider collider)
+		{
+			mesh = null;
+			collider = null;
+			DeepWaterFloorMesh floor;
+			if (!TryGetFloorComponent(terrain, out floor))
+				return false;
+
+			MeshFilter filter = floor.GetComponent<MeshFilter>();
+			mesh = filter != null ? filter.sharedMesh : null;
+			collider = floor.GetComponent<MeshCollider>();
+			return mesh != null && collider != null;
+		}
+
+		/// <summary>Commits external mesh edits to Deep Waters sampling, bounds, and collision.</summary>
+		public static bool CommitSeafloorChanges(DaggerfallTerrain terrain)
+		{
+			DeepWaterFloorMesh floor;
+			return TryGetFloorComponent(terrain, out floor) && floor.CommitExternalMeshChanges();
+		}
+
+		public static bool RaycastSeafloor(
+			DaggerfallTerrain terrain,
+			Ray ray,
+			float maxDistance,
+			out RaycastHit hit)
+		{
+			hit = new RaycastHit();
+			Mesh mesh;
+			MeshCollider collider;
+			return TryGetSeafloor(terrain, out mesh, out collider) &&
+				collider.Raycast(ray, out hit, maxDistance);
+		}
+
+		private static bool TryGetFloorComponent(DaggerfallTerrain terrain, out DeepWaterFloorMesh floor)
+		{
+			floor = null;
+			if (terrain == null)
+				return false;
+
+			Transform child = terrain.transform.Find(FloorChildName);
+			floor = child != null ? child.GetComponent<DeepWaterFloorMesh>() : null;
+			return floor != null;
+		}
 
         private static void HandlePromote(DaggerfallTerrain dfTerrain, TerrainData terrainData)
         {
@@ -205,6 +275,8 @@ namespace DeepWaters
         private static void HandlePromoteCore(DaggerfallTerrain dfTerrain, TerrainData terrainData, bool force, bool fromPromoteEvent)
         {
             if (dfTerrain == null || terrainData == null) return;
+
+			AnimatedWaterSurfaceBridge.EnsureTerrainMaterial(dfTerrain);
 
             // The genuine promote event is the safe pre-first-render window to
             // carve holes and build the seafloor child, so let it through even
@@ -277,19 +349,32 @@ namespace DeepWaters
             timing = DeepWaterPromoteTiming.Begin();
             BuildOrRefreshFloor(dfTerrain, terrainData, tile, holes);
             DeepWaterPromoteTiming.End(timing, "floor", dfTerrain.MapPixelX, dfTerrain.MapPixelY);
+			RaiseTerrainEvent(OnSeafloorBuilt, dfTerrain, "OnSeafloorBuilt");
             timing = DeepWaterPromoteTiming.Begin();
             UpdateTerrainCapRenderer(dfTerrain);
             DeepWaterPromoteTiming.End(timing, "cap", dfTerrain.MapPixelX, dfTerrain.MapPixelY);
-			if (OnFloorRefreshed != null)
+			RaiseTerrainEvent(OnFloorRefreshed, dfTerrain, "OnFloorRefreshed");
+        }
+
+		private static void RaiseTerrainEvent(
+			System.Action<DaggerfallTerrain> callbacks,
+			DaggerfallTerrain terrain,
+			string eventName)
+		{
+			if (callbacks == null)
+				return;
+
+			System.Delegate[] subscribers = callbacks.GetInvocationList();
+			for (int i = 0; i < subscribers.Length; i++)
 			{
-				try { OnFloorRefreshed(dfTerrain); }
-				catch (System.Exception ex)
+				try { ((System.Action<DaggerfallTerrain>)subscribers[i])(terrain); }
+				catch (System.Exception exception)
 				{
-					Debug.LogWarning("[DeepWaters.Builder] OnFloorRefreshed subscriber threw for tile (" +
-						dfTerrain.MapPixelX + "," + dfTerrain.MapPixelY + "): " + ex.Message);
+					Debug.LogWarning("[DeepWaters.Builder] " + eventName + " subscriber threw for tile (" +
+						terrain.MapPixelX + "," + terrain.MapPixelY + "): " + exception.Message);
 				}
 			}
-        }
+		}
 
         private static int ResolveClimateIndex(DaggerfallTerrain dfTerrain)
         {

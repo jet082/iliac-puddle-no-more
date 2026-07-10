@@ -12,6 +12,153 @@ using UnityEngine;
 
 namespace DeepWaters
 {
+	/// <summary>
+	/// Stable, read-only outdoor water state and player-column queries for other mods.
+	/// </summary>
+	public static class DeepWaterPlayer
+	{
+		/// <summary>Raised after any published water-state property changes.</summary>
+		public static event System.Action OnStateChanged;
+
+		/// <summary>
+		/// Return true to suppress Deep Waters swimming for the current frame.
+		/// Intended for boats, moving platforms, cutscenes, and similar integrations.
+		/// </summary>
+		public static event System.Func<bool> ShouldSuppressOutdoorSwimming
+		{
+			add
+			{
+				suppressionCallbacks += value;
+				suppressionSubscribers = suppressionCallbacks != null
+					? suppressionCallbacks.GetInvocationList()
+					: noSuppressionSubscribers;
+			}
+			remove
+			{
+				suppressionCallbacks -= value;
+				suppressionSubscribers = suppressionCallbacks != null
+					? suppressionCallbacks.GetInvocationList()
+					: noSuppressionSubscribers;
+				if (suppressionCallbacks == null)
+					suppressionFailureLogged = false;
+			}
+		}
+
+		/// <summary>True while the exterior player has grace-smoothed, shore-vetoed water contact.</summary>
+		public static bool IsInWater { get; private set; }
+
+		/// <summary>True while Deep Waters is driving exterior swim movement.</summary>
+		public static bool IsSwimming { get; private set; }
+
+		/// <summary>True while Deep Waters classifies the player's head as submerged.</summary>
+		public static bool IsHeadSubmerged { get; private set; }
+
+		/// <summary>True while Deep Waters' exterior underwater presentation is active.</summary>
+		public static bool IsUnderwater { get; private set; }
+
+		public static bool TryGetWaterColumn(
+			out DaggerfallTerrain terrain,
+			out float surfaceWorldY,
+			out float seafloorWorldY,
+			out float depth)
+		{
+			terrain = null;
+			surfaceWorldY = 0f;
+			seafloorWorldY = 0f;
+			depth = 0f;
+			if (!OutdoorSwimDriver.IsExteriorContextActive)
+				return false;
+
+			DeepWaterColumn column;
+			if (!OutdoorSwimDriver.TryGetPlayerWaterColumn(out column))
+				return false;
+
+			terrain = column.DaggerfallTerrain;
+			surfaceWorldY = column.OceanWorldY;
+			seafloorWorldY = column.SeafloorWorldY;
+			depth = column.Depth;
+			return terrain != null;
+		}
+
+		internal static bool EvaluateSwimmingSuppression()
+		{
+			System.Delegate[] subscribers = suppressionSubscribers;
+			if (subscribers.Length == 0)
+				return false;
+
+			bool suppress = false;
+			for (int i = 0; i < subscribers.Length; i++)
+			{
+				System.Delegate subscriber = subscribers[i];
+				try { suppress |= ((System.Func<bool>)subscriber)(); }
+				catch (System.Exception exception)
+				{
+					if (!suppressionFailureLogged)
+					{
+						suppressionFailureLogged = true;
+						Debug.LogWarning("[DeepWaters.Player] ShouldSuppressOutdoorSwimming subscriber threw: " +
+							exception.Message);
+					}
+				}
+			}
+
+			return suppress;
+		}
+
+		internal static void PublishState(
+			bool isInWater,
+			bool isSwimming,
+			bool isHeadSubmerged,
+			bool isUnderwater)
+		{
+			if (IsInWater == isInWater &&
+				IsSwimming == isSwimming &&
+				IsHeadSubmerged == isHeadSubmerged &&
+				IsUnderwater == isUnderwater)
+			{
+				return;
+			}
+
+			IsInWater = isInWater;
+			IsSwimming = isSwimming;
+			IsHeadSubmerged = isHeadSubmerged;
+			IsUnderwater = isUnderwater;
+			stateChangePending = true;
+		}
+
+		internal static void ClearState()
+		{
+			PublishState(false, false, false, false);
+		}
+
+		internal static void FlushStateChange()
+		{
+			if (!stateChangePending)
+				return;
+
+			stateChangePending = false;
+			System.Action callbacks = OnStateChanged;
+			if (callbacks == null)
+				return;
+
+			System.Delegate[] subscribers = callbacks.GetInvocationList();
+			for (int i = 0; i < subscribers.Length; i++)
+			{
+				try { ((System.Action)subscribers[i])(); }
+				catch (System.Exception exception)
+				{
+					Debug.LogWarning("[DeepWaters.Player] OnStateChanged subscriber threw: " + exception.Message);
+				}
+			}
+		}
+
+		private static readonly System.Delegate[] noSuppressionSubscribers = new System.Delegate[0];
+		private static System.Func<bool> suppressionCallbacks;
+		private static System.Delegate[] suppressionSubscribers = noSuppressionSubscribers;
+		private static bool suppressionFailureLogged;
+		private static bool stateChangePending;
+	}
+
     /// <summary>
     /// Outdoor swim driver — tricks DFU's PlayerEnterExit into running its dungeon
     /// swim logic outdoors by forging the dungeon/water state around its Update.
@@ -114,6 +261,13 @@ namespace DeepWaters
 
         private readonly OutdoorSwimDfuBridge dfuBridge = new OutdoorSwimDfuBridge();
         private bool currentlyForged;
+		private bool swimmingSuppressed;
+		private static bool exteriorContextActive;
+
+		internal static bool IsExteriorContextActive
+		{
+			get { return exteriorContextActive; }
+		}
         private static bool headWaterStateInitialized;
         private static bool headPresentationUnderwater;
 
@@ -164,6 +318,10 @@ namespace DeepWaters
 
         void OnDisable()
         {
+			swimmingSuppressed = false;
+			exteriorContextActive = false;
+			DeepWaterPlayer.ClearState();
+			DeepWaterPlayer.FlushStateChange();
             ReleaseSwimMotorFrameSpikeGuard();
             RestoreWaterTerrainCollider(force: true);
         }
@@ -172,20 +330,34 @@ namespace DeepWaters
         {
             RestoreWaterTerrainCollider(force: true);
             ClearOutdoorWaterState();
+			DeepWaterPlayer.FlushStateChange();
         }
 
         void Update()
         {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null || !gameManager.IsPlayingGame())
+			{
+				swimmingSuppressed = false;
+				exteriorContextActive = false;
+				DeepWaterPlayer.ClearState();
                 return;
+			}
 
             PlayerEnterExit pex = gameManager.PlayerEnterExit;
             if (pex == null)
+			{
+				swimmingSuppressed = false;
+				exteriorContextActive = false;
+				DeepWaterPlayer.ClearState();
                 return;
+			}
 
             if (pex.IsPlayerInside)
             {
+				swimmingSuppressed = false;
+				exteriorContextActive = false;
+				DeepWaterPlayer.ClearState();
                 ReleaseSwimMotorFrameSpikeGuard();
                 RestoreWaterTerrainCollider();
                 if (currentlyForged)
@@ -193,8 +365,11 @@ namespace DeepWaters
                 return;
             }
 
-            if (IsPlayerOnBoat())
+			exteriorContextActive = true;
+			swimmingSuppressed = IsPlayerOnBoat() || DeepWaterPlayer.EvaluateSwimmingSuppression();
+			if (swimmingSuppressed)
             {
+				DeepWaterPlayer.ClearState();
                 RestoreWaterTerrainCollider();
                 SuppressOutdoorSwimming();
                 return;
@@ -206,8 +381,10 @@ namespace DeepWaters
 			UpdateWaterTerrainColliderGate(oceanSurfaceY, descendInput);
 			bool standingOnShore = !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
 			bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
-            bool isSwimming = hasWaterContact && !standingOnShore && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
-            bool isPresentationUnderwater = hasWaterContact && !standingOnShore && IsPresentationUnderwater(oceanSurfaceY);
+			bool isInWater = hasWaterContact && !standingOnShore;
+			bool isSwimming = isInWater && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
+			bool isPresentationUnderwater = isInWater && IsPresentationUnderwater(oceanSurfaceY);
+			bool isHeadSubmerged = isInWater && IsPlayerHeadUnderwater(oceanSurfaceY);
 
             GuardSwimMotorFrameSpike(isSwimming);
 
@@ -226,10 +403,13 @@ namespace DeepWaters
                 if (currentlyForged)
                     Restore();
 
+				DeepWaterPlayer.ClearState();
                 RequestStandAfterWaterExit();
                 ClearCrouchAfterWaterExit();
                 return;
             }
+
+			DeepWaterPlayer.PublishState(isInWater, isSwimming, isHeadSubmerged, isPresentationUnderwater);
 
             if (!isSwimming && !isPresentationUnderwater)
             {
@@ -264,7 +444,7 @@ namespace DeepWaters
             if (pex == null || pex.IsPlayerInside)
                 return;
 
-            if (IsPlayerOnBoat())
+			if (IsPlayerOnBoat() || swimmingSuppressed)
             {
                 SuppressOutdoorSwimming();
                 return;
@@ -295,8 +475,9 @@ namespace DeepWaters
         /// </summary>
         internal void PostPhaseRestore()
         {
-            if (IsPlayerOnBoat())
+			if (IsPlayerOnBoat() || swimmingSuppressed)
             {
+				DeepWaterPlayer.ClearState();
                 if (currentlyForged)
                     Restore();
 
@@ -314,6 +495,7 @@ namespace DeepWaters
 			bool standingOnShore = !descendInput && IsStandingOnShoreGround(oceanSurfaceY);
 			if (standingOnShore)
 			{
+				DeepWaterPlayer.ClearState();
 				Restore();
                 RequestStandAfterWaterExit();
                 return;
@@ -325,6 +507,8 @@ namespace DeepWaters
 			bool hasWaterContact = HasRecentCenterWaterContact(oceanSurfaceY, descendInput);
 			bool isSwimming = hasWaterContact && (IsPlayerAtSwimmingDepth(oceanSurfaceY) || descendInput || ShouldHoldSurfaceSwim(ascendInput));
 			bool presentationUnderwater = hasWaterContact && IsPresentationUnderwater(oceanSurfaceY);
+			bool headSubmerged = hasWaterContact && IsPlayerHeadUnderwater(oceanSurfaceY);
+			DeepWaterPlayer.PublishState(hasWaterContact, isSwimming, headSubmerged, presentationUnderwater);
 
             ApplyDfuWaterAudioState(pex, oceanSurfaceY, isSwimming);
             ApplyUnderwaterFogSettings(pex);
@@ -441,6 +625,9 @@ namespace DeepWaters
         /// </summary>
         private void ClearOutdoorWaterState()
         {
+			swimmingSuppressed = false;
+			exteriorContextActive = false;
+			DeepWaterPlayer.ClearState();
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.PlayerEnterExit == null)
                 return;
@@ -781,7 +968,7 @@ namespace DeepWaters
         internal static float ComputeOceanSurfaceY()
         {
             float oceanSurfaceY;
-            return DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) ? oceanSurfaceY : 0f;
+			return DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanSurfaceY) ? oceanSurfaceY : 0f;
         }
 
         #endregion
@@ -831,7 +1018,10 @@ namespace DeepWaters
                    TryGetUsableWaterColumn(position.x - right.x * radius, position.z - right.z * radius, out column);
         }
 
-        private static bool TryGetUsableWaterColumn(float worldX, float worldZ, out DeepWaterColumn column)
+		internal static bool TryGetAuthoritativeWaterColumn(
+			float worldX,
+			float worldZ,
+			out DeepWaterColumn column)
         {
             if (!DeepWaterWorld.TryGetWaterColumn(worldX, worldZ, out column))
                 return false;
@@ -844,7 +1034,13 @@ namespace DeepWaters
             if (column.Parent != null)
                 column.SeafloorLocalY = seafloorY - column.Parent.position.y;
 
-            return column.Depth >= WaterContactMinimumDepth;
+			return column.Depth > 0f;
+		}
+
+		private static bool TryGetUsableWaterColumn(float worldX, float worldZ, out DeepWaterColumn column)
+		{
+			return TryGetAuthoritativeWaterColumn(worldX, worldZ, out column) &&
+				column.Depth >= WaterContactMinimumDepth;
         }
 
 		internal static bool TryGetSwimmableSeafloorWorldY(float worldX, float worldZ, out float seafloorWorldY)
@@ -1495,7 +1691,11 @@ namespace DeepWaters
     internal class OutdoorSwimDriverAfter : MonoBehaviour
     {
         internal OutdoorSwimDriver owner;
-        void Update() { owner?.PostPhaseRestore(); }
+		void Update()
+		{
+			owner?.PostPhaseRestore();
+			DeepWaterPlayer.FlushStateChange();
+		}
     }
 
     /// <summary>
@@ -1751,7 +1951,7 @@ namespace DeepWaters
             float oceanSurfaceY;
             if (direction.y > 0f &&
                 gameManager.PlayerEnterExit != null && !gameManager.PlayerEnterExit.IsPlayerInside &&
-                DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) &&
+				DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanSurfaceY) &&
                 cameraTransform.position.y > oceanSurfaceY + SurfaceUpwardCameraClearance)
             {
                 direction.y = 0f;
@@ -1866,7 +2066,7 @@ namespace DeepWaters
                 return false;
 
             float oceanSurfaceY;
-            if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY))
+			if (!DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanSurfaceY))
                 return false;
 
             if (gameManager.PlayerMotor.OnExteriorWater == PlayerMotor.OnExteriorWaterMethod.Swimming)
@@ -1988,7 +2188,7 @@ namespace DeepWaters
 				return false;
 
 			float oceanSurfaceY;
-			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY))
+			if (!DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanSurfaceY))
 				return false;
 
 			return gameManager.PlayerObject.transform.position.y <= oceanSurfaceY + SurfaceActivationMargin;

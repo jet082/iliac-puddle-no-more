@@ -132,7 +132,7 @@ namespace DeepWaters
 			GameManager gameManager = GameManager.Instance;
 			Camera cam = gameManager != null ? gameManager.MainCamera : null;
 			float oceanY;
-			if (cam != null && DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) &&
+			if (cam != null && DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY) &&
 				cam.transform.position.y > oceanY)
 			{
 				tint = GetTimeAdjustedSurfaceTint();
@@ -443,7 +443,7 @@ namespace DeepWaters
     /// every terrain tile. The top and underside are separate renderers so
     /// above-water transparency cannot be overridden by underwater behavior.
     /// </summary>
-    internal static class WaterSurfaceManager
+	public static class WaterSurfaceManager
     {
         private const string VisualChildName = "DeepWaters_Surface";
         private const string TopSurfaceChildName = "DeepWaters_Surface_Top";
@@ -460,6 +460,10 @@ namespace DeepWaters
 
         private static bool installed;
 		private static Mesh sharedAnimatedFullSurfaceMesh;
+		private static int lastSurfaceBuildVersion;
+
+		/// <summary>Raised after a streamed surface root, renderers, mesh, and trigger are ready.</summary>
+		public static event System.Action<DaggerfallTerrain> OnSurfaceBuilt;
 
         internal static void Install()
         {
@@ -471,22 +475,102 @@ namespace DeepWaters
             installed = true;
 		}
 
-        internal static void RefreshLoadedSurfaces()
+		public static void RefreshLoadedSurfaces(bool force = false)
         {
             DaggerfallTerrain[] terrains = Object.FindObjectsOfType<DaggerfallTerrain>();
             for (int i = 0; i < terrains.Length; i++)
-                RefreshLoadedSurface(terrains[i]);
+				RefreshLoadedSurface(terrains[i], force);
         }
 
-        internal static void RefreshLoadedSurface(DaggerfallTerrain dfTerrain)
+		public static void RefreshLoadedSurface(DaggerfallTerrain dfTerrain, bool force = false)
         {
             if (dfTerrain == null)
                 return;
 
             Terrain terrain = dfTerrain.GetComponent<Terrain>();
             if (terrain != null && terrain.terrainData != null)
-                HandlePromoteCore(dfTerrain, terrain.terrainData, false);
+				HandlePromoteCore(dfTerrain, terrain.terrainData, false, force);
         }
+
+		public static bool IsSurfaceCurrent(DaggerfallTerrain terrain)
+		{
+			DeepWatersWaterSurface marker;
+			if (!TryGetSurfaceComponent(terrain, out marker))
+				return false;
+
+			Transform root;
+			Mesh mesh;
+			MeshRenderer topRenderer;
+			MeshRenderer undersideRenderer;
+			Collider trigger;
+			if (!TryGetSurface(terrain, out root, out mesh, out topRenderer, out undersideRenderer, out trigger))
+				return false;
+
+			MeshFilter topFilter = topRenderer.GetComponent<MeshFilter>();
+			MeshFilter undersideFilter = undersideRenderer.GetComponent<MeshFilter>();
+			return marker.BuildVersion > 0 &&
+				marker.BuiltMapPixelX == terrain.MapPixelX &&
+				marker.BuiltMapPixelY == terrain.MapPixelY &&
+				object.ReferenceEquals(marker.BuiltHeightmapSamples, terrain.MapData.heightmapSamples) &&
+				marker.Terrain == terrain &&
+				root.parent == terrain.transform &&
+				topFilter != null &&
+				undersideFilter != null &&
+				topFilter.sharedMesh == mesh &&
+				undersideFilter.sharedMesh == mesh &&
+				trigger.enabled &&
+				trigger.isTrigger;
+		}
+
+		public static int GetSurfaceBuildVersion(DaggerfallTerrain terrain)
+		{
+			DeepWatersWaterSurface marker;
+			return TryGetSurfaceComponent(terrain, out marker) ? marker.BuildVersion : -1;
+		}
+
+		/// <summary>Gets the live surface objects for a streamed terrain tile. The returned mesh is read-only.</summary>
+		public static bool TryGetSurface(
+			DaggerfallTerrain terrain,
+			out Transform root,
+			out Mesh mesh,
+			out MeshRenderer topRenderer,
+			out MeshRenderer undersideRenderer,
+			out Collider trigger)
+		{
+			root = null;
+			mesh = null;
+			topRenderer = null;
+			undersideRenderer = null;
+			trigger = null;
+
+			DeepWatersWaterSurface marker;
+			if (!TryGetSurfaceComponent(terrain, out marker))
+				return false;
+
+			root = marker.transform;
+			mesh = marker.SurfaceMesh;
+			Transform top = root.Find(TopSurfaceChildName);
+			Transform underside = root.Find(UndersideSurfaceChildName);
+			topRenderer = top != null ? top.GetComponent<MeshRenderer>() : null;
+			undersideRenderer = underside != null ? underside.GetComponent<MeshRenderer>() : null;
+			if (marker.SurfaceTrigger == null)
+				marker.SurfaceTrigger = marker.GetComponent<BoxCollider>();
+			trigger = marker.SurfaceTrigger;
+			return mesh != null && topRenderer != null && undersideRenderer != null && trigger != null;
+		}
+
+		private static bool TryGetSurfaceComponent(
+			DaggerfallTerrain terrain,
+			out DeepWatersWaterSurface marker)
+		{
+			marker = null;
+			if (terrain == null)
+				return false;
+
+			Transform root = terrain.transform.Find(VisualChildName);
+			marker = root != null ? root.GetComponent<DeepWatersWaterSurface>() : null;
+			return marker != null;
+		}
 
         private static void HandlePromote(DaggerfallTerrain sender, TerrainData terrainData)
         {
@@ -495,7 +579,7 @@ namespace DeepWaters
             if (sender != null && !DeepWaterFloorBuilder.IsNearPlayerPixel(sender))
                 return;
 
-            HandlePromoteCore(sender, terrainData, true);
+			HandlePromoteCore(sender, terrainData, true, false);
         }
 
         // Deferred-pump entry: same trust level as a genuine promote (the
@@ -503,7 +587,7 @@ namespace DeepWaters
         // renderers), so it must not be gated on CanMutateTerrainData.
         internal static void BuildSurfaceFor(DaggerfallTerrain sender, TerrainData terrainData)
         {
-            HandlePromoteCore(sender, terrainData, true);
+			HandlePromoteCore(sender, terrainData, true, false);
         }
 
         // The genuine promote event is the safe pre-first-render window to build
@@ -512,10 +596,16 @@ namespace DeepWaters
         // get a carved seabed but no water surface above (gaps in the ceiling).
         // Only the forced refresh of already-live terrains is gated. The surface
         // build never mutates terrainData; it only adds a child mesh renderer.
-        private static void HandlePromoteCore(DaggerfallTerrain sender, TerrainData terrainData, bool fromPromoteEvent)
+		private static void HandlePromoteCore(
+			DaggerfallTerrain sender,
+			TerrainData terrainData,
+			bool fromPromoteEvent,
+			bool force)
         {
 			if (sender == null || terrainData == null)
 				return;
+
+			AnimatedWaterSurfaceBridge.EnsureTerrainMaterial(sender);
 
 			if (!fromPromoteEvent && !DeepWaterRuntime.CanMutateTerrainData)
 				return;
@@ -532,7 +622,7 @@ namespace DeepWaters
 			// fresh heightmapSamples array per genuine promote, so reference
 			// equality on it plus the map pixel identifies an identical build.
 			Transform existingVisual = sender.transform.Find(VisualChildName);
-			if (existingVisual != null)
+			if (!force && existingVisual != null)
 			{
 				DeepWatersWaterSurface existingMarker = existingVisual.GetComponent<DeepWatersWaterSurface>();
 				if (existingMarker != null &&
@@ -581,7 +671,6 @@ namespace DeepWaters
 			marker.BuiltMapPixelY = terrain.MapPixelY;
 			marker.BuiltHeightmapSamples = terrain.MapData.heightmapSamples;
 			marker.Terrain = terrain;
-			marker.SurfaceMesh = surfaceMesh;
 
             MeshFilter topFilter = EnsureSurfaceRenderer(
                 visualGO.transform,
@@ -609,7 +698,32 @@ namespace DeepWaters
             surfaceTrigger.isTrigger = true;
             surfaceTrigger.center = new Vector3(terrainData.size.x * 0.5f, 0f, terrainData.size.z * 0.5f);
             surfaceTrigger.size = new Vector3(terrainData.size.x, SurfaceTriggerThickness, terrainData.size.z);
+
+			marker.SurfaceMesh = surfaceMesh;
+			marker.SurfaceTrigger = surfaceTrigger;
+			marker.BuildVersion = ++lastSurfaceBuildVersion;
+			RaiseTerrainEvent(OnSurfaceBuilt, terrain, "OnSurfaceBuilt");
         }
+
+		private static void RaiseTerrainEvent(
+			System.Action<DaggerfallTerrain> callbacks,
+			DaggerfallTerrain terrain,
+			string eventName)
+		{
+			if (callbacks == null)
+				return;
+
+			System.Delegate[] subscribers = callbacks.GetInvocationList();
+			for (int i = 0; i < subscribers.Length; i++)
+			{
+				try { ((System.Action<DaggerfallTerrain>)subscribers[i])(terrain); }
+				catch (System.Exception exception)
+				{
+					Debug.LogWarning("[DeepWaters.Surface] " + eventName + " subscriber threw for tile (" +
+						terrain.MapPixelX + "," + terrain.MapPixelY + "): " + exception.Message);
+				}
+			}
+		}
 
         private static MeshFilter EnsureSurfaceRenderer(
             Transform root,
@@ -1203,6 +1317,16 @@ namespace DeepWaters
             var visual = terrain.transform.Find(VisualChildName);
             if (visual != null)
             {
+				DeepWatersWaterSurface marker = visual.GetComponent<DeepWatersWaterSurface>();
+				if (marker != null)
+				{
+					marker.BuildVersion = -1;
+					marker.SurfaceMesh = null;
+					marker.SurfaceTrigger = null;
+				}
+				visual.name = VisualChildName + "_Removing";
+				visual.gameObject.SetActive(false);
+
                 var destroyedMeshes = new HashSet<Mesh>();
                 MeshFilter[] meshFilters = visual.GetComponentsInChildren<MeshFilter>(true);
                 for (int i = 0; i < meshFilters.Length; i++)
@@ -1227,11 +1351,13 @@ namespace DeepWaters
     /// </summary>
     internal class DeepWatersWaterSurface : MonoBehaviour
     {
+		internal int BuildVersion;
         internal int BuiltMapPixelX = int.MinValue;
         internal int BuiltMapPixelY = int.MinValue;
         internal float[,] BuiltHeightmapSamples;
 		internal DaggerfallTerrain Terrain;
 		internal Mesh SurfaceMesh;
+		internal BoxCollider SurfaceTrigger;
 
 		private void OnEnable()
 		{
@@ -1246,6 +1372,11 @@ namespace DeepWaters
 
 	internal static class AnimatedWaterSurfaceBridge
 	{
+		private const string AnimatedWaterGuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+		private const string AnimatedWaterProviderTypeName =
+			"Game.Mods.AnimatedWater.Scripts.AnimatedWaterMaterialProvider";
+		private const string AnimatedWaterModTypeName =
+			"Game.Mods.AnimatedWater.Scripts.AnimatedWaterMod";
 		private const string AnimatedWaterShaderPrefix = "Daggerfall/AnimatedWater/";
 		private const int SourceLayer = 31;
 		private static readonly int AnimatedWaterEnabledProperty = Shader.PropertyToID("_DeepWatersAnimatedWaterEnabled");
@@ -1260,6 +1391,8 @@ namespace DeepWaters
 		private static MaterialPropertyBlock sourceProperties;
 		private static bool renderingSource;
 		private static bool installed;
+		private static bool loggedTerrainMaterialUpgrade;
+		private static bool loggedMaterialSettingsFailure;
 
 		internal static void Install()
 		{
@@ -1274,6 +1407,136 @@ namespace DeepWaters
 		{
 			return material != null && material.shader != null &&
 				material.shader.name.StartsWith(AnimatedWaterShaderPrefix);
+		}
+
+		internal static void EnsureTerrainMaterial(DaggerfallTerrain terrain)
+		{
+			Material material = terrain != null ? terrain.TerrainMaterial : null;
+			if (material == null || material.shader == null || IsAnimatedWaterMaterial(material))
+				return;
+
+			string shaderName = material.shader.name;
+			if (shaderName != "Daggerfall/Tilemap" && shaderName != "Daggerfall/TilemapTextureArray")
+				return;
+
+			DaggerfallUnity dfu = DaggerfallUnity.Instance;
+			Material providerMaterial = CreateProviderMaterial(dfu);
+			if (!IsAnimatedWaterMaterial(providerMaterial))
+			{
+				if (providerMaterial != null)
+					Object.Destroy(providerMaterial);
+
+				if (!RestoreAnimatedWaterProvider(dfu))
+					return;
+
+				providerMaterial = CreateProviderMaterial(dfu);
+				if (!IsAnimatedWaterMaterial(providerMaterial))
+				{
+					if (providerMaterial != null)
+						Object.Destroy(providerMaterial);
+					return;
+				}
+			}
+
+			material.shader = providerMaterial.shader;
+			ApplyAnimatedWaterSettings(material);
+			Object.Destroy(providerMaterial);
+			if (!loggedTerrainMaterialUpgrade)
+			{
+				loggedTerrainMaterialUpgrade = true;
+				Debug.Log("[DeepWaters.AnimatedWater] Upgraded pre-existing terrain materials to the active Animated Water shader.");
+			}
+		}
+
+		private static Material CreateProviderMaterial(DaggerfallUnity dfu)
+		{
+			return dfu != null && dfu.TerrainMaterialProvider != null
+				? dfu.TerrainMaterialProvider.CreateMaterial()
+				: null;
+		}
+
+		private static void ApplyAnimatedWaterSettings(Material material)
+		{
+			try
+			{
+				System.Type modType = FindLoadedType(AnimatedWaterModTypeName);
+				if (modType == null)
+					return;
+
+				System.Reflection.BindingFlags flags =
+					System.Reflection.BindingFlags.Static |
+					System.Reflection.BindingFlags.Public |
+					System.Reflection.BindingFlags.NonPublic;
+				System.Reflection.MethodInfo apply = modType.GetMethod("ApplyToMaterial", flags);
+				System.Reflection.MethodInfo markCacheDirty = modType.GetMethod("MarkCacheDirty", flags);
+				if (apply != null)
+					apply.Invoke(null, new object[] { material });
+				if (markCacheDirty != null)
+					markCacheDirty.Invoke(null, null);
+			}
+			catch (System.Exception exception)
+			{
+				if (!loggedMaterialSettingsFailure)
+				{
+					loggedMaterialSettingsFailure = true;
+					Debug.LogWarning("[DeepWaters.AnimatedWater] Could not apply Animated Water settings: " +
+						exception.Message);
+				}
+			}
+		}
+
+		private static System.Type FindLoadedType(string typeName)
+		{
+			System.Reflection.Assembly[] assemblies = System.AppDomain.CurrentDomain.GetAssemblies();
+			for (int i = 0; i < assemblies.Length; i++)
+			{
+				System.Type type = assemblies[i].GetType(typeName, false);
+				if (type != null)
+					return type;
+			}
+
+			return null;
+		}
+
+		private static bool RestoreAnimatedWaterProvider(DaggerfallUnity dfu)
+		{
+			if (dfu == null)
+				return false;
+
+			var manager = DaggerfallWorkshop.Game.Utility.ModSupport.ModManager.Instance;
+			var mod = manager != null ? manager.GetModFromGUID(AnimatedWaterGuid) : null;
+			if (mod == null || !mod.Enabled)
+				return false;
+
+			System.Type providerType = FindLoadedType(AnimatedWaterProviderTypeName);
+			if (providerType == null)
+				return false;
+
+			Shader tilemapShader = mod.GetAsset<Shader>("AnimatedWaterTilemap", false);
+			Shader textureArrayShader = mod.GetAsset<Shader>("AnimatedWaterTilemapTextureArray", false);
+			if (tilemapShader == null || textureArrayShader == null)
+				return false;
+
+			try
+			{
+				ITerrainMaterialProvider provider = System.Activator.CreateInstance(
+					providerType,
+					dfu.TerrainMaterialProvider,
+					tilemapShader,
+					textureArrayShader) as ITerrainMaterialProvider;
+				if (provider == null)
+					return false;
+				dfu.TerrainMaterialProvider = provider;
+
+				Debug.Log("[DeepWaters.AnimatedWater] Restored the Animated Water terrain material provider chain.");
+				return true;
+			}
+			catch (System.Exception exception)
+			{
+				Debug.LogWarning("[DeepWaters.AnimatedWater] Could not restore the terrain material provider: " +
+					exception.Message);
+				return false;
+			}
 		}
 
 		internal static bool RequiresVertexGrid(Material material)
@@ -1311,7 +1574,7 @@ namespace DeepWaters
 				return;
 
 			float oceanY;
-			bool belowSurface = DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) &&
+			bool belowSurface = DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY) &&
 				camera.transform.position.y < oceanY;
 			if (sourceProperties == null)
 				sourceProperties = new MaterialPropertyBlock();
@@ -1497,7 +1760,7 @@ namespace DeepWaters
 				return;
 
 			float oceanY;
-			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+			if (!DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY))
 				return;
 
 			Vector3 position = location.transform.position;

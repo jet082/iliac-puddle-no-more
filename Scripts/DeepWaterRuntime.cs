@@ -295,6 +295,7 @@ namespace DeepWaters
 			LastLocationSkippedCount = 0;
 			heavyWorkResumeTime = heavyWorkResumeAt;
 			postTransitionRefreshPending = refreshPending;
+			DeepWaterWorld.ClearCachedOceanSurfaceWorldY();
 			OnTransientReset?.Invoke();
         }
 

@@ -349,6 +349,25 @@ namespace DeepWaters
             EnsureCollider();
         }
 
+		internal bool CommitExternalMeshChanges()
+		{
+			if (mesh == null)
+				return false;
+
+			Vector3[] vertices = mesh.vertices;
+			int gridVertexCount = VertexGridSize * VertexGridSize;
+			if (vertexLocalY != null && vertices.Length >= gridVertexCount)
+			{
+				for (int z = 0; z < VertexGridSize; z++)
+					for (int x = 0; x < VertexGridSize; x++)
+						vertexLocalY[z, x] = vertices[z * VertexGridSize + x].y;
+			}
+
+			mesh.RecalculateBounds();
+			EnsureCollider();
+			return HasValidRuntimeCollider;
+		}
+
         private static bool IsFloorQuadWater(bool[,] holes, int quadX, int quadZ, int quadResolution)
         {
             if (holes == null || quadResolution <= 0)

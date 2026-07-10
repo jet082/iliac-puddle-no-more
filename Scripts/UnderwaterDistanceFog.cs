@@ -141,7 +141,7 @@ namespace DeepWaters
                 return false;
             }
 
-            bool hasOceanSurface = DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY);
+			bool hasOceanSurface = DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanSurfaceY);
             float localOceanSurfaceY;
             if (TryGetLocalOceanSurfaceWorldY(gameManager, camera, out localOceanSurfaceY))
             {

@@ -232,7 +232,7 @@ namespace DeepWaters
 
 			float oceanY;
 			float visibleDistance;
-			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) ||
+			if (!DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY) ||
 				gameManager.MainCamera.transform.position.y < oceanY - 0.05f)
 			{
 				visibleDistance = DeepWaterWorld.UnderwaterVisionDistance * 1.1f;

@@ -33,7 +33,7 @@ namespace DeepWaters
     /// Shared world/terrain helpers for systems that need to resolve ocean
     /// columns from arbitrary world X/Z positions.
     /// </summary>
-    internal static class DeepWaterWorld
+	public static class DeepWaterWorld
     {
         // Forward "emerge from the fog" spawns. A point past the fog reveal
         // distance (vision distance + how far the player swims in the next
@@ -97,7 +97,7 @@ namespace DeepWaters
                 return false;
 
             float oceanSurfaceY;
-            if (!TryGetOceanSurfaceWorldY(out oceanSurfaceY))
+			if (!TryGetCachedOceanSurfaceWorldY(out oceanSurfaceY))
                 return false;
 
             if (gameManager.MainCamera.transform.position.y < oceanSurfaceY - 0.25f)
@@ -251,44 +251,49 @@ namespace DeepWaters
                    viewport.y > 1f + viewportMargin;
         }
 
-        // Last successfully-computed ocean surface Y, used to bridge transient
-        // resolution failures (see below).
+		// Last successful surface Y bridges short streaming gaps for Deep Waters'
+		// own runtime systems. The public query below remains strict.
         private static bool hasCachedOceanSurfaceY;
         private static float cachedOceanSurfaceY;
 
-        internal static bool TryGetOceanSurfaceWorldY(out float oceanY)
-        {
-            oceanY = 0f;
+		/// <summary>Gets the logical ocean waterline in world coordinates.</summary>
+		public static bool TryGetOceanSurfaceWorldY(out float oceanY)
+		{
+			oceanY = 0f;
+			GameManager gameManager = GameManager.Instance;
+			if (gameManager == null ||
+				!gameManager.IsPlayingGame() ||
+				gameManager.StreamingWorld == null ||
+				DaggerfallUnity.Instance == null)
+			{
+				return false;
+			}
 
-            var gameManager = GameManager.Instance;
-            if (gameManager == null || !gameManager.IsPlayingGame() || gameManager.StreamingWorld == null || DaggerfallUnity.Instance == null)
-            {
-                // During a map-pixel crossing the terrain update can stall for
-                // ~1s, and these references / IsPlayingGame() briefly report
-                // unavailable for individual frames. Returning false here makes
-                // the swim driver read oceanY=0, decide the player isn't in
-                // water, drop swim state, re-enable gravity for that frame, and
-                // fling the swimmer — the repeated up/down surface bob. The
-                // ocean surface is effectively constant (it only moves on a
-                // vertical floating-origin shift, which is reflected the next
-                // successful call), so bridge the gap with the last good value
-                // instead of spuriously reporting "no ocean". (issue 5)
-                if (hasCachedOceanSurfaceY)
-                {
-                    oceanY = cachedOceanSurfaceY;
-                    return true;
-                }
+			var sampler = DaggerfallUnity.Instance.TerrainSampler;
+			oceanY = sampler.OceanElevation * gameManager.StreamingWorld.TerrainScale
+				+ gameManager.StreamingWorld.WorldCompensation.y;
+			cachedOceanSurfaceY = oceanY;
+			hasCachedOceanSurfaceY = true;
+			return true;
+		}
 
-                return false;
-            }
+		internal static bool TryGetCachedOceanSurfaceWorldY(out float oceanY)
+		{
+			if (TryGetOceanSurfaceWorldY(out oceanY))
+				return true;
 
-            var sampler = DaggerfallUnity.Instance.TerrainSampler;
-            oceanY = sampler.OceanElevation * gameManager.StreamingWorld.TerrainScale
-                   + gameManager.StreamingWorld.WorldCompensation.y;
-            cachedOceanSurfaceY = oceanY;
-            hasCachedOceanSurfaceY = true;
-            return true;
-        }
+			if (!hasCachedOceanSurfaceY)
+				return false;
+
+			oceanY = cachedOceanSurfaceY;
+			return true;
+		}
+
+		internal static void ClearCachedOceanSurfaceWorldY()
+		{
+			hasCachedOceanSurfaceY = false;
+			cachedOceanSurfaceY = 0f;
+		}
 
         internal static bool TryGetWaterColumn(float worldX, float worldZ, out DeepWaterColumn column)
         {
@@ -366,6 +371,31 @@ namespace DeepWaters
             column.SampleY = sy;
             return true;
         }
+
+		/// <summary>Gets an authoritative loaded Deep Waters column with positive depth.</summary>
+		public static bool TryGetWaterColumn(
+			float worldX,
+			float worldZ,
+			out DaggerfallTerrain terrain,
+			out float surfaceWorldY,
+			out float seafloorWorldY,
+			out float depth)
+		{
+			terrain = null;
+			surfaceWorldY = 0f;
+			seafloorWorldY = 0f;
+			depth = 0f;
+
+			DeepWaterColumn column;
+			if (!OutdoorSwimDriver.TryGetAuthoritativeWaterColumn(worldX, worldZ, out column))
+				return false;
+
+			terrain = column.DaggerfallTerrain;
+			surfaceWorldY = column.OceanWorldY;
+			seafloorWorldY = column.SeafloorWorldY;
+			depth = column.Depth;
+			return terrain != null;
+		}
 
         internal static bool TryGetRenderedSeafloorLocalY(
             DeepWaterColumn column,

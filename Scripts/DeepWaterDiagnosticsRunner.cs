@@ -706,7 +706,7 @@ namespace DeepWaters
                 player.transform.position += delta;
 
             float oceanY;
-            if (DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+			if (DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY))
             {
                 Vector3 pos = player.transform.position;
                 pos.y = oceanY + waterOffset;
@@ -732,7 +732,7 @@ namespace DeepWaters
                 player.transform.position += delta;
 
             float oceanY;
-            if (DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) && gameManager.PlayerEnterExit != null)
+			if (DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY) && gameManager.PlayerEnterExit != null)
                 OutdoorShoreExitAssist.TryMoveToShore(gameManager.PlayerEnterExit, oceanY, false, false);
 
             Physics.SyncTransforms();
@@ -765,7 +765,7 @@ namespace DeepWaters
 
 			float oceanSurfaceY;
 			DeepWaterColumn column;
-			return DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanSurfaceY) &&
+			return DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanSurfaceY) &&
 				player.transform.position.y <= oceanSurfaceY + 1f &&
 				OutdoorSwimDriver.TryGetPlayerWaterColumn(out column);
 		}
@@ -824,7 +824,7 @@ namespace DeepWaters
 				return false;
 
 			float oceanY;
-			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+			if (!DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY))
 				return false;
 
 			Vector3 origin = player.transform.position;
@@ -881,7 +881,7 @@ namespace DeepWaters
 				return false;
 
 			float oceanY;
-			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+			if (!DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY))
 				return false;
 
 			Vector3 origin = player.transform.position;
@@ -1057,7 +1057,7 @@ namespace DeepWaters
                 return;
 
             float oceanY;
-            DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY);
+			DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY);
             var dw = DeepWaters.Instance;
             DeepWaterColumn col;
             float colDepth = DeepWaterWorld.TryGetWaterColumn(cam.transform.position.x, cam.transform.position.z, out col) ? col.Depth : -1f;
@@ -1271,7 +1271,7 @@ namespace DeepWaters
                 return;
 
             float oceanY;
-            if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+			if (!DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY))
                 oceanY = player.y;
 
             var sb = new StringBuilder();
@@ -1664,7 +1664,7 @@ namespace DeepWaters
             PlayerProbe probe = CreateEmptyPlayerProbe();
 
             float oceanY;
-            if (DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY))
+			if (DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY))
                 probe.OceanY = oceanY;
 
             DeepWaterColumn column;

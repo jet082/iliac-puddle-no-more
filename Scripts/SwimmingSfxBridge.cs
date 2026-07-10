@@ -92,7 +92,7 @@ namespace DeepWaters
 			}
 
 			float oceanY;
-			if (!DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) || !OutdoorSwimDriver.IsPresentationUnderwater(oceanY))
+			if (!DeepWaterWorld.TryGetCachedOceanSurfaceWorldY(out oceanY) || !OutdoorSwimDriver.IsPresentationUnderwater(oceanY))
 			{
 				RemoveAudioFilter();
 				return;
