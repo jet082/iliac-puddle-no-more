@@ -465,6 +465,7 @@ namespace DeepWaters
                 return;
 
             DaggerfallTerrain.OnPromoteTerrainData += HandlePromote;
+			AnimatedWaterSurfaceBridge.Install();
             installed = true;
 		}
 
@@ -577,6 +578,8 @@ namespace DeepWaters
 			marker.BuiltMapPixelX = terrain.MapPixelX;
 			marker.BuiltMapPixelY = terrain.MapPixelY;
 			marker.BuiltHeightmapSamples = terrain.MapData.heightmapSamples;
+			marker.Terrain = terrain;
+			marker.SurfaceMesh = surfaceMesh;
 
             MeshFilter topFilter = EnsureSurfaceRenderer(
                 visualGO.transform,
@@ -648,6 +651,7 @@ namespace DeepWaters
             int n = SurfaceGridResolution;
             float sizeX = terrainData.size.x;
             float sizeZ = terrainData.size.z;
+			bool animatedWater = AnimatedWaterSurfaceBridge.IsAnimatedWaterMaterial(terrain.TerrainMaterial);
             bool hasOwnWater = DeepWaterWaterClassification.MapDataHasWater(terrain.MapData);
             bool hasBakedWater =
                 DeepWaterDistanceBake.IsLoaded &&
@@ -657,7 +661,8 @@ namespace DeepWaters
             var uvs = new List<Vector2>();
             var triangles = new List<int>();
 
-            if (IsFullWaterTile(terrain, hasOwnWater))
+			bool fullWaterTile = IsFullWaterTile(terrain, hasOwnWater);
+            if (fullWaterTile && !animatedWater)
             {
                 AppendSurfaceQuad(
                     0f, 1f,
@@ -671,20 +676,33 @@ namespace DeepWaters
             }
 
             bool[,] cells = new bool[n, n];
-            bool[,] used = new bool[n, n];
             DeepWaterTileData tile = terrain.GetComponent<DeepWaterTileData>();
 
-            for (int z = 0; z < n; z++)
-            {
-                for (int x = 0; x < n; x++)
-                {
-                    cells[z, x] = (hasOwnWater || hasBakedWater) &&
-                        IsSurfaceCellWater(terrain, terrainData, tile, x, z, n);
-                }
-            }
+			if (fullWaterTile)
+			{
+				for (int z = 0; z < n; z++)
+					for (int x = 0; x < n; x++)
+						cells[z, x] = true;
+			}
+			else
+			{
+				for (int z = 0; z < n; z++)
+				{
+					for (int x = 0; x < n; x++)
+					{
+						cells[z, x] = (hasOwnWater || hasBakedWater) &&
+							IsSurfaceCellWater(terrain, terrainData, tile, x, z, n);
+					}
+				}
 
-            AddNeighborWaterConnectedShoreline(terrain, cells, n);
-            AddLocalShorelineFeather(terrain, cells, n);
+				AddNeighborWaterConnectedShoreline(terrain, cells, n);
+				AddLocalShorelineFeather(terrain, cells, n);
+			}
+
+			if (animatedWater)
+				return CreateUniformSurfaceMesh(cells, n, sizeX, sizeZ);
+
+			bool[,] used = new bool[n, n];
 
             for (int z = 0; z < n; z++)
             {
@@ -855,6 +873,7 @@ namespace DeepWaters
             Shader shader = material != null ? material.shader : null;
             string name = shader != null ? shader.name : null;
             return name == "Daggerfall/TilemapTextureArray" ||
+				   name == "Daggerfall/AnimatedWater/TilemapTextureArray" ||
                    name == "DeepWaters/TilemapTextureArrayClipWater";
         }
 
@@ -1067,6 +1086,53 @@ namespace DeepWaters
             return mesh;
         }
 
+		private static Mesh CreateUniformSurfaceMesh(bool[,] cells, int resolution, float sizeX, float sizeZ)
+		{
+			int stride = resolution + 1;
+			var vertices = new List<Vector3>(stride * stride);
+			var uvs = new List<Vector2>(stride * stride);
+			var triangles = new List<int>(resolution * resolution * 6);
+
+			for (int z = 0; z <= resolution; z++)
+			{
+				float fracZ = z / (float)resolution;
+				for (int x = 0; x <= resolution; x++)
+				{
+					float fracX = x / (float)resolution;
+					vertices.Add(new Vector3(fracX * sizeX, 0f, fracZ * sizeZ));
+					uvs.Add(new Vector2(fracX, fracZ));
+				}
+			}
+
+			for (int z = 0; z < resolution; z++)
+			{
+				for (int x = 0; x < resolution; x++)
+				{
+					if (!cells[z, x])
+						continue;
+
+					int start = z * stride + x;
+					triangles.Add(start);
+					triangles.Add(start + stride + 1);
+					triangles.Add(start + 1);
+					triangles.Add(start);
+					triangles.Add(start + stride);
+					triangles.Add(start + stride + 1);
+				}
+			}
+
+			if (triangles.Count == 0)
+				return null;
+
+			Mesh mesh = CreateSurfaceMesh(vertices, uvs, triangles);
+			mesh.RecalculateNormals();
+			mesh.RecalculateTangents();
+			Bounds bounds = mesh.bounds;
+			bounds.Expand(new Vector3(0f, 4f, 0f));
+			mesh.bounds = bounds;
+			return mesh;
+		}
+
         private static void AppendSurfaceQuad(
             float fracX0,
             float fracX1,
@@ -1153,7 +1219,208 @@ namespace DeepWaters
         internal int BuiltMapPixelX = int.MinValue;
         internal int BuiltMapPixelY = int.MinValue;
         internal float[,] BuiltHeightmapSamples;
+		internal DaggerfallTerrain Terrain;
+		internal Mesh SurfaceMesh;
+
+		private void OnEnable()
+		{
+			AnimatedWaterSurfaceBridge.Register(this);
+		}
+
+		private void OnDisable()
+		{
+			AnimatedWaterSurfaceBridge.Unregister(this);
+		}
     }
+
+	internal static class AnimatedWaterSurfaceBridge
+	{
+		private const string AnimatedWaterShaderPrefix = "Daggerfall/AnimatedWater/";
+		private const int SourceLayer = 31;
+		private static readonly int AnimatedWaterEnabledProperty = Shader.PropertyToID("_DeepWatersAnimatedWaterEnabled");
+		private static readonly int AnimatedWaterTextureProperty = Shader.PropertyToID("_DeepWatersAnimatedWaterTexture");
+		private static readonly int AnimatedWaterTextureTexelSizeProperty = Shader.PropertyToID("_DeepWatersAnimatedWaterTexture_TexelSize");
+		private static readonly int TilemapTextureProperty = Shader.PropertyToID("_TilemapTex");
+		private static readonly List<DeepWatersWaterSurface> surfaces = new List<DeepWatersWaterSurface>();
+		private static RenderTexture sourceTexture;
+		private static Camera sourceCamera;
+		private static Texture2D allWaterTilemap;
+		private static MaterialPropertyBlock sourceProperties;
+		private static bool renderingSource;
+		private static bool installed;
+
+		internal static void Install()
+		{
+			if (installed)
+				return;
+
+			Camera.onPreRender += HandleCameraPreRender;
+			installed = true;
+		}
+
+		internal static bool IsAnimatedWaterMaterial(Material material)
+		{
+			return material != null && material.shader != null &&
+				material.shader.name.StartsWith(AnimatedWaterShaderPrefix);
+		}
+
+		internal static void Register(DeepWatersWaterSurface surface)
+		{
+			if (surface != null && !surfaces.Contains(surface))
+				surfaces.Add(surface);
+		}
+
+		internal static void Unregister(DeepWatersWaterSurface surface)
+		{
+			surfaces.Remove(surface);
+		}
+
+		private static void HandleCameraPreRender(Camera camera)
+		{
+			if (renderingSource)
+				return;
+
+			GameManager gameManager = GameManager.Instance;
+			Camera mainCamera = gameManager != null ? gameManager.MainCamera : null;
+			if (camera == null || camera != mainCamera)
+				return;
+
+			Shader.SetGlobalFloat(AnimatedWaterEnabledProperty, 0f);
+			EnsureSourceTexture(camera);
+			EnsureSourceCamera(camera);
+			if (sourceTexture == null || sourceCamera == null)
+				return;
+
+			float oceanY;
+			bool belowSurface = DeepWaterWorld.TryGetOceanSurfaceWorldY(out oceanY) &&
+				camera.transform.position.y < oceanY;
+			if (sourceProperties == null)
+				sourceProperties = new MaterialPropertyBlock();
+			sourceProperties.Clear();
+			sourceProperties.SetTexture(TilemapTextureProperty, GetAllWaterTilemap());
+			int drawCount = 0;
+			for (int i = surfaces.Count - 1; i >= 0; i--)
+			{
+				DeepWatersWaterSurface surface = surfaces[i];
+				if (surface == null)
+				{
+					surfaces.RemoveAt(i);
+					continue;
+				}
+
+				Material material = surface.Terrain != null ? surface.Terrain.TerrainMaterial : null;
+				if (surface.SurfaceMesh == null || !IsAnimatedWaterMaterial(material))
+					continue;
+
+				Graphics.DrawMesh(
+					surface.SurfaceMesh,
+					surface.transform.localToWorldMatrix,
+					material,
+					SourceLayer,
+					sourceCamera,
+					0,
+					sourceProperties,
+					ShadowCastingMode.Off,
+					false,
+					null,
+					LightProbeUsage.Off,
+					null);
+				drawCount++;
+			}
+
+			if (drawCount == 0)
+				return;
+
+			bool previousInvertCulling = GL.invertCulling;
+			try
+			{
+				renderingSource = true;
+				GL.invertCulling = belowSurface;
+				sourceCamera.Render();
+			}
+			finally
+			{
+				GL.invertCulling = previousInvertCulling;
+				renderingSource = false;
+			}
+
+			Shader.SetGlobalTexture(AnimatedWaterTextureProperty, sourceTexture);
+			Shader.SetGlobalVector(
+				AnimatedWaterTextureTexelSizeProperty,
+				new Vector4(
+					1f / sourceTexture.width,
+					1f / sourceTexture.height,
+					sourceTexture.width,
+					sourceTexture.height));
+			Shader.SetGlobalFloat(AnimatedWaterEnabledProperty, 1f);
+		}
+
+		private static void EnsureSourceCamera(Camera camera)
+		{
+			if (sourceCamera == null)
+			{
+				GameObject sourceObject = new GameObject("Deep Waters Animated Water Camera")
+				{
+					hideFlags = HideFlags.HideAndDontSave,
+				};
+				sourceCamera = sourceObject.AddComponent<Camera>();
+			}
+
+			sourceCamera.CopyFrom(camera);
+			sourceCamera.transform.SetPositionAndRotation(
+				camera.transform.position,
+				camera.transform.rotation);
+			sourceCamera.targetTexture = sourceTexture;
+			sourceCamera.cullingMask = 1 << SourceLayer;
+			sourceCamera.clearFlags = CameraClearFlags.SolidColor;
+			sourceCamera.backgroundColor = Color.clear;
+			sourceCamera.depthTextureMode = DepthTextureMode.None;
+			sourceCamera.renderingPath = RenderingPath.Forward;
+			sourceCamera.allowHDR = false;
+			sourceCamera.allowMSAA = false;
+			sourceCamera.enabled = false;
+		}
+
+		private static Texture2D GetAllWaterTilemap()
+		{
+			if (allWaterTilemap != null)
+				return allWaterTilemap;
+
+			allWaterTilemap = new Texture2D(1, 1, TextureFormat.RGBA32, false, true)
+			{
+				name = "Deep Waters All-Water Tilemap",
+				filterMode = FilterMode.Point,
+				wrapMode = TextureWrapMode.Clamp,
+				hideFlags = HideFlags.HideAndDontSave,
+			};
+			allWaterTilemap.SetPixel(0, 0, Color.clear);
+			allWaterTilemap.Apply(false, true);
+			return allWaterTilemap;
+		}
+
+		private static void EnsureSourceTexture(Camera camera)
+		{
+			RenderTexture target = camera.targetTexture;
+			int width = Mathf.Max(1, target != null ? target.width : camera.pixelWidth);
+			int height = Mathf.Max(1, target != null ? target.height : camera.pixelHeight);
+			if (sourceTexture != null && sourceTexture.width == width && sourceTexture.height == height)
+				return;
+
+			if (sourceTexture != null)
+			{
+				sourceTexture.Release();
+				Object.Destroy(sourceTexture);
+			}
+
+			sourceTexture = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32)
+			{
+				name = "Deep Waters Animated Water Source",
+				filterMode = FilterMode.Bilinear,
+				wrapMode = TextureWrapMode.Clamp,
+			};
+			sourceTexture.Create();
+		}
+	}
 
 	/// <summary>
 	/// DFU places player-owned ships as ordinary exterior locations, using the

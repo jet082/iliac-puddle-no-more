@@ -80,6 +80,16 @@
             "Name": "World of Daggerfall - Terrain",
             "IsOptional": true,
             "IsPeer": false
+        },
+        {
+            "Name": "animated water",
+            "IsOptional": true,
+            "IsPeer": false
+        },
+        {
+            "Name": "Animated Water",
+            "IsOptional": true,
+            "IsPeer": false
         }
     ]
 }

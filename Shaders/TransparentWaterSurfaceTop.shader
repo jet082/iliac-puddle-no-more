@@ -61,7 +61,9 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
 
             sampler2D _MainTex;
             float4 _MainTex_ST;
-            sampler2D_float _CameraDepthTexture;
+			sampler2D_float _CameraDepthTexture;
+			sampler2D _DeepWatersAnimatedWaterTexture;
+			float4 _DeepWatersAnimatedWaterTexture_TexelSize;
 
             fixed4 _Color;
             fixed4 _UnderwaterFogColor;
@@ -77,6 +79,7 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
             float _ScrollY;
             float _DeepWatersUnderwater;
             float _DeepWatersDepthValid;
+			float _DeepWatersAnimatedWaterEnabled;
 
             struct appdata
             {
@@ -116,9 +119,19 @@ Shader "DeepWaters/TransparentWaterSurfaceTop"
                 clip(0.5 - _DeepWatersUnderwater);
                 clip(_WorldSpaceCameraPos.y - i.worldPos.y + 0.02);
 
-                fixed4 wave = tex2D(_MainTex, i.uv);
-                fixed3 legacyRgb = wave.rgb * _Color.rgb;
-                fixed3 surfaceRgb = lerp(legacyRgb, _Color.rgb * 0.32, 0.22);
+				fixed4 wave = tex2D(_MainTex, i.uv);
+				fixed3 legacyRgb = wave.rgb * _Color.rgb;
+				fixed3 surfaceRgb = lerp(legacyRgb, _Color.rgb * 0.32, 0.22);
+				if (_DeepWatersAnimatedWaterEnabled > 0.5)
+				{
+					float2 sourceUv = i.screenPos.xy / i.screenPos.w;
+					#if UNITY_UV_STARTS_AT_TOP
+					if (_DeepWatersAnimatedWaterTexture_TexelSize.y < 0)
+						sourceUv.y = 1.0 - sourceUv.y;
+					#endif
+					fixed4 animatedWater = tex2D(_DeepWatersAnimatedWaterTexture, sourceUv);
+					surfaceRgb = lerp(surfaceRgb, animatedWater.rgb, animatedWater.a);
+				}
 
                 // How much water the view ray crosses before it reaches the scene
                 // behind the surface (the seafloor) — i.e. how much water you are

@@ -55,8 +55,10 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
             #pragma target 3.0
             #include "UnityCG.cginc"
 
-            sampler2D _MainTex;
-            float4 _MainTex_ST;
+			sampler2D _MainTex;
+			float4 _MainTex_ST;
+			sampler2D _DeepWatersAnimatedWaterTexture;
+			float4 _DeepWatersAnimatedWaterTexture_TexelSize;
 
             fixed4 _Color;
             fixed4 _UnderwaterFogColor;
@@ -68,6 +70,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
             float _ScrollX;
             float _ScrollY;
             float _DeepWatersUnderwater;
+			float _DeepWatersAnimatedWaterEnabled;
 
             struct appdata
             {
@@ -80,6 +83,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
                 float4 pos : SV_POSITION;
                 float2 uv : TEXCOORD0;
                 float3 worldPos : TEXCOORD1;
+				float4 screenPos : TEXCOORD2;
             };
 
             v2f vert(appdata v)
@@ -88,6 +92,7 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.uv = TRANSFORM_TEX(v.uv, _MainTex) + float2(_ScrollX, _ScrollY) * _Time.y;
                 o.worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;
+				o.screenPos = ComputeScreenPos(o.pos);
                 return o;
             }
 
@@ -107,11 +112,26 @@ Shader "DeepWaters/TransparentWaterSurfaceUnderside"
                 undersideOpacity = saturate(max(undersideOpacity, horizonFade));
                 clip(undersideOpacity - 0.001);
 
-                fixed4 wave = tex2D(_MainTex, i.uv);
+				fixed3 baseRgb;
+				if (_DeepWatersAnimatedWaterEnabled > 0.5)
+				{
+					float2 sourceUv = i.screenPos.xy / i.screenPos.w;
+					#if UNITY_UV_STARTS_AT_TOP
+					if (_DeepWatersAnimatedWaterTexture_TexelSize.y < 0)
+						sourceUv.y = 1.0 - sourceUv.y;
+					#endif
+					fixed4 animatedWater = tex2D(_DeepWatersAnimatedWaterTexture, sourceUv);
+					fixed3 legacyRgb = tex2D(_MainTex, i.uv).rgb * _Color.rgb;
+					baseRgb = lerp(legacyRgb, animatedWater.rgb, animatedWater.a);
+				}
+				else
+				{
+					baseRgb = tex2D(_MainTex, i.uv).rgb * _Color.rgb;
+				}
                 // Converge to the SAME ambient the fog volume saturates to
                 // (_HorizonColor, pushed per frame), so the distant underside
                 // and the fogged void are indistinguishable at range.
-                fixed3 surfaceRgb = lerp(wave.rgb * _Color.rgb, _HorizonColor.rgb, horizonFade);
+				fixed3 surfaceRgb = lerp(baseRgb, _HorizonColor.rgb, horizonFade);
 
                 fixed4 col;
                 col.rgb = lerp(

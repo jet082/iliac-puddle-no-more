@@ -1,5 +1,5 @@
 {
-    "Version": "1.0.0",
+    "Version": "1.1.0",
     "Sections": [
         {
             "Name": "General",
@@ -32,7 +32,7 @@
                 {
                     "Min": 0.0,
                     "Max": 1.0,
-                    "Value": 0.5,
+                    "Value": 0.3,
                     "Name": "EnemyFrequency",
                     "Description": "Enemy frequency rate",
                     "$version": "v1",
@@ -181,7 +181,7 @@
                 {
                     "Min": 0.0,
                     "Max": 1.0,
-                    "Value": 0.5,
+                    "Value": 0.3,
                     "Name": "UnderwaterFogDistance",
                     "Description": "Underwater fog view distance",
                     "$version": "v1",
