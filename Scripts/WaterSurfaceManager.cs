@@ -449,6 +449,7 @@ namespace DeepWaters
         private const string TopSurfaceChildName = "DeepWaters_Surface_Top";
         private const string UndersideSurfaceChildName = "DeepWaters_Surface_Underside";
         private const string GeneratedMeshName = "DeepWaters.SurfaceMesh";
+		private const string SharedAnimatedFullMeshName = "DeepWaters.SurfaceMesh.AnimatedFull";
         private const int SurfaceGridResolution = 128;
         private const int ShorelineSeedScanCells = 32;
         private const int ShorelineSurfaceFeatherCells = 4;
@@ -458,6 +459,7 @@ namespace DeepWaters
         private const float SurfaceTriggerThickness = 0.5f;
 
         private static bool installed;
+		private static Mesh sharedAnimatedFullSurfaceMesh;
 
         internal static void Install()
         {
@@ -651,7 +653,7 @@ namespace DeepWaters
             int n = SurfaceGridResolution;
             float sizeX = terrainData.size.x;
             float sizeZ = terrainData.size.z;
-			bool animatedWater = AnimatedWaterSurfaceBridge.IsAnimatedWaterMaterial(terrain.TerrainMaterial);
+			bool animatedVertexWaves = AnimatedWaterSurfaceBridge.RequiresVertexGrid(terrain.TerrainMaterial);
             bool hasOwnWater = DeepWaterWaterClassification.MapDataHasWater(terrain.MapData);
             bool hasBakedWater =
                 DeepWaterDistanceBake.IsLoaded &&
@@ -662,7 +664,7 @@ namespace DeepWaters
             var triangles = new List<int>();
 
 			bool fullWaterTile = IsFullWaterTile(terrain, hasOwnWater);
-            if (fullWaterTile && !animatedWater)
+			if (fullWaterTile && !animatedVertexWaves)
             {
                 AppendSurfaceQuad(
                     0f, 1f,
@@ -674,32 +676,25 @@ namespace DeepWaters
                     triangles);
                 return CreateSurfaceMesh(vertices, uvs, triangles);
             }
+			if (fullWaterTile)
+				return GetSharedAnimatedFullSurfaceMesh(n, sizeX, sizeZ);
 
             bool[,] cells = new bool[n, n];
             DeepWaterTileData tile = terrain.GetComponent<DeepWaterTileData>();
 
-			if (fullWaterTile)
+			for (int z = 0; z < n; z++)
 			{
-				for (int z = 0; z < n; z++)
-					for (int x = 0; x < n; x++)
-						cells[z, x] = true;
-			}
-			else
-			{
-				for (int z = 0; z < n; z++)
+				for (int x = 0; x < n; x++)
 				{
-					for (int x = 0; x < n; x++)
-					{
-						cells[z, x] = (hasOwnWater || hasBakedWater) &&
-							IsSurfaceCellWater(terrain, terrainData, tile, x, z, n);
-					}
+					cells[z, x] = (hasOwnWater || hasBakedWater) &&
+						IsSurfaceCellWater(terrain, terrainData, tile, x, z, n);
 				}
-
-				AddNeighborWaterConnectedShoreline(terrain, cells, n);
-				AddLocalShorelineFeather(terrain, cells, n);
 			}
 
-			if (animatedWater)
+			AddNeighborWaterConnectedShoreline(terrain, cells, n);
+			AddLocalShorelineFeather(terrain, cells, n);
+
+			if (animatedVertexWaves)
 				return CreateUniformSurfaceMesh(cells, n, sizeX, sizeZ);
 
 			bool[,] used = new bool[n, n];
@@ -1133,6 +1128,22 @@ namespace DeepWaters
 			return mesh;
 		}
 
+		private static Mesh GetSharedAnimatedFullSurfaceMesh(int resolution, float sizeX, float sizeZ)
+		{
+			if (sharedAnimatedFullSurfaceMesh == null)
+			{
+				bool[,] cells = new bool[resolution, resolution];
+				for (int z = 0; z < resolution; z++)
+					for (int x = 0; x < resolution; x++)
+						cells[z, x] = true;
+
+				sharedAnimatedFullSurfaceMesh = CreateUniformSurfaceMesh(cells, resolution, sizeX, sizeZ);
+				sharedAnimatedFullSurfaceMesh.name = SharedAnimatedFullMeshName;
+			}
+
+			return sharedAnimatedFullSurfaceMesh;
+		}
+
         private static void AppendSurfaceQuad(
             float fracX0,
             float fracX1,
@@ -1241,6 +1252,7 @@ namespace DeepWaters
 		private static readonly int AnimatedWaterTextureProperty = Shader.PropertyToID("_DeepWatersAnimatedWaterTexture");
 		private static readonly int AnimatedWaterTextureTexelSizeProperty = Shader.PropertyToID("_DeepWatersAnimatedWaterTexture_TexelSize");
 		private static readonly int TilemapTextureProperty = Shader.PropertyToID("_TilemapTex");
+		private static readonly int VertexWaveHeightProperty = Shader.PropertyToID("_VertWaveHeight");
 		private static readonly List<DeepWatersWaterSurface> surfaces = new List<DeepWatersWaterSurface>();
 		private static RenderTexture sourceTexture;
 		private static Camera sourceCamera;
@@ -1262,6 +1274,13 @@ namespace DeepWaters
 		{
 			return material != null && material.shader != null &&
 				material.shader.name.StartsWith(AnimatedWaterShaderPrefix);
+		}
+
+		internal static bool RequiresVertexGrid(Material material)
+		{
+			return IsAnimatedWaterMaterial(material) &&
+				material.HasProperty(VertexWaveHeightProperty) &&
+				Mathf.Abs(material.GetFloat(VertexWaveHeightProperty)) > 0.0001f;
 		}
 
 		internal static void Register(DeepWatersWaterSurface surface)
@@ -1412,7 +1431,7 @@ namespace DeepWaters
 				Object.Destroy(sourceTexture);
 			}
 
-			sourceTexture = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32)
+			sourceTexture = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
 			{
 				name = "Deep Waters Animated Water Source",
 				filterMode = FilterMode.Bilinear,
