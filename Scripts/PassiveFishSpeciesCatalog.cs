@@ -542,8 +542,43 @@ namespace DeepWaters
 			if (species.IconTexture == null)
 				return false;
 
-			species.IconTexture.filterMode = FilterMode.Point;
+			species.IconTexture = RestoreIconAspect(species.IconTexture, species.BillboardAspect);
 			return true;
+		}
+
+		private static Texture2D RestoreIconAspect(Texture2D source, float aspect)
+		{
+			int width = Mathf.Max(1, Mathf.RoundToInt(source.height * aspect));
+			if (width == source.width)
+				return source;
+
+			source.filterMode = FilterMode.Point;
+			RenderTexture previous = RenderTexture.active;
+			RenderTexture target = RenderTexture.GetTemporary(width, source.height, 0, RenderTextureFormat.ARGB32);
+			Texture2D corrected = null;
+			try
+			{
+				Graphics.Blit(source, target);
+				RenderTexture.active = target;
+				corrected = new Texture2D(width, source.height, TextureFormat.ARGB32, false);
+				corrected.ReadPixels(new Rect(0, 0, width, source.height), 0, 0);
+				corrected.Apply(false, false);
+				corrected.name = source.name + " (Deep Waters Aspect)";
+				corrected.filterMode = FilterMode.Point;
+				corrected.hideFlags = HideFlags.HideAndDontSave;
+				return corrected;
+			}
+			catch
+			{
+				if (corrected != null)
+					Object.Destroy(corrected);
+				return source;
+			}
+			finally
+			{
+				RenderTexture.active = previous;
+				RenderTexture.ReleaseTemporary(target);
+			}
 		}
 
 		internal static Texture2D GetFishIconTexture(PassiveFishSpecies species)
