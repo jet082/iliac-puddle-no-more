@@ -1,6 +1,6 @@
 # Deep Waters API
 
-Deep Waters exposes stable, feature-neutral APIs for mods that need to classify ocean water, inspect a loaded water column, attach content to the visible surface, observe streamed surface or seafloor builds, edit the seafloor, or react to the player's outdoor swim state.
+Deep Waters exposes stable, feature-neutral APIs for mods that need to classify ocean water, inspect a loaded water column, attach content to the visible surface, observe streamed surface or seafloor builds, edit the seafloor, reserve decoration-free areas, or react to the player's outdoor swim state.
 
 The complete API described here is available in **Iliac Puddle No More 1.2.x+**.
 
@@ -31,6 +31,7 @@ All public types are in the `DeepWaters` namespace.
 | `DeepWaterWorld` | Logical ocean elevation and authoritative loaded water-column queries. |
 | `WaterSurfaceManager` | Visible surface lifecycle, build validation, root/renderer/trigger access, and refresh requests. |
 | `DeepWaterFloorBuilder` | Streamed seafloor lifecycle, mesh/collider access, raycasts, commits, and refresh requests. |
+| `UnderwaterDecorations` | World-space placement suppression and deterministic tile-decoration refreshes. |
 | `DeepWaterPlayer` | Read-only outdoor water/swim state, player-column queries, and swim-suppression integration. |
 | `UnderwaterEnemySpawner` | Defensive snapshots of the complete underwater encounter roster. |
 
@@ -289,6 +290,38 @@ DeepWaterFloorBuilder.RefreshLoadedTiles(force: true);
 - With `force`, Deep Waters rebuilds from source bathymetry and raises both lifecycle events again.
 - A request can be deferred or rejected while terrain mutation is unsafe. Treat `OnSeafloorBuilt` as confirmation.
 - A forced rebuild replaces external mesh edits, so reapply them from `OnSeafloorBuilt`.
+
+## Decoration placement
+
+`UnderwaterDecorations.ShouldSuppressDecoration` receives the owning terrain and a proposed world-space base position. Return `true` to keep that position clear. Multiple subscribers are combined, and subscriber exceptions are isolated and logged.
+
+```csharp
+void OnEnable()
+{
+	UnderwaterDecorations.ShouldSuppressDecoration += IsInsideReservedArea;
+}
+
+void OnDisable()
+{
+	UnderwaterDecorations.ShouldSuppressDecoration -= IsInsideReservedArea;
+}
+
+bool IsInsideReservedArea(DaggerfallTerrain terrain, Vector3 worldPosition)
+{
+	return terrain == reservedTerrain &&
+		Vector2.Distance(
+			new Vector2(worldPosition.x, worldPosition.z),
+			reservedCentre) < reservedRadius;
+}
+```
+
+After adding or changing a reservation on an already-decorated tile, request a deterministic rebuild:
+
+```csharp
+UnderwaterDecorations.RefreshLoadedTile(terrain);
+```
+
+The refresh removes only Deep Waters' owned decoration batch. Unrelated scene objects are untouched.
 
 ## Player and swim state
 

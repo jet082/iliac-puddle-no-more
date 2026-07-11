@@ -13,8 +13,11 @@ namespace DeepWaters
     /// Spawns and manages underwater decoration billboards.
     /// Uses a worker queue processed at a safe point in the engine's update cycle.
     /// </summary>
-    internal static class UnderwaterDecorations
+	public static class UnderwaterDecorations
     {
+		/// <summary>Return true to suppress a decoration at the supplied world-space position.</summary>
+		public static event System.Func<DaggerfallTerrain, Vector3, bool> ShouldSuppressDecoration;
+
         private const int MaxTilesPerWorkCycle = 1;
         private const int MaxDecorationsPerTileHardCap = 2304;
         private const int SampleStride = 3;
@@ -35,6 +38,7 @@ namespace DeepWaters
         private static bool installed;
         private static bool loggedVisualHeightFailure;
 		private static int lastProcessFrame = -1;
+		private static bool decorationSuppressionFailureLogged;
 
         internal static int PendingWorkCount
         {
@@ -134,6 +138,63 @@ namespace DeepWaters
 
             EnqueueLoadedPlayerArea();
         }
+
+		/// <summary>Removes this mod's owned decoration batch and queues a deterministic rebuild.</summary>
+		public static void RefreshLoadedTile(DaggerfallTerrain terrain)
+		{
+			if (terrain == null)
+				return;
+
+			RemoveDecoration(terrain);
+			ClearDecorationMarker(terrain);
+			Enqueue(terrain);
+		}
+
+		internal static List<UnderwaterDecorationPlacementInfo> FilterPlacements(
+			Transform parent,
+			List<UnderwaterDecorationPlacementInfo> positions)
+		{
+			System.Func<DaggerfallTerrain, Vector3, bool> callbacks = ShouldSuppressDecoration;
+			if (parent == null || positions == null || positions.Count == 0 || callbacks == null)
+				return positions;
+
+			DaggerfallTerrain terrain = parent.GetComponentInParent<DaggerfallTerrain>();
+			System.Delegate[] subscribers = callbacks.GetInvocationList();
+			for (int i = positions.Count - 1; i >= 0; i--)
+			{
+				Vector3 worldPosition = parent.TransformPoint(positions[i].LocalPosition);
+				if (EvaluateDecorationSuppression(subscribers, terrain, worldPosition))
+					positions.RemoveAt(i);
+			}
+
+			return positions;
+		}
+
+		private static bool EvaluateDecorationSuppression(
+			System.Delegate[] subscribers,
+			DaggerfallTerrain terrain,
+			Vector3 worldPosition)
+		{
+			bool suppress = false;
+			for (int i = 0; i < subscribers.Length; i++)
+			{
+				try
+				{
+					suppress |= ((System.Func<DaggerfallTerrain, Vector3, bool>)subscribers[i])(terrain, worldPosition);
+				}
+				catch (System.Exception exception)
+				{
+					if (!decorationSuppressionFailureLogged)
+					{
+						decorationSuppressionFailureLogged = true;
+						Debug.LogWarning("[DeepWaters.Decorations] ShouldSuppressDecoration subscriber threw: " +
+							exception.Message);
+					}
+				}
+			}
+
+			return suppress;
+		}
 
         private static void ResetRuntimeState()
         {
@@ -663,17 +724,23 @@ namespace DeepWaters
 				if (child == null || child.name != UnderwaterDecorationBatchFactory.GroupName)
 					continue;
 
+				child.name = UnderwaterDecorationBatchFactory.GroupName + "_Removing";
 				child.gameObject.SetActive(false);
 				Object.Destroy(child.gameObject);
 			}
         }
 
-        private static void ClearDecorationMarker(DaggerfallTerrain dfTerrain)
-        {
-            var marker = dfTerrain.GetComponent<DecorationMarker>();
-            if (marker != null)
-                Object.Destroy(marker);
-        }
+		private static void ClearDecorationMarker(DaggerfallTerrain dfTerrain)
+		{
+			var marker = dfTerrain.GetComponent<DecorationMarker>();
+			if (marker != null)
+			{
+				marker.MapPixelX = int.MinValue;
+				marker.MapPixelY = int.MinValue;
+				marker.FloorBuildVersion = -1;
+				Object.Destroy(marker);
+			}
+		}
 
         private static int RollDecorationPasses()
         {

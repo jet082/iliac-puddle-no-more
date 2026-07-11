@@ -152,6 +152,9 @@ namespace DeepWaters
         {
             if (terrainParent == null || positions == null || positions.Count == 0)
                 return null;
+			positions = UnderwaterDecorations.FilterPlacements(terrainParent, positions);
+			if (positions.Count == 0)
+				return null;
 
             GameObject groupObject = CreateDecorationGroup(terrainParent);
             Transform group = groupObject.transform;
