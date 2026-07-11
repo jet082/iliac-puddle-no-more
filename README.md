@@ -2,7 +2,7 @@
 
 Deep Waters exposes stable, feature-neutral APIs for mods that need to classify ocean water, inspect a loaded water column, attach content to the visible surface, observe streamed surface or seafloor builds, edit the seafloor, or react to the player's outdoor swim state.
 
-The complete API described here is available in **Iliac Puddle No More 1.2.2+**. The distance-bake and seafloor APIs were introduced in 1.2.1.
+The complete API described here is available in **Iliac Puddle No More 1.2.x+**.
 
 ## Declaring the dependency
 
@@ -32,8 +32,13 @@ All public types are in the `DeepWaters` namespace.
 | `WaterSurfaceManager` | Visible surface lifecycle, build validation, root/renderer/trigger access, and refresh requests. |
 | `DeepWaterFloorBuilder` | Streamed seafloor lifecycle, mesh/collider access, raycasts, commits, and refresh requests. |
 | `DeepWaterPlayer` | Read-only outdoor water/swim state, player-column queries, and swim-suppression integration. |
+| `UnderwaterEnemySpawner` | Defensive snapshots of the complete underwater encounter roster. |
 
 All Unity calls and event handlers must run on Unity's main thread.
+
+## Underwater encounter roster
+
+`UnderwaterEnemySpawner.GetEnemyRoster()` returns a new `MobileTypes[]` containing every enemy Deep Waters can place underwater through its normal, rare-guard, and boss pools. Callers can safely reorder or weight their copy; changing it does not affect Deep Waters.
 
 ## Coordinates and waterlines
 
@@ -388,6 +393,9 @@ Type floorApi = dependency != null
 Type playerApi = dependency != null
 	? dependency.GetCompiledType("DeepWaters.DeepWaterPlayer")
 	: null;
+Type enemyApi = dependency != null
+	? dependency.GetCompiledType("DeepWaters.UnderwaterEnemySpawner")
+	: null;
 ```
 
 Public event signatures are:
@@ -402,7 +410,7 @@ Public API parameters use DFU, Unity, base-library, and primitive types so refle
 
 ## Compatibility rules
 
-- Require `iliac puddle no more` 1.2.2 or newer for the surface, world-column, and player APIs. The bake and seafloor API alone require 1.2.1.
+- Require `iliac puddle no more` 1.2.x or newer.
 - Validate map coordinates, currentness, and build version before reusing streamed surface or floor state.
 - Keep callbacks short; player-adjacent terrain builds and player-state transitions run on the main thread.
 - Unsubscribe every event or predicate when your component is disabled or destroyed.

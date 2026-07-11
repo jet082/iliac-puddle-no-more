@@ -259,8 +259,11 @@ namespace DeepWaters
         private const string BoatEffectBundleName = "ImOnABoat";
         private const string ComeSailAwayBoatEffectBundleName = "I'm On A Boat";
 
-        private readonly OutdoorSwimDfuBridge dfuBridge = new OutdoorSwimDfuBridge();
-        private bool currentlyForged;
+		private readonly OutdoorSwimDfuBridge dfuBridge = new OutdoorSwimDfuBridge();
+		private bool currentlyForged;
+		private UnderwaterFog overriddenUnderwaterFog;
+		private float savedUnderwaterFogDensityMin;
+		private float savedUnderwaterFogDensityMax;
 		private bool swimmingSuppressed;
 		private static bool exteriorContextActive;
 
@@ -308,12 +311,14 @@ namespace DeepWaters
         {
             SaveLoadManager.OnStartLoad += OnSaveLoad;
             SaveLoadManager.OnLoad += OnSaveLoad;
+			PlayerEnterExit.OnPreTransition += OnPreTransition;
         }
 
         void OnDestroy()
         {
             SaveLoadManager.OnStartLoad -= OnSaveLoad;
             SaveLoadManager.OnLoad -= OnSaveLoad;
+			PlayerEnterExit.OnPreTransition -= OnPreTransition;
         }
 
         void OnDisable()
@@ -332,6 +337,19 @@ namespace DeepWaters
             ClearOutdoorWaterState();
 			DeepWaterPlayer.FlushStateChange();
         }
+
+		private void OnPreTransition(PlayerEnterExit.TransitionEventArgs args)
+		{
+			if (args == null ||
+				(args.TransitionType != PlayerEnterExit.TransitionType.ToDungeonInterior &&
+				 args.TransitionType != PlayerEnterExit.TransitionType.ToBuildingInterior))
+			{
+				return;
+			}
+
+			if (currentlyForged)
+				Restore();
+		}
 
         void Update()
         {
@@ -574,14 +592,15 @@ namespace DeepWaters
 				levitateMotor.IsSwimming = isSwimming;
 		}
 
-        private void Restore()
-        {
-            var pex = GameManager.Instance.PlayerEnterExit;
+		private void Restore()
+		{
+			var pex = GameManager.Instance.PlayerEnterExit;
             dfuBridge.RestoreDungeonState(pex);
             dfuBridge.ApplyWaterAudioState(pex, NoWaterSentinel, PlayerMotor.OnExteriorWaterMethod.None, false);
 			ApplyDfuSwimFlags(pex, false);
-            pex.UnderwaterFog?.UpdateFog(NoWaterSentinel);
-            RestoreSceneFogColor();
+			pex.UnderwaterFog?.UpdateFog(NoWaterSentinel);
+			RestoreUnderwaterFogSettings();
+			RestoreSceneFogColor();
             currentlyForged = false;
             ResetHeadWaterState(false);
             // Crouch ("descend") presses while swimming can latch DFU's real
@@ -623,12 +642,13 @@ namespace DeepWaters
         /// permanently dead. Just drop our OWN forge tracking so Update
         /// re-forges fresh for outdoor water; leave DFU's fields alone.
         /// </summary>
-        private void ClearOutdoorWaterState()
-        {
+		private void ClearOutdoorWaterState()
+		{
 			swimmingSuppressed = false;
 			exteriorContextActive = false;
 			DeepWaterPlayer.ClearState();
-            GameManager gameManager = GameManager.Instance;
+			RestoreUnderwaterFogSettings();
+			GameManager gameManager = GameManager.Instance;
             if (gameManager == null || gameManager.PlayerEnterExit == null)
                 return;
 
@@ -1087,10 +1107,18 @@ namespace DeepWaters
             ApplyNeutralUnderwaterFogColor();
         }
 
-        private static void ApplyUnderwaterFogSettings(PlayerEnterExit pex)
-        {
-            if (pex == null || pex.UnderwaterFog == null || DeepWaters.Instance == null)
-                return;
+		private void ApplyUnderwaterFogSettings(PlayerEnterExit pex)
+		{
+			if (pex == null || pex.UnderwaterFog == null || DeepWaters.Instance == null)
+				return;
+
+			if (overriddenUnderwaterFog != pex.UnderwaterFog)
+			{
+				RestoreUnderwaterFogSettings();
+				overriddenUnderwaterFog = pex.UnderwaterFog;
+				savedUnderwaterFogDensityMin = overriddenUnderwaterFog.fogDensityMin;
+				savedUnderwaterFogDensityMax = overriddenUnderwaterFog.fogDensityMax;
+			}
 
             // Let DFU/Unity fog own rendered geometry. The image effect only
             // fills sky/no-depth gaps and applies a light underwater grade, so
@@ -1099,11 +1127,21 @@ namespace DeepWaters
             float configuredDensity = DeepWaters.Instance.UnderwaterFogDensityMax;
             float fallbackDensity = Mathf.Lerp(0f, OutdoorRenderFogDensityFallbackMax, strength);
             pex.UnderwaterFog.fogDensityMin = OutdoorRenderFogDensityMin;
-            pex.UnderwaterFog.fogDensityMax = Mathf.Clamp(
-                Mathf.Max(configuredDensity, fallbackDensity),
-                0f,
-                OutdoorRenderFogDensityCeiling);
-        }
+			pex.UnderwaterFog.fogDensityMax = Mathf.Clamp(
+				Mathf.Max(configuredDensity, fallbackDensity),
+				0f,
+				OutdoorRenderFogDensityCeiling);
+		}
+
+		private void RestoreUnderwaterFogSettings()
+		{
+			if (overriddenUnderwaterFog == null)
+				return;
+
+			overriddenUnderwaterFog.fogDensityMin = savedUnderwaterFogDensityMin;
+			overriddenUnderwaterFog.fogDensityMax = savedUnderwaterFogDensityMax;
+			overriddenUnderwaterFog = null;
+		}
 
         private static bool sceneFogColorOverridden;
         private static Color savedSceneFogColor;

@@ -15,7 +15,7 @@ namespace DeepWaters
     /// area (same model as the passive fish). A rare boss roll seeds undead/vampire
     /// "bosses" only in the deep open ocean.
     /// </summary>
-    internal static class UnderwaterEnemySpawner
+    public static class UnderwaterEnemySpawner
     {
         // Depth-banded aquatic pool (issue 7). Each entry prefers a band of the
         // water column (fraction of max depth). Shallow coves read as living
@@ -67,6 +67,11 @@ namespace DeepWaters
 			MobileTypes.Vampire,
 			MobileTypes.Lich,
 		};
+		private static readonly MobileTypes[] BossTypes =
+		{
+			MobileTypes.AncientLich,
+			MobileTypes.VampireAncient,
+		};
 		private const MobileTeams TreasureGuardTeam = MobileTeams.Undead;
 
         private const float SpawnViewportMargin = 0.08f;
@@ -92,6 +97,30 @@ namespace DeepWaters
         private const float BossSpawnChance = 1f / 100f;
         private const float BossMinDepthFraction = 0.6f;
 		private const float TreasureGuardBossChance = 1f / 50f;
+
+		/// <summary>
+		/// Returns a defensive copy of every enemy type Deep Waters can place underwater.
+		/// </summary>
+		public static MobileTypes[] GetEnemyRoster()
+		{
+			List<MobileTypes> roster = new List<MobileTypes>();
+			for (int i = 0; i < DepthAquaticTable.Length; i++)
+			{
+				if (!roster.Contains(DepthAquaticTable[i].Type))
+					roster.Add(DepthAquaticTable[i].Type);
+			}
+			for (int i = 0; i < RareTypes.Length; i++)
+			{
+				if (!roster.Contains(RareTypes[i]))
+					roster.Add(RareTypes[i]);
+			}
+			for (int i = 0; i < BossTypes.Length; i++)
+			{
+				if (!roster.Contains(BossTypes[i]))
+					roster.Add(BossTypes[i]);
+			}
+			return roster.ToArray();
+		}
 
         private sealed class PixelEnemyGroup
         {
@@ -394,7 +423,7 @@ namespace DeepWaters
 		private static MobileTypes PickBoss(out MobileGender gender)
 		{
 			gender = MobileGender.Unspecified;
-			return Random.value < 0.5f ? MobileTypes.AncientLich : MobileTypes.VampireAncient;
+			return BossTypes[Random.Range(0, BossTypes.Length)];
 		}
 
         // Depth-weighted aquatic pick (issue 7). Each candidate's weight tapers to
