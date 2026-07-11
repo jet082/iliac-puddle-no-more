@@ -338,11 +338,7 @@ namespace DeepWaters
 
 		private static Vector2 GetFishBillboardSize(PassiveFishSpecies species, float height)
 		{
-			float aspect = species.Texture != null && species.Texture.height > 0
-				? (float)species.Texture.width / species.Texture.height
-				: 1.8f;
-
-			return new Vector2(height * aspect, height);
+			return new Vector2(height * species.BillboardAspect, height);
 		}
 
 		private static void AddFishClickCollider(GameObject go, Vector2 billboardSize)

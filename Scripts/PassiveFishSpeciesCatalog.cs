@@ -41,6 +41,7 @@ namespace DeepWaters
         internal readonly int TextureRecord;
         internal readonly int SpawnWeight;
         internal readonly float BillboardHeight;
+		internal readonly float BillboardAspect;
         internal readonly string[] TextureAssetNames;
         internal readonly float CruiseSpeedMultiplier;
         internal readonly float FleeSpeedMultiplier;
@@ -72,6 +73,7 @@ namespace DeepWaters
             int textureRecord,
             int spawnWeight,
             float billboardHeight,
+			float billboardAspect,
             string[] textureAssetNames,
             float cruiseSpeedMultiplier,
             float fleeSpeedMultiplier,
@@ -92,6 +94,7 @@ namespace DeepWaters
             TextureRecord = textureRecord;
             SpawnWeight = spawnWeight;
             BillboardHeight = billboardHeight;
+			BillboardAspect = billboardAspect;
             TextureAssetNames = textureAssetNames;
             CruiseSpeedMultiplier = cruiseSpeedMultiplier;
             FleeSpeedMultiplier = fleeSpeedMultiplier;
@@ -162,6 +165,7 @@ namespace DeepWaters
                 42,
                 10,
                 0.5f,
+				67f / 48f,
                 GenerateTextureAssetNames("longnose_butterflyfish", 42),
                 1.0f,
                 1.0f,
@@ -180,6 +184,7 @@ namespace DeepWaters
                 43,
                 4,
                 1.2f,
+				62f / 27f,
                 GenerateTextureAssetNames("largemouth_bass", 43),
                 1.3f,
                 1.3f,
@@ -198,6 +203,7 @@ namespace DeepWaters
                 44,
                 8,
                 0.5f,
+				41f / 15f,
                 GenerateTextureAssetNames("canary_rockfish", 44),
                 1.2f,
                 1.2f,
@@ -216,6 +222,7 @@ namespace DeepWaters
                 45,
                 6,
                 1.2f,
+				41f / 25f,
                 GenerateTextureAssetNames("crucian_carp", 45),
                 0.8f,
                 0.8f,
@@ -234,6 +241,7 @@ namespace DeepWaters
                 46,
                 15,
                 0.8f,
+				34f / 15f,
                 GenerateTextureAssetNames("mackerel", 46),
                 1.1f,
                 1.1f,
@@ -252,6 +260,7 @@ namespace DeepWaters
                 47,
                 2,
                 0.4f,
+				40f / 64f,
                 GenerateTextureAssetNames("white_zebra_angelfish", 47),
                 1.3f,
                 1.3f,
@@ -273,6 +282,7 @@ namespace DeepWaters
                 41,
                 5,
                 1.8f,
+				41f / 24f,
                 GenerateTextureAssetNames("finulon", 41),
                 1.2f,
                 1.2f,
